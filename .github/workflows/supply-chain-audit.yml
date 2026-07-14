@@ -1,0 +1,240 @@
+name: Supply Chain Audit
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+jobs:
+  scan:
+    name: Scan PR for supply chain risks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Scan diff for suspicious patterns
+        id: scan
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+
+          DIFF=$(git diff "$BASE".."$HEAD" -- . ':!go.sum' ':!*.lock' || true)
+
+          FINDINGS=""
+          CRITICAL=false
+
+          # Scan added lines in changed Go files while retaining the file path
+          # in findings. This avoids matching workflow or documentation text.
+          scan_go_additions() {
+            local pattern="$1"
+            local include_tests="${2:-true}"
+            local excluded_prefix="${3:-}"
+            local file hits
+
+            while IFS= read -r file; do
+              if [ -z "$file" ]; then
+                continue
+              fi
+              if [ "$include_tests" != "true" ] && [[ "$file" == *_test.go ]]; then
+                continue
+              fi
+              if [ -n "$excluded_prefix" ] && [[ "$file" == "$excluded_prefix"* ]]; then
+                continue
+              fi
+
+              hits=$(git diff --unified=0 "$BASE".."$HEAD" -- "$file" \
+                | grep '^+' \
+                | grep -v '^+++' \
+                | grep -E "$pattern" \
+                | grep -vE '^\+[[:space:]]*//' \
+                | head -10 || true)
+              if [ -n "$hits" ]; then
+                printf '%s:\n%s\n' "$file" "$hits"
+              fi
+            done < <(git diff --name-only --diff-filter=ACMR "$BASE".."$HEAD" -- '*.go')
+          }
+
+          # Test files execute in CI, but they are not library code and are
+          # reviewed by checks that intentionally cover test-only subprocess
+          # and network use.
+          scan_production_go_additions() {
+            scan_go_additions "$1" false "${2:-}"
+          }
+
+          # --- go:generate with network or exec ---
+          GOGEN_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -E '//go:generate' | grep -iE 'curl|wget|bash|sh -c|exec|eval' | head -10 || true)
+          if [ -n "$GOGEN_HITS" ]; then
+            CRITICAL=true
+            FINDINGS="${FINDINGS}
+          ### CRITICAL: go:generate with shell/network commands
+          \`go:generate\` directives that download or execute arbitrary code can inject malicious payloads during build.
+
+          **Matches:**
+          \`\`\`
+          ${GOGEN_HITS}
+          \`\`\`
+          "
+          fi
+
+          # --- init() functions in new files ---
+          NEW_FILES=$(git diff --name-only --diff-filter=A "$BASE".."$HEAD" -- '*.go' || true)
+          if [ -n "$NEW_FILES" ]; then
+            INIT_HITS=""
+            for f in $NEW_FILES; do
+              if [ -f "$f" ]; then
+                MATCH=$(grep -n 'func init()' "$f" || true)
+                if [ -n "$MATCH" ]; then
+                  INIT_HITS="${INIT_HITS}${f}: ${MATCH}"$'\n'
+                fi
+              fi
+            done
+            if [ -n "$INIT_HITS" ]; then
+              FINDINGS="${FINDINGS}
+          ### WARNING: init() functions in new files
+          \`init()\` runs automatically on import. Verify these are intentional.
+
+          **Matches:**
+          \`\`\`
+          ${INIT_HITS}
+          \`\`\`
+          "
+            fi
+          fi
+
+          # --- CGO, plugin loading, or unsafe pointer conversions ---
+          CGO_HITS=$(scan_go_additions 'plugin\.Open|#cgo|C\.CString|unsafe\.Pointer[[:space:]]*\(' | head -10 || true)
+          if [ -n "$CGO_HITS" ]; then
+            CRITICAL=true
+            FINDINGS="${FINDINGS}
+          ### CRITICAL: CGO, plugin loading, or unsafe conversion detected
+          These operations can execute native code or bypass Go's safety guarantees.
+
+          **Matches:**
+          \`\`\`
+          ${CGO_HITS}
+          \`\`\`
+          "
+          fi
+
+          # A type-only unsafe pointer reference can be needed to prove nil and
+          # reflection behavior. Keep it visible for review, but reserve a
+          # critical failure for explicit unsafe pointer conversions.
+          UNSAFE_TYPE_HITS=$(scan_go_additions 'unsafe\.Pointer' | grep -vE 'unsafe\.Pointer[[:space:]]*\(' | head -10 || true)
+          if [ -n "$UNSAFE_TYPE_HITS" ]; then
+            FINDINGS="${FINDINGS}
+          ### WARNING: unsafe pointer type reference detected
+          Type-only references require review but do not themselves perform an unsafe conversion.
+
+          **Matches:**
+          \`\`\`
+          ${UNSAFE_TYPE_HITS}
+          \`\`\`
+          "
+          fi
+
+          # --- os/exec usage ---
+          EXEC_HITS=$(scan_production_go_additions 'exec\.(Command|CommandContext)\(' | head -10 || true)
+          if [ -n "$EXEC_HITS" ]; then
+            FINDINGS="${FINDINGS}
+          ### WARNING: os/exec usage
+          Subprocess execution in library code warrants review. Verify commands are not user-controlled.
+
+          **Matches (first 10):**
+          \`\`\`
+          ${EXEC_HITS}
+          \`\`\`
+          "
+          fi
+
+          # --- Network calls to non-standard destinations ---
+          NET_HITS=$(scan_production_go_additions 'http\.(Post|Get|Do)\(|net\.Dial' 'provider/' | head -10 || true)
+          if [ -n "$NET_HITS" ]; then
+            FINDINGS="${FINDINGS}
+          ### WARNING: Network calls outside provider code
+          Outbound HTTP calls outside provider/ could indicate data exfiltration. Verify destinations.
+
+          **Matches (first 10):**
+          \`\`\`
+          ${NET_HITS}
+          \`\`\`
+          "
+          fi
+
+          # --- replace directives in go.mod ---
+          REPLACE_HITS=$(echo "$DIFF" | grep -n '^\+' | grep -E '^\+\s*replace\s' | head -10 || true)
+          if [ -n "$REPLACE_HITS" ]; then
+            FINDINGS="${FINDINGS}
+          ### WARNING: go.mod replace directives
+          Replace directives can redirect dependencies to unaudited sources.
+
+          **Matches:**
+          \`\`\`
+          ${REPLACE_HITS}
+          \`\`\`
+          "
+          fi
+
+          # --- Encoded/obfuscated strings ---
+          B64_HITS=$(scan_production_go_additions 'base64\.(Std|URL)Encoding\.(Decode|Encode)|encoding/hex' | head -10 || true)
+          if [ -n "$B64_HITS" ]; then
+            FINDINGS="${FINDINGS}
+          ### WARNING: Encoding/decoding detected
+          Base64 or hex encoding has legitimate uses but can also obfuscate payloads.
+
+          **Matches (first 10):**
+          \`\`\`
+          ${B64_HITS}
+          \`\`\`
+          "
+          fi
+
+          # --- Output results ---
+          if [ -n "$FINDINGS" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            if [ "$CRITICAL" = true ]; then
+              echo "critical=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "critical=false" >> "$GITHUB_OUTPUT"
+            fi
+            echo "$FINDINGS" > /tmp/findings.md
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "critical=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Post warning comment
+        if: steps.scan.outputs.found == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SEVERITY="WARNING: Supply Chain Risk Detected"
+          if [ "${{ steps.scan.outputs.critical }}" = "true" ]; then
+            SEVERITY="CRITICAL: Supply Chain Risk Detected"
+          fi
+
+          BODY="## ${SEVERITY}
+
+          This PR contains patterns that require careful review before merging. This does **not** mean the PR is malicious, but these patterns are commonly associated with supply chain attacks.
+
+          $(cat /tmp/findings.md)
+
+          ---
+          *Automated scan by [supply-chain-audit](/.github/workflows/supply-chain-audit.yml). Maintainers can approve after manual review.*"
+
+          gh pr comment "${{ github.event.pull_request.number }}" --body "$BODY"
+
+      - name: Fail on critical findings
+        if: steps.scan.outputs.critical == 'true'
+        run: |
+          echo "::error::CRITICAL supply chain risk patterns detected. See the PR comment for details."
+          exit 1
