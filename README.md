@@ -21,6 +21,7 @@ Current release: **v0.1.0**.
 - **History processors** -- truncation, sliding window, and LLM-based summarization
 - **Multi-modal** -- images, audio, video, and document inputs
 - **MCP support** -- use tools from Model Context Protocol servers
+- **Embeddings** -- provider-agnostic `Embedder` interface with OpenAI and Voyage AI implementations and retrieval-tuned query/document input types
 - **Thinking tokens** -- extended reasoning for Anthropic, OpenAI o-series, and Gemini
 - **Output validation** -- struct tag validation with automatic retry
 
@@ -125,6 +126,35 @@ fmt.Println(result.Output.Title)  // typed access
 | Grok | `provider/grok` | `grok.New("grok-3")` |
 
 Implement the `Model` interface to add your own.
+
+## Embeddings
+
+The same interface-plus-providers pattern covers embeddings: `agentic.Embedder`
+is the interface, with implementations in `provider/openai` and
+`provider/voyageai`.
+
+```go
+import "github.com/regularkevvv/agentic/provider/voyageai"
+
+embedder, _ := voyageai.New("voyage-3.5") // key from VOYAGE_API_KEY
+// or: openai.NewEmbedder("text-embedding-3-small")
+
+// Index documents, then embed queries against them:
+docs, _ := agentic.EmbedDocuments(ctx, embedder, "The monthly budget is $2,000.")
+query, _ := agentic.EmbedQuery(ctx, embedder, "what is the budget?")
+```
+
+`EmbedQuery` and `EmbedDocuments` set the request's `InputType`.
+Retrieval-tuned providers (Voyage AI) use it to prepend a task instruction
+before vectorizing, which embeds queries near their answering documents;
+providers without the concept (OpenAI) ignore it. For similarity, clustering,
+or classification, call `Embed` directly and leave `InputType` unset.
+
+Requests are batch-first (`Input []string`), support dimension control via
+`Dimensions` on models that allow it (OpenAI `text-embedding-3` and later;
+Voyage AI `voyage-3.5` and later), and report token usage. Vectors are
+returned in input order. `provider/test.NewTestEmbedder` provides a
+deterministic in-memory fake for tests.
 
 ## Agent-to-Agent
 
