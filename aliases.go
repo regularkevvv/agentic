@@ -51,9 +51,17 @@ type StreamResult = core.StreamResult
 type StreamEvent = core.StreamEvent
 type StreamEventType = core.StreamEventType
 type OutputMode = core.OutputMode
+type Embedder = core.Embedder
+type EmbeddingRequest = core.EmbeddingRequest
+type EmbeddingResponse = core.EmbeddingResponse
+type EmbeddingUsage = core.EmbeddingUsage
+type EmbeddingInputType = core.EmbeddingInputType
 
 // Domain constants (from core)
 const (
+	EmbeddingInputNone        = core.EmbeddingInputNone
+	EmbeddingInputQuery       = core.EmbeddingInputQuery
+	EmbeddingInputDocument    = core.EmbeddingInputDocument
 	ToolTypeFunction          = core.ToolTypeFunction
 	ToolChoiceNone            = core.ToolChoiceNone
 	ToolChoiceAuto            = core.ToolChoiceAuto
