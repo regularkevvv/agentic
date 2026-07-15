@@ -6,7 +6,7 @@
 
 A lightweight, type-safe Go framework for building AI agents with tool use, structured output, and multi-agent orchestration.
 
-Current release: **v0.1.0**.
+Current release: **v0.2.0**.
 
 ## Features
 
