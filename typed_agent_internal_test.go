@@ -43,10 +43,10 @@ type concurrentTypedModel struct{}
 func (concurrentTypedModel) Name() string { return "concurrent-typed" }
 
 func (concurrentTypedModel) Request(ctx context.Context, req *ChatRequest) (*ChatResponse, error) {
-	return &ChatResponse{Choices: []Choice{{
+	return &ChatResponse{
 		Message:      NewTextMessage(RoleAssistant, `{"value":"ok"}`),
 		FinishReason: FinishReasonStop,
-	}}}, nil
+	}, nil
 }
 
 func TestTypedAgentResponseConfigurationIsImmutableAcrossConcurrentRuns(t *testing.T) {
@@ -146,10 +146,8 @@ func TestTypedAgentHelpersAndTextProcessorError(t *testing.T) {
 	model := &testutil.StubModel{
 		NameValue: "typed-model",
 		Response: &ChatResponse{
-			Choices: []Choice{{
-				Message:      NewTextMessage(RoleAssistant, "bad"),
-				FinishReason: FinishReasonStop,
-			}},
+			Message:      NewTextMessage(RoleAssistant, "bad"),
+			FinishReason: FinishReasonStop,
 		},
 	}
 	textAgent := NewTypedAgentWithMode[int](
@@ -174,16 +172,14 @@ func TestTypedAgentRunFallsBackToToolModeForUnknownOutputMode(t *testing.T) {
 	model := &testutil.StubModel{
 		NameValue: "typed-model",
 		Response: &ChatResponse{
-			Choices: []Choice{{
-				Message: NewToolUseMessage(ToolUse{
-					ID:   "call_1",
-					Name: "__output__",
-					Input: map[string]interface{}{
-						"value": "fallback",
-					},
-				}),
-				FinishReason: FinishReasonToolCalls,
-			}},
+			Message: NewToolUseMessage(ToolUse{
+				ID:   "call_1",
+				Name: "__output__",
+				Input: map[string]interface{}{
+					"value": "fallback",
+				},
+			}),
+			FinishReason: FinishReasonToolCalls,
 		},
 	}
 
@@ -203,10 +199,8 @@ func TestTypedAgentRunAdditionalErrorPaths(t *testing.T) {
 		ta := NewTypedAgentWithMode[typedAgentCoverageValue]("system", &testutil.StubModel{
 			NameValue: "typed-model",
 			Response: &ChatResponse{
-				Choices: []Choice{{
-					Message:      NewTextMessage(RoleAssistant, "plain text"),
-					FinishReason: FinishReasonStop,
-				}},
+				Message:      NewTextMessage(RoleAssistant, "plain text"),
+				FinishReason: FinishReasonStop,
 			},
 		}, failingOutputSpec{err: errors.New("bad parse")}, WithMaxValidationRetries(0))
 
@@ -220,10 +214,8 @@ func TestTypedAgentRunAdditionalErrorPaths(t *testing.T) {
 		ta := NewTypedAgentWithMode[typedAgentCoverageValue]("system", &testutil.StubModel{
 			NameValue: "typed-model",
 			Response: &ChatResponse{
-				Choices: []Choice{{
-					Message:      NewTextMessage(RoleAssistant, `{}`),
-					FinishReason: FinishReasonStop,
-				}},
+				Message:      NewTextMessage(RoleAssistant, `{}`),
+				FinishReason: FinishReasonStop,
 			},
 		}, failingResponseFormatSpec{err: errors.New("bad parse")}, WithMaxValidationRetries(0))
 

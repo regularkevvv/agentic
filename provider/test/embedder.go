@@ -40,7 +40,7 @@ func (e *TestEmbedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*
 		dims = req.Dimensions
 	}
 
-	vectors := make([][]float64, len(req.Input))
+	vectors := make([][]float32, len(req.Input))
 	totalTokens := 0
 	for i, text := range req.Input {
 		vectors[i] = deterministicVector(text, string(req.InputType), dims)
@@ -76,8 +76,8 @@ func (e *TestEmbedder) Reset() {
 
 // deterministicVector derives a stable pseudo-vector from the text, the input
 // type, and the position within the vector.
-func deterministicVector(text, inputType string, dims int) []float64 {
-	vec := make([]float64, dims)
+func deterministicVector(text, inputType string, dims int) []float32 {
+	vec := make([]float32, dims)
 	for i := range vec {
 		h := fnv.New64a()
 		_, _ = h.Write([]byte(text))
@@ -85,7 +85,7 @@ func deterministicVector(text, inputType string, dims int) []float64 {
 		_, _ = h.Write([]byte(inputType))
 		_, _ = h.Write([]byte{byte(i), byte(i >> 8)})
 		// Map the hash onto [-1, 1).
-		vec[i] = float64(int64(h.Sum64())) / float64(1<<63)
+		vec[i] = float32(float64(int64(h.Sum64())) / float64(1<<63))
 	}
 	return vec
 }

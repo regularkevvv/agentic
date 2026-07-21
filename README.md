@@ -21,7 +21,8 @@ Current release: **v0.2.0**.
 - **History processors** -- truncation, sliding window, and LLM-based summarization
 - **Multi-modal** -- images, audio, video, and document inputs
 - **MCP support** -- use tools from Model Context Protocol servers
-- **Embeddings** -- provider-agnostic `Embedder` interface with OpenAI and Voyage AI implementations and retrieval-tuned query/document input types
+- **Embeddings** -- provider-agnostic `Embedder` interface with OpenAI, Voyage AI, Cohere, Gemini, Ollama, and Bedrock implementations and retrieval-tuned query/document input types
+- **Reranking** -- `Reranker` cross-encoder interface with Voyage AI and Cohere implementations for two-stage retrieval
 - **Thinking tokens** -- extended reasoning for Anthropic, OpenAI o-series, and Gemini
 - **Output validation** -- struct tag validation with automatic retry
 
@@ -118,7 +119,7 @@ fmt.Println(result.Output.Title)  // typed access
 | OpenAI | `provider/openai` | `openai.New("gpt-4o")` |
 | Anthropic | `provider/anthropic` | `anthropic.New("claude-sonnet-4-6")` |
 | Google Gemini | `provider/gemini` | `gemini.New("gemini-2.0-flash")` |
-| Azure OpenAI | `provider/azure` | `azure.New(endpoint, deployment, apiKey)` |
+| Azure OpenAI | `provider/azure` | `azure.New(deployment, azure.WithEndpoint(endpoint), azure.WithAPIKey(key))` |
 | AWS Bedrock | `provider/bedrock` | `bedrock.New("anthropic.claude-sonnet-4-6")` |
 | Together AI | `provider/together` | `together.New("meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo")` |
 | OpenRouter | `provider/openrouter` | `openrouter.New("anthropic/claude-sonnet-4")` |
@@ -130,14 +131,16 @@ Implement the `Model` interface to add your own.
 ## Embeddings
 
 The same interface-plus-providers pattern covers embeddings: `agentic.Embedder`
-is the interface, with implementations in `provider/openai` and
-`provider/voyageai`.
+is the interface, with implementations in `provider/openai`, `provider/voyageai`,
+`provider/cohere`, `provider/gemini`, `provider/ollama`, and `provider/bedrock`.
 
 ```go
 import "github.com/regularkevvv/agentic/provider/voyageai"
 
 embedder, _ := voyageai.New("voyage-3.5") // key from VOYAGE_API_KEY
 // or: openai.NewEmbedder("text-embedding-3-small")
+// or: cohere.New("embed-v4.0"), gemini.NewEmbedder("gemini-embedding-001"),
+//     ollama.NewEmbedder("nomic-embed-text"), bedrock.NewEmbedder("amazon.titan-embed-text-v2:0")
 
 // Index documents, then embed queries against them:
 docs, _ := agentic.EmbedDocuments(ctx, embedder, "The monthly budget is $2,000.")
@@ -145,16 +148,43 @@ query, _ := agentic.EmbedQuery(ctx, embedder, "what is the budget?")
 ```
 
 `EmbedQuery` and `EmbedDocuments` set the request's `InputType`.
-Retrieval-tuned providers (Voyage AI) use it to prepend a task instruction
-before vectorizing, which embeds queries near their answering documents;
-providers without the concept (OpenAI) ignore it. For similarity, clustering,
-or classification, call `Embed` directly and leave `InputType` unset.
+Retrieval-tuned providers (Voyage AI, Cohere, Gemini) use it to prepend a task
+instruction before vectorizing, which embeds queries near their answering
+documents; providers without the concept (OpenAI) ignore it. For similarity,
+clustering, or classification, call `Embed` directly and leave `InputType` unset.
 
 Requests are batch-first (`Input []string`), support dimension control via
 `Dimensions` on models that allow it (OpenAI `text-embedding-3` and later;
-Voyage AI `voyage-3.5` and later), and report token usage. Vectors are
-returned in input order. `provider/test.NewTestEmbedder` provides a
+Voyage AI `voyage-3.5` and later), and report token usage. Vectors are returned
+in input order as `[][]float32`. `provider/test.NewTestEmbedder` provides a
 deterministic in-memory fake for tests.
+
+## Reranking
+
+A reranker is a cross-encoder: it scores the query against each document
+directly, which is markedly more accurate than comparing independently computed
+embeddings, and markedly more expensive. The usual arrangement is two stages —
+retrieve a shortlist with an `Embedder`, then reorder it with a `Reranker`.
+`agentic.Reranker` is the interface, with implementations in `provider/voyageai`
+and `provider/cohere`.
+
+```go
+import "github.com/regularkevvv/agentic/provider/voyageai"
+
+reranker, _ := voyageai.NewReranker("rerank-2.5") // key from VOYAGE_API_KEY
+// or: cohere.NewReranker("rerank-v3.5")
+
+resp, _ := agentic.Rerank(ctx, reranker, "what is the budget?", shortlist, 5)
+for _, r := range resp.Results { // ordered by descending score
+    fmt.Printf("%.3f  %s\n", r.Score, r.Document)
+}
+```
+
+`RerankResult.Index` maps each result back to its position in the input slice,
+so metadata kept in a parallel slice rejoins cleanly. Scores are ordinal within
+a single response only — rank by them, never threshold across providers, models,
+or calls. `provider/test.NewTestReranker` provides a deterministic fake for
+tests.
 
 ## Agent-to-Agent
 

@@ -1,6 +1,8 @@
 package gemini
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/regularkevvv/agentic/internal/core"
@@ -90,50 +92,57 @@ func TestConvertRole(t *testing.T) {
 	}
 }
 
-func TestConvertSchema(t *testing.T) {
-	schema := map[string]interface{}{
-		"type": "object",
-		"properties": map[string]interface{}{
-			"name": map[string]interface{}{
-				"type":        "string",
-				"description": "The name",
-			},
-			"age": map[string]interface{}{
-				"type": "integer",
-			},
-		},
-		"required": []interface{}{"name"},
-	}
-
-	s := convertSchema(schema)
-	if string(s.Type) != "object" {
-		t.Errorf("expected type 'object', got %q", s.Type)
-	}
-	if len(s.Properties) != 2 {
-		t.Errorf("expected 2 properties, got %d", len(s.Properties))
-	}
-	if len(s.Required) != 1 || s.Required[0] != "name" {
-		t.Errorf("expected required ['name'], got %v", s.Required)
-	}
-	if s.Properties["name"].Description != "The name" {
-		t.Errorf("expected description 'The name', got %q", s.Properties["name"].Description)
-	}
-}
-
-func TestConvertFinishReason(t *testing.T) {
+func TestJSONSchemaPassthrough(t *testing.T) {
 	tests := []struct {
-		input    string
-		expected core.FinishReason
+		name   string
+		schema map[string]interface{}
+		wantOK bool
 	}{
-		{"STOP", core.FinishReasonStop},
-		{"MAX_TOKENS", core.FinishReasonLength},
-		{"SAFETY", core.FinishReasonContentFilter},
-		{"OTHER", core.FinishReasonStop},
+		{name: "nil schema", schema: nil},
+		{name: "empty schema", schema: map[string]interface{}{}},
+		{
+			name:   "unencodable value",
+			schema: map[string]interface{}{"type": "object", "bad": make(chan int)},
+		},
+		{
+			name: "full document survives",
+			schema: map[string]interface{}{
+				"type":  "object",
+				"$defs": map[string]interface{}{"Leg": map[string]interface{}{"type": "string"}},
+				"properties": map[string]interface{}{
+					"leg":     map[string]interface{}{"$ref": "#/$defs/Leg"},
+					"when":    map[string]interface{}{"type": "string", "format": "date-time"},
+					"either":  map[string]interface{}{"anyOf": []interface{}{map[string]interface{}{"type": "string"}}},
+					"howMany": map[string]interface{}{"type": "integer", "minimum": 1, "maximum": 10},
+				},
+				"required": []interface{}{"leg"},
+			},
+			wantOK: true,
+		},
 	}
 
 	for _, tt := range tests {
-		// Note: we test via the mapped genai constants
-		_ = tt // Finish reason testing would require genai constants
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := jsonSchema(tt.schema)
+			if ok != tt.wantOK {
+				t.Fatalf("jsonSchema() ok = %v, want %v", ok, tt.wantOK)
+			}
+			if !ok {
+				return
+			}
+			// Passthrough must hand the SDK the original document untouched,
+			// keeping $ref/$defs/anyOf/format/constraints that a hand-rolled
+			// conversion drops.
+			encoded, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			for _, keyword := range []string{`"$ref"`, `"$defs"`, `"anyOf"`, `"format"`, `"minimum"`, `"maximum"`} {
+				if !strings.Contains(string(encoded), keyword) {
+					t.Errorf("expected %s to survive passthrough, got %s", keyword, encoded)
+				}
+			}
+		})
 	}
 }
 

@@ -25,15 +25,15 @@ func TestNewAgentDynamicRegistersHandoffs(t *testing.T) {
 }
 
 func TestAgentRunAdditionalErrorPaths(t *testing.T) {
-	t.Run("no choices in response", func(t *testing.T) {
+	t.Run("empty response", func(t *testing.T) {
 		agent := NewAgent("system", &testutil.StubModel{
 			NameValue: "empty-model",
 			Response:  &ChatResponse{},
 		})
 
 		_, err := agent.Run(context.Background(), "prompt")
-		if err == nil || err.Error() != "no choices in response" {
-			t.Fatalf("expected no choices error, got %v", err)
+		if err == nil || !IsProviderError(err) {
+			t.Fatalf("expected provider error for empty response, got %v", err)
 		}
 	})
 
@@ -41,14 +41,12 @@ func TestAgentRunAdditionalErrorPaths(t *testing.T) {
 		agent := NewAgent("system", &testutil.StubModel{
 			NameValue: "tool-model",
 			Response: &ChatResponse{
-				Choices: []Choice{{
-					Message: NewToolUseMessage(ToolUse{
-						ID:    "call_1",
-						Name:  "lookup",
-						Input: map[string]interface{}{"city": "Lima"},
-					}),
-					FinishReason: FinishReasonToolCalls,
-				}},
+				Message: NewToolUseMessage(ToolUse{
+					ID:    "call_1",
+					Name:  "lookup",
+					Input: map[string]interface{}{"city": "Lima"},
+				}),
+				FinishReason: FinishReasonToolCalls,
 			},
 		})
 

@@ -1,43 +1,35 @@
-// Package voyageai provides a Voyage AI Embedder implementation for Agentic.
-// Voyage AI (by MongoDB) offers retrieval-tuned embedding models with
-// first-class query/document input types; it has no chat API, so this package
-// implements only core.Embedder.
+// Package voyageai provides Voyage AI implementations of core.Embedder and
+// core.Reranker for Agentic. Voyage AI (by MongoDB) offers retrieval-tuned
+// embedding models with first-class query/document input types, plus
+// cross-encoder rerank models for second-stage ranking; it has no chat API, so
+// this package implements no core.Model.
 package voyageai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"time"
 
 	"github.com/regularkevvv/agentic/internal/core"
 )
 
-const defaultBaseURL = "https://api.voyageai.com/v1"
-
 // Embedder implements core.Embedder using the Voyage AI embeddings API.
 type Embedder struct {
+	*client
+
 	model      string
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
 	truncation *bool
-	maxRetries int
 }
 
-// Option configures the Voyage AI Embedder.
+// Option configures the Voyage AI Embedder. Options are not interchangeable
+// with RerankerOption, so a rerank-only knob cannot reach New by mistake.
 type Option func(*config)
 
 type config struct {
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
+	transportConfig
+
 	truncation *bool
-	maxRetries *int
 }
 
 // WithAPIKey sets the API key. If not set, the VOYAGE_API_KEY env var is used.
@@ -55,8 +47,14 @@ func WithHTTPClient(client *http.Client) Option {
 	return func(c *config) { c.httpClient = client }
 }
 
-// WithTruncation controls whether inputs longer than the model's context
-// length are truncated (the API default) or rejected with an error (false).
+// WithTruncation sets the default for inputs longer than the model's context
+// length: true truncates them, false rejects the request with an error.
+//
+// This is only a default. A per-call core.EmbeddingRequest.Truncate takes
+// precedence over it. If neither is set, the Voyage API's own default applies,
+// which is to truncate silently — prefer WithTruncation(false) when indexing,
+// because storing the vector of a clipped document as if it covered the whole
+// document is a quiet, expensive retrieval failure.
 func WithTruncation(truncation bool) Option {
 	return func(c *config) { c.truncation = &truncation }
 }
@@ -79,39 +77,15 @@ func New(model string, opts ...Option) (*Embedder, error) {
 		opt(cfg)
 	}
 
-	apiKey := cfg.apiKey
-	if apiKey == "" {
-		apiKey = os.Getenv("VOYAGE_API_KEY")
-	}
-	if apiKey == "" {
-		return nil, fmt.Errorf("voyageai: API key not set (use WithAPIKey or the VOYAGE_API_KEY env var)")
-	}
-
-	baseURL := cfg.baseURL
-	if baseURL == "" {
-		baseURL = defaultBaseURL
-	}
-
-	httpClient := cfg.httpClient
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 120 * time.Second}
-	}
-
-	maxRetries := 2
-	if cfg.maxRetries != nil {
-		if *cfg.maxRetries < 0 {
-			return nil, fmt.Errorf("voyageai: max retries must be non-negative")
-		}
-		maxRetries = *cfg.maxRetries
+	c, err := newClient(cfg.transportConfig)
+	if err != nil {
+		return nil, err
 	}
 
 	return &Embedder{
+		client:     c,
 		model:      model,
-		apiKey:     apiKey,
-		baseURL:    baseURL,
-		httpClient: httpClient,
 		truncation: cfg.truncation,
-		maxRetries: maxRetries,
 	}, nil
 }
 
@@ -134,7 +108,7 @@ type embedRequest struct {
 
 type embedResponse struct {
 	Data []struct {
-		Embedding []float64 `json:"embedding"`
+		Embedding []float32 `json:"embedding"`
 		Index     int       `json:"index"`
 	} `json:"data"`
 	Model string `json:"model"`
@@ -153,7 +127,7 @@ func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core
 		Input:           req.Input,
 		Model:           e.model,
 		InputType:       string(req.InputType),
-		Truncation:      e.truncation,
+		Truncation:      e.resolveTruncation(req.Truncate),
 		OutputDimension: req.Dimensions,
 	}
 
@@ -171,7 +145,7 @@ func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core
 	}
 
 	// Place vectors by the response's index field rather than list order.
-	vectors := make([][]float64, len(req.Input))
+	vectors := make([][]float32, len(req.Input))
 	for _, item := range resp.Data {
 		if item.Index < 0 || item.Index >= len(vectors) {
 			return nil, fmt.Errorf("voyageai embeddings: vector index %d out of range for %d inputs", item.Index, len(req.Input))
@@ -191,85 +165,17 @@ func (e *Embedder) Name() string {
 	return e.model
 }
 
-func (e *Embedder) post(ctx context.Context, path string, body any) ([]byte, error) {
-	raw, err := json.Marshal(body)
-	if err != nil {
-		return nil, err
+// resolveTruncation picks the truncation flag to send on the wire.
+//
+// Precedence is per-request over constructor: a caller who says "reject this
+// document rather than clip it" for one indexing call must win over an
+// Embedder built with the opposite default. When neither is set the field is
+// omitted and the Voyage API's own default (truncate) applies.
+func (e *Embedder) resolveTruncation(requested *bool) *bool {
+	if requested != nil {
+		return requested
 	}
-
-	attempts := e.maxRetries + 1
-	var lastErr error
-	for attempt := 0; attempt < attempts; attempt++ {
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+path, bytes.NewReader(raw))
-		if err != nil {
-			return nil, err
-		}
-		httpReq.Header.Set("Authorization", "Bearer "+e.apiKey)
-		httpReq.Header.Set("Content-Type", "application/json")
-
-		httpResp, err := e.httpClient.Do(httpReq)
-		if err != nil {
-			if ctx.Err() != nil || attempt == attempts-1 {
-				return nil, err
-			}
-			lastErr = err
-			if err := sleepRetry(ctx, retryDelay(attempt)); err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		payload, readErr := io.ReadAll(httpResp.Body)
-		closeErr := httpResp.Body.Close()
-		if readErr != nil {
-			return nil, readErr
-		}
-		if closeErr != nil {
-			return nil, closeErr
-		}
-
-		if httpResp.StatusCode != http.StatusOK {
-			err := fmt.Errorf("voyageai %s: status %d: %.300s", path, httpResp.StatusCode, payload)
-			if !retryableStatus(httpResp.StatusCode) || attempt == attempts-1 {
-				return nil, err
-			}
-			lastErr = err
-			if err := sleepRetry(ctx, retryDelay(attempt)); err != nil {
-				return nil, err
-			}
-			continue
-		}
-
-		return payload, nil
-	}
-	return nil, lastErr
-}
-
-func retryableStatus(status int) bool {
-	return status == http.StatusTooManyRequests ||
-		status == http.StatusInternalServerError ||
-		status == http.StatusBadGateway ||
-		status == http.StatusServiceUnavailable ||
-		status == http.StatusGatewayTimeout
-}
-
-func retryDelay(attempt int) time.Duration {
-	delay := time.Duration(1<<attempt) * time.Second
-	if delay > 4*time.Second {
-		return 4 * time.Second
-	}
-	return delay
-}
-
-func sleepRetry(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return e.truncation
 }
 
 // Compile-time check that Embedder implements core.Embedder.

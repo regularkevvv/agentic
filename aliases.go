@@ -19,7 +19,6 @@ type Function = core.Function
 type ToolChoice = core.ToolChoice
 type ChatRequest = core.ChatRequest
 type ChatResponse = core.ChatResponse
-type Choice = core.Choice
 type FinishReason = core.FinishReason
 type Usage = core.Usage
 type RequestUsage = core.RequestUsage
@@ -56,6 +55,11 @@ type EmbeddingRequest = core.EmbeddingRequest
 type EmbeddingResponse = core.EmbeddingResponse
 type EmbeddingUsage = core.EmbeddingUsage
 type EmbeddingInputType = core.EmbeddingInputType
+type Reranker = core.Reranker
+type RerankRequest = core.RerankRequest
+type RerankResponse = core.RerankResponse
+type RerankResult = core.RerankResult
+type RerankUsage = core.RerankUsage
 
 // Domain constants (from core)
 const (
@@ -70,6 +74,8 @@ const (
 	FinishReasonLength        = core.FinishReasonLength
 	FinishReasonToolCalls     = core.FinishReasonToolCalls
 	FinishReasonContentFilter = core.FinishReasonContentFilter
+	FinishReasonError         = core.FinishReasonError
+	FinishReasonUnknown       = core.FinishReasonUnknown
 	RoleSystem                = core.RoleSystem
 	RoleUser                  = core.RoleUser
 	RoleAssistant             = core.RoleAssistant
@@ -133,6 +139,13 @@ func NewToolUseMessage(toolUses ...ToolUse) Message {
 
 func NewToolResultMessage(toolUseID string, content string, isError bool) Message {
 	return core.NewToolResultMessage(toolUseID, content, isError)
+}
+
+// NewToolResultMessageFor creates a tool-result message that records which
+// tool produced it. Prefer this over [NewToolResultMessage]: name-keyed
+// providers (Gemini) cannot correlate a result to its call without the name.
+func NewToolResultMessageFor(toolUseID, toolName, content string, isError bool) Message {
+	return core.NewToolResultMessageFor(toolUseID, toolName, content, isError)
 }
 
 func FormatToolResult(result interface{}) string {

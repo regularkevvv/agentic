@@ -156,10 +156,10 @@ func (m *concurrentDependencyModel) Request(_ context.Context, request *agentic.
 	m.mu.Lock()
 	m.prompts[prompt]++
 	m.mu.Unlock()
-	return &agentic.ChatResponse{Choices: []agentic.Choice{{
+	return &agentic.ChatResponse{
 		Message:      agentic.NewTextMessage(agentic.RoleAssistant, prompt),
 		FinishReason: agentic.FinishReasonStop,
-	}}}, nil
+	}, nil
 }
 
 func TestBoundRunnersShareCoreWithoutSharingDeps(t *testing.T) {

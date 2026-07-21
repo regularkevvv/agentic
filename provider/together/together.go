@@ -3,10 +3,30 @@
 // models (Llama, Mistral, Qwen, DeepSeek, etc.).
 //
 // The provider wraps the OpenAI provider with Together-specific defaults and
-// inherits both streaming and non-streaming capabilities.
+// inherits both streaming and non-streaming capabilities. Together's wire
+// format is Chat Completions with no documented divergence from OpenAI's, so
+// unlike the OpenRouter gateway this package delegates rather than speaking to
+// the API itself. In particular Together takes the modern
+// max_completion_tokens field: pydantic-ai's TogetherProvider
+// (pydantic_ai/providers/together.py) leaves
+// openai_chat_supports_max_completion_tokens at its default of true, which
+// OpenRouter's provider must override and Together's must not.
+//
+// Delegating means the normalized finish-reason mapping, StopSequences and the
+// rest of the shared request handling come from the OpenAI provider unchanged.
+// Two consequences are worth knowing:
+//
+//   - Provider-specific settings are read from ChatRequest.ProviderOptions
+//     under the "openai" key, not "together"; there is no Together-only option
+//     struct.
+//   - Thinking text from the reasoning models Together serves (DeepSeek-R1,
+//     Qwen, GLM) is not surfaced. Those models return it in a non-standard
+//     "reasoning" or "reasoning_content" field that the shared OpenAI response
+//     conversion does not read.
 package together
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -14,7 +34,9 @@ import (
 	oaiProvider "github.com/regularkevvv/agentic/provider/openai"
 )
 
-// DefaultBaseURL is the Together AI API endpoint.
+// DefaultBaseURL is the Together AI API endpoint, matching the base_url
+// property of pydantic-ai's TogetherProvider
+// (pydantic_ai/providers/together.py).
 const DefaultBaseURL = "https://api.together.xyz/v1"
 
 // Model wraps the OpenAI provider for Together AI.
@@ -31,7 +53,13 @@ type config struct {
 	baseURL string
 }
 
-// WithAPIKey sets the API key. If not set, the TOGETHER_API_KEY env var is used.
+// WithAPIKey sets the API key. If not set, the TOGETHER_API_KEY env var is
+// used, falling back to TOGETHER_AI_API_KEY.
+//
+// TOGETHER_API_KEY is the name Together AI's own SDKs and pydantic-ai's
+// TogetherProvider read (pydantic_ai/providers/together.py); TOGETHER_AI_API_KEY
+// is accepted as a secondary alias and is only consulted when the primary is
+// unset.
 func WithAPIKey(apiKey string) Option {
 	return func(c *config) { c.apiKey = apiKey }
 }
@@ -61,7 +89,7 @@ func New(model string, opts ...Option) (*Model, error) {
 		apiKey = os.Getenv("TOGETHER_AI_API_KEY")
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("together: API key not set (use WithAPIKey or set TOGETHER_API_KEY)")
+		return nil, errors.New("together: API key not set (use WithAPIKey or set TOGETHER_API_KEY)")
 	}
 
 	baseURL := cfg.baseURL

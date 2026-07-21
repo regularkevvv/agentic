@@ -58,6 +58,9 @@ func TestAnthropicRequestAndStreamWithLocalServer(t *testing.T) {
 			`event: content_block_delta`,
 			`data: {"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":"think"}}`,
 			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":"sig-abc"}}`,
+			``,
 			`event: content_block_start`,
 			`data: {"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}`,
 			``,
@@ -65,7 +68,7 @@ func TestAnthropicRequestAndStreamWithLocalServer(t *testing.T) {
 			`data: {"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"hello"}}`,
 			``,
 			`event: message_delta`,
-			`data: {"type":"message_delta","usage":{"output_tokens":5}}`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":5}}`,
 			``,
 			`event: message_stop`,
 			`data: {"type":"message_stop"}`,
@@ -88,8 +91,11 @@ func TestAnthropicRequestAndStreamWithLocalServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Request: %v", err)
 	}
-	if resp.Choices[0].Message.GetTextContent() != "hello from claude" {
-		t.Fatalf("unexpected request output %q", resp.Choices[0].Message.GetTextContent())
+	if resp.Message.GetTextContent() != "hello from claude" {
+		t.Fatalf("unexpected request output %q", resp.Message.GetTextContent())
+	}
+	if resp.FinishReason != core.FinishReasonStop || resp.RawFinishReason != "end_turn" {
+		t.Fatalf("unexpected finish reason %q/%q", resp.FinishReason, resp.RawFinishReason)
 	}
 	if resp.Usage.CacheReadTokens != 1 || resp.Usage.CacheCreationTokens != 3 {
 		t.Fatalf("unexpected request usage %#v", resp.Usage)
@@ -105,8 +111,8 @@ func TestAnthropicRequestAndStreamWithLocalServer(t *testing.T) {
 		events = append(events, event)
 	}
 
-	if len(events) != 5 {
-		t.Fatalf("expected 5 stream events, got %d: %#v", len(events), events)
+	if len(events) != 6 {
+		t.Fatalf("expected 6 stream events, got %d: %#v", len(events), events)
 	}
 	if events[0].Type != core.StreamEventToolCallStart || events[0].ToolUse == nil || events[0].ToolUse.Name != "lookup" {
 		t.Fatalf("unexpected tool-call start %#v", events[0])
@@ -114,14 +120,172 @@ func TestAnthropicRequestAndStreamWithLocalServer(t *testing.T) {
 	if events[1].Type != core.StreamEventToolCallDelta || events[1].ToolCallID != "call_1" || events[1].Delta != `{"city":"Lima"}` {
 		t.Fatalf("unexpected tool-call delta %#v", events[1])
 	}
-	if events[2].Type != core.StreamEventThinkingDelta || events[2].Delta != "think" {
+	if events[2].Type != core.StreamEventThinkingDelta || events[2].Delta != "think" || events[2].ProviderName != "anthropic" {
 		t.Fatalf("unexpected thinking delta %#v", events[2])
 	}
-	if events[3].Type != core.StreamEventTextDelta || events[3].Delta != "hello" {
-		t.Fatalf("unexpected text delta %#v", events[3])
+	// The signature closes the thinking block. Without it the block cannot be
+	// replayed on the next request.
+	if events[3].Type != core.StreamEventThinkingDelta || events[3].Signature != "sig-abc" || events[3].ProviderName != "anthropic" {
+		t.Fatalf("unexpected signature delta %#v", events[3])
 	}
-	if events[4].Type != core.StreamEventDone || events[4].Usage == nil || events[4].Usage.TotalTokens != 12 {
-		t.Fatalf("unexpected done event %#v", events[4])
+	if events[4].Type != core.StreamEventTextDelta || events[4].Delta != "hello" {
+		t.Fatalf("unexpected text delta %#v", events[4])
+	}
+	if events[5].Type != core.StreamEventDone || events[5].Usage == nil || events[5].Usage.TotalTokens != 12 {
+		t.Fatalf("unexpected done event %#v", events[5])
+	}
+	if events[5].FinishReason != core.FinishReasonLength {
+		t.Fatalf("expected truncation reported on done, got %q", events[5].FinishReason)
+	}
+}
+
+// TestAnthropicToolSchemaOnTheWire asserts what actually leaves the process for
+// a struct-derived schema: the "$defs" its "$ref" resolves against must be
+// present, and no additionalProperties may be injected on top of the caller's
+// schema.
+func TestAnthropicToolSchemaOnTheWire(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Errorf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude-sonnet",
+			"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn",
+			"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+
+	model, err := New("claude-sonnet", WithAPIKey("test-key"), WithBaseURL(server.URL))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if _, err := model.Request(context.Background(), &core.ChatRequest{
+		Model:         "claude-sonnet",
+		Messages:      []core.Message{core.NewTextMessage(core.RoleUser, "hi")},
+		StopSequences: []string{"HALT"},
+		Tools: []core.Tool{
+			{
+				Type: core.ToolTypeFunction,
+				Function: core.Function{
+					Name: "ship",
+					Parameters: map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"to": map[string]any{"$ref": "#/$defs/Address"},
+						},
+						"required": []any{"to"},
+						"$defs": map[string]any{
+							"Address": map[string]any{"type": "object"},
+						},
+					},
+				},
+			},
+			{
+				Type: core.ToolTypeFunction,
+				Function: core.Function{
+					Name:       "ping",
+					Parameters: map[string]any{"type": "object"},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Request: %v", err)
+	}
+
+	tools, ok := captured["tools"].([]any)
+	if !ok || len(tools) != 2 {
+		t.Fatalf("unexpected tools payload %#v", captured["tools"])
+	}
+
+	shipSchema := tools[0].(map[string]any)["input_schema"].(map[string]any)
+	if shipSchema["$defs"] == nil {
+		t.Errorf("$defs missing from the wire — $ref would dangle: %#v", shipSchema)
+	}
+	if _, injected := shipSchema["additionalProperties"]; injected {
+		t.Errorf("additionalProperties was injected: %#v", shipSchema)
+	}
+	if shipSchema["type"] != "object" {
+		t.Errorf("expected object schema, got %#v", shipSchema["type"])
+	}
+
+	pingSchema := tools[1].(map[string]any)["input_schema"].(map[string]any)
+	props, ok := pingSchema["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("zero-argument tool must still send properties: %#v", pingSchema)
+	}
+	if len(props) != 0 {
+		t.Errorf("zero-argument tool emitted phantom arguments: %#v", props)
+	}
+
+	stops, ok := captured["stop_sequences"].([]any)
+	if !ok || len(stops) != 1 || stops[0] != "HALT" {
+		t.Errorf("unexpected stop_sequences on the wire: %#v", captured["stop_sequences"])
+	}
+}
+
+// TestAnthropicThinkingReplayOnTheWire asserts the outbound guard: only a
+// thinking block this provider signed is replayed as a thinking block.
+func TestAnthropicThinkingReplayOnTheWire(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Errorf("decode request body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","role":"assistant","model":"claude-sonnet",
+			"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn",
+			"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer server.Close()
+
+	model, err := New("claude-sonnet", WithAPIKey("test-key"), WithBaseURL(server.URL))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if _, err := model.Request(context.Background(), &core.ChatRequest{
+		Model: "claude-sonnet",
+		Messages: []core.Message{
+			core.NewTextMessage(core.RoleUser, "hi"),
+			{
+				Role: core.RoleAssistant,
+				Content: []core.Part{
+					{Type: core.ContentThinking, Thinking: &core.ThinkingBlock{
+						Text: "signed", Signature: "sig", ProviderName: "anthropic",
+					}},
+					{Type: core.ContentThinking, Thinking: &core.ThinkingBlock{
+						Text: "from gemini", Signature: "other-sig", ProviderName: "gemini",
+					}},
+					{Type: core.ContentThinking, Thinking: &core.ThinkingBlock{
+						Text: "unsigned", ProviderName: "anthropic",
+					}},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("Request: %v", err)
+	}
+
+	messages := captured["messages"].([]any)
+	blocks := messages[1].(map[string]any)["content"].([]any)
+	if len(blocks) != 3 {
+		t.Fatalf("expected 3 blocks, got %#v", blocks)
+	}
+
+	first := blocks[0].(map[string]any)
+	if first["type"] != "thinking" || first["signature"] != "sig" {
+		t.Errorf("a block this provider signed must replay as thinking: %#v", first)
+	}
+	for i, b := range blocks[1:] {
+		block := b.(map[string]any)
+		if block["type"] != "text" {
+			t.Errorf("block %d must degrade to text, got %#v", i+1, block)
+		}
+		if block["signature"] != nil {
+			t.Errorf("block %d leaked a foreign signature: %#v", i+1, block)
+		}
 	}
 }
 
@@ -130,8 +294,12 @@ func TestAnthropicConversionHelpersCoverAdditionalBranches(t *testing.T) {
 		Role: core.RoleUser,
 		Content: []core.Part{
 			{
-				Type:     core.ContentThinking,
-				Thinking: &core.ThinkingBlock{ID: "redacted_thinking", Signature: "secret"},
+				Type: core.ContentThinking,
+				Thinking: &core.ThinkingBlock{
+					ID:           "redacted_thinking",
+					Signature:    "secret",
+					ProviderName: "anthropic",
+				},
 			},
 			{Type: core.ContentText, Text: "cached text"},
 			{Type: core.ContentCachePoint, CachePoint: &core.CachePoint{TTL: "1h"}},

@@ -42,7 +42,8 @@ func TestAddToolset(t *testing.T) {
 	model := &testutil.StubModel{
 		NameValue: "test",
 		Response: &ChatResponse{
-			Choices: []Choice{{Message: NewTextMessage(RoleAssistant, "done"), FinishReason: FinishReasonStop}},
+			Message:      NewTextMessage(RoleAssistant, "done"),
+			FinishReason: FinishReasonStop,
 		},
 	}
 

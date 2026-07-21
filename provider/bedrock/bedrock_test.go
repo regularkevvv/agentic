@@ -114,6 +114,11 @@ func TestConvertStopReason(t *testing.T) {
 		{types.StopReasonToolUse, core.FinishReasonToolCalls},
 		{types.StopReasonContentFiltered, core.FinishReasonContentFilter},
 		{types.StopReasonGuardrailIntervened, core.FinishReasonContentFilter},
+		{types.StopReasonModelContextWindowExceeded, core.FinishReasonLength},
+		{types.StopReasonMalformedModelOutput, core.FinishReasonError},
+		{types.StopReasonMalformedToolUse, core.FinishReasonError},
+		{types.StopReason("brand_new_reason"), core.FinishReasonUnknown},
+		{types.StopReason(""), core.FinishReasonUnknown},
 	}
 
 	for _, tt := range tests {

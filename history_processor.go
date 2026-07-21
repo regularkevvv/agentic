@@ -134,11 +134,13 @@ func SummarizeHistory(model Model, maxMessages int) HistoryProcessor {
 			return nil, fmt.Errorf("summarize history: %w", err)
 		}
 
-		if len(resp.Choices) == 0 {
-			return nil, fmt.Errorf("summarize history: no response choices")
+		// Refuse to replace real history with an empty summary. The messages
+		// being summarized are dropped from what the model sees, so accepting
+		// an empty summary here discards them permanently.
+		summaryText := resp.Message.GetTextContent()
+		if summaryText == "" {
+			return nil, fmt.Errorf("summarize history: %w", &ProviderError{Reason: "summary response contained no text"})
 		}
-
-		summaryText := resp.Choices[0].Message.GetTextContent()
 		summaryMsg := NewTextMessage(RoleUser, fmt.Sprintf("[Conversation summary]: %s", summaryText))
 
 		result := make([]Message, 0, len(systemMsg)+1+len(recent))

@@ -51,6 +51,15 @@ type EmbeddingRequest struct {
 	// voyage-3-large, voyage-4 family, voyage-code-3: 256, 512, 1024, or
 	// 2048). Zero means the model default.
 	Dimensions int
+
+	// Truncate controls what a provider does with an input longer than the
+	// model's context window. True truncates it to fit; false rejects the
+	// request with an error. Nil uses the provider's own default.
+	//
+	// Prefer false when indexing: silently embedding the first N tokens of a
+	// long document and storing the vector as if it represented the whole
+	// document is a quiet, expensive retrieval failure.
+	Truncate *bool
 }
 
 // Validate checks that the request is well-formed.
@@ -77,7 +86,11 @@ func (r *EmbeddingRequest) Validate() error {
 // EmbeddingResponse holds one vector per request input, in input order.
 type EmbeddingResponse struct {
 	// Vectors are the embedding vectors, Vectors[i] corresponding to Input[i].
-	Vectors [][]float64
+	//
+	// Element type is float32: no provider transmits more than float32 of
+	// precision, and at 3072 dimensions the narrower type halves the memory
+	// an index costs to hold.
+	Vectors [][]float32
 
 	// Model is the model name reported by the provider.
 	Model string

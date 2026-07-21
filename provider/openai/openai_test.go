@@ -42,16 +42,16 @@ func TestMustNew(t *testing.T) {
 
 func TestConvertMessageSystem(t *testing.T) {
 	msg := core.NewTextMessage(core.RoleSystem, "system prompt")
-	param := convertMessage(msg)
-	if param.OfSystem == nil {
+	params := convertMessages(msg)
+	if len(params) != 1 || params[0].OfSystem == nil {
 		t.Error("expected OfSystem for system message")
 	}
 }
 
 func TestConvertMessageUser(t *testing.T) {
 	msg := core.NewTextMessage(core.RoleUser, "hello")
-	param := convertMessage(msg)
-	if param.OfUser == nil {
+	params := convertMessages(msg)
+	if len(params) != 1 || params[0].OfUser == nil {
 		t.Error("expected OfUser for user message")
 	}
 }
@@ -64,16 +64,16 @@ func TestConvertMessageUserMultiPart(t *testing.T) {
 			{Type: core.ContentText, Text: " world"},
 		},
 	}
-	param := convertMessage(msg)
-	if param.OfUser == nil {
+	params := convertMessages(msg)
+	if len(params) != 1 || params[0].OfUser == nil {
 		t.Error("expected OfUser for multi-part user message")
 	}
 }
 
 func TestConvertMessageAssistant(t *testing.T) {
 	msg := core.NewTextMessage(core.RoleAssistant, "response")
-	param := convertMessage(msg)
-	if param.OfAssistant == nil {
+	params := convertMessages(msg)
+	if len(params) != 1 || params[0].OfAssistant == nil {
 		t.Error("expected OfAssistant for assistant message")
 	}
 }
@@ -84,19 +84,19 @@ func TestConvertMessageAssistantWithToolCalls(t *testing.T) {
 		Name:  "test",
 		Input: map[string]interface{}{"key": "val"},
 	})
-	param := convertMessage(msg)
-	if param.OfAssistant == nil {
-		t.Error("expected OfAssistant for tool use message")
+	params := convertMessages(msg)
+	if len(params) != 1 || params[0].OfAssistant == nil {
+		t.Fatal("expected OfAssistant for tool use message")
 	}
-	if len(param.OfAssistant.ToolCalls) != 1 {
-		t.Errorf("expected 1 tool call, got %d", len(param.OfAssistant.ToolCalls))
+	if len(params[0].OfAssistant.ToolCalls) != 1 {
+		t.Errorf("expected 1 tool call, got %d", len(params[0].OfAssistant.ToolCalls))
 	}
 }
 
 func TestConvertMessageTool(t *testing.T) {
 	msg := core.NewToolResultMessage("c1", "result", false)
-	param := convertMessage(msg)
-	if param.OfTool == nil {
+	params := convertMessages(msg)
+	if len(params) != 1 || params[0].OfTool == nil {
 		t.Error("expected OfTool for tool result message")
 	}
 }
@@ -107,8 +107,8 @@ func TestConvertMessageToolNoResults(t *testing.T) {
 		Role:    core.RoleTool,
 		Content: []core.Part{{Type: core.ContentText, Text: "raw text"}},
 	}
-	param := convertMessage(msg)
-	if param.OfTool == nil {
+	params := convertMessages(msg)
+	if len(params) != 1 || params[0].OfTool == nil {
 		t.Error("expected OfTool for tool message without results")
 	}
 }
@@ -119,16 +119,16 @@ func TestConvertMessageDefault(t *testing.T) {
 		Role:    core.MessageRole("custom"),
 		Content: []core.Part{{Type: core.ContentText, Text: "hi"}},
 	}
-	param := convertMessage(msg)
-	if param.OfUser == nil {
+	params := convertMessages(msg)
+	if len(params) != 1 || params[0].OfUser == nil {
 		t.Error("expected OfUser for unknown role (default)")
 	}
 }
 
 func TestConvertContentPart(t *testing.T) {
 	textPart := core.Part{Type: core.ContentText, Text: "hello"}
-	result := convertContentPart(textPart)
-	if result.OfText == nil {
+	result, ok := convertContentPart(textPart)
+	if !ok || result.OfText == nil {
 		t.Error("expected OfText for text content part")
 	}
 }
@@ -138,8 +138,8 @@ func TestConvertContentPartImage(t *testing.T) {
 		Type:     core.ContentImageURL,
 		ImageURL: &core.ImageURL{URL: "https://example.com/img.png", Detail: "high"},
 	}
-	result := convertContentPart(imgPart)
-	if result.OfImageURL == nil {
+	result, ok := convertContentPart(imgPart)
+	if !ok || result.OfImageURL == nil {
 		t.Error("expected OfImageURL for image content part")
 	}
 }
@@ -149,8 +149,8 @@ func TestConvertContentPartImageNoDetail(t *testing.T) {
 		Type:     core.ContentImageURL,
 		ImageURL: &core.ImageURL{URL: "https://example.com/img.png"},
 	}
-	result := convertContentPart(imgPart)
-	if result.OfImageURL == nil {
+	result, ok := convertContentPart(imgPart)
+	if !ok || result.OfImageURL == nil {
 		t.Error("expected OfImageURL for image content part without detail")
 	}
 }
@@ -160,10 +160,10 @@ func TestConvertContentPartImageNil(t *testing.T) {
 		Type:     core.ContentImageURL,
 		ImageURL: nil,
 	}
-	// Should fallback to text
-	result := convertContentPart(imgPart)
-	if result.OfText == nil {
-		t.Error("expected OfText fallback for nil image URL")
+	// An image part with no payload and no text carries nothing to send.
+	result, ok := convertContentPart(imgPart)
+	if ok {
+		t.Errorf("expected an image part with no URL to be skipped, got %#v", result)
 	}
 }
 
@@ -218,21 +218,224 @@ func TestConvertToolChoice(t *testing.T) {
 
 func TestConvertFinishReason(t *testing.T) {
 	tests := []struct {
+		name     string
 		input    string
 		expected core.FinishReason
 	}{
-		{"stop", core.FinishReasonStop},
-		{"length", core.FinishReasonLength},
-		{"tool_calls", core.FinishReasonToolCalls},
-		{"content_filter", core.FinishReasonContentFilter},
-		{"unknown", core.FinishReasonStop},
+		{"stop", "stop", core.FinishReasonStop},
+		{"length", "length", core.FinishReasonLength},
+		{"tool calls", "tool_calls", core.FinishReasonToolCalls},
+		{"deprecated function call", "function_call", core.FinishReasonToolCalls},
+		{"content filter", "content_filter", core.FinishReasonContentFilter},
+		{"gateway error", "error", core.FinishReasonError},
+		// A reason none reported is a clean stop, matching pydantic-ai.
+		{"absent", "", core.FinishReasonStop},
+		// An unrecognized reason must never be reported as a success: the
+		// caller sees FinishReasonUnknown and inspects RawFinishReason.
+		{"unrecognized", "something_new", core.FinishReasonUnknown},
 	}
 
 	for _, tt := range tests {
-		result := convertFinishReason(tt.input)
-		if result != tt.expected {
-			t.Errorf("convertFinishReason(%q) = %q, want %q", tt.input, result, tt.expected)
+		t.Run(tt.name, func(t *testing.T) {
+			if result := convertFinishReason(tt.input); result != tt.expected {
+				t.Errorf("convertFinishReason(%q) = %q, want %q", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestConvertResponsePreservesRawFinishReason(t *testing.T) {
+	model, _ := New("gpt-4o", WithAPIKey("test-key"))
+
+	result := model.convertResponse(&openai.ChatCompletion{
+		ID:    "test-id",
+		Model: "gpt-4o",
+		Choices: []openai.ChatCompletionChoice{{
+			Message:      openai.ChatCompletionMessage{Role: "assistant", Content: "hi"},
+			FinishReason: "some_new_reason",
+		}},
+	})
+
+	if result.FinishReason != core.FinishReasonUnknown {
+		t.Errorf("expected unknown finish reason, got %q", result.FinishReason)
+	}
+	if result.RawFinishReason != "some_new_reason" {
+		t.Errorf("expected the provider's reason to pass through, got %q", result.RawFinishReason)
+	}
+}
+
+// TestConvertResponseSurfacesRefusal pins that a safety refusal is not
+// reported as an empty, clean stop.
+func TestConvertResponseSurfacesRefusal(t *testing.T) {
+	model, _ := New("gpt-4o", WithAPIKey("test-key"))
+
+	result := model.convertResponse(&openai.ChatCompletion{
+		ID:    "test-id",
+		Model: "gpt-4o",
+		Choices: []openai.ChatCompletionChoice{{
+			Message: openai.ChatCompletionMessage{
+				Role:    "assistant",
+				Refusal: "I can't help with that.",
+			},
+			FinishReason: "stop",
+		}},
+	})
+
+	if result.FinishReason != core.FinishReasonContentFilter {
+		t.Errorf("expected content_filter finish reason, got %q", result.FinishReason)
+	}
+	if result.RawFinishReason != "stop" {
+		t.Errorf("expected raw reason to stay lossless, got %q", result.RawFinishReason)
+	}
+	if got := result.Message.GetTextContent(); got != "I can't help with that." {
+		t.Errorf("expected the refusal text to be preserved, got %q", got)
+	}
+}
+
+func TestConvertResponseWithoutChoices(t *testing.T) {
+	model, _ := New("gpt-4o", WithAPIKey("test-key"))
+
+	result := model.convertResponse(&openai.ChatCompletion{ID: "test-id", Model: "gpt-4o"})
+	if result.FinishReason != core.FinishReasonError {
+		t.Errorf("expected a choiceless response to report an error, got %q", result.FinishReason)
+	}
+	if len(result.Message.Content) != 0 {
+		t.Errorf("expected an empty message, got %#v", result.Message)
+	}
+}
+
+// TestConvertMessagesToolMultipleResults pins that every result in a tool
+// message is sent, not only the first.
+func TestConvertMessagesToolMultipleResults(t *testing.T) {
+	msg := core.Message{
+		Role: core.RoleTool,
+		Content: []core.Part{
+			{Type: core.ContentToolResult, ToolResult: &core.ToolResult{ToolUseID: "c1", Content: "first"}},
+			{Type: core.ContentToolResult, ToolResult: &core.ToolResult{ToolUseID: "c2", Content: "second"}},
+		},
+	}
+
+	params := convertMessages(msg)
+	if len(params) != 2 {
+		t.Fatalf("expected one tool message per result, got %d", len(params))
+	}
+	for i, want := range []struct{ id, content string }{{"c1", "first"}, {"c2", "second"}} {
+		tool := params[i].OfTool
+		if tool == nil {
+			t.Fatalf("message %d is not a tool message: %#v", i, params[i])
 		}
+		if tool.ToolCallID != want.id {
+			t.Errorf("message %d: expected tool_call_id %q, got %q", i, want.id, tool.ToolCallID)
+		}
+		if tool.Content.OfString.Or("") != want.content {
+			t.Errorf("message %d: expected content %q, got %q", i, want.content, tool.Content.OfString.Or(""))
+		}
+	}
+}
+
+func TestBuildParamsSamplingParamsAndReasoningModels(t *testing.T) {
+	temp := 0.7
+	topP := 0.9
+
+	tests := []struct {
+		name            string
+		model           string
+		thinking        bool
+		wantSamplingSet bool
+	}{
+		{"non-reasoning model keeps sampling params", "gpt-4o", false, true},
+		{"o-series rejects sampling params", "o3", false, false},
+		{"o-series rejects them with thinking on too", "o1-mini", true, false},
+		{"gpt-5 reasons by default", "gpt-5", false, false},
+		{"gpt-5-chat does not reason", "gpt-5-chat-latest", false, true},
+		{"gpt-5.4 is opt-in, so keeps them when thinking is off", "gpt-5.4", false, true},
+		{"gpt-5.4 drops them once thinking is on", "gpt-5.4", true, false},
+		{"gateway-qualified name resolves to the same family", "openai/gpt-5", false, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model, _ := New(tt.model, WithAPIKey("test-key"))
+			req := &core.ChatRequest{
+				Model:       tt.model,
+				Messages:    []core.Message{core.NewTextMessage(core.RoleUser, "hello")},
+				Temperature: &temp,
+				TopP:        &topP,
+			}
+			if tt.thinking {
+				req.Thinking = &core.ThinkingConfig{Enabled: true}
+			}
+
+			params := model.buildParams(req)
+			if got := params.Temperature.Valid(); got != tt.wantSamplingSet {
+				t.Errorf("temperature sent = %v, want %v", got, tt.wantSamplingSet)
+			}
+			if got := params.TopP.Valid(); got != tt.wantSamplingSet {
+				t.Errorf("top_p sent = %v, want %v", got, tt.wantSamplingSet)
+			}
+		})
+	}
+}
+
+func TestBuildParamsStopSequencesAndProviderOptions(t *testing.T) {
+	model, _ := New("gpt-4o", WithAPIKey("test-key"))
+	seed := int64(42)
+	parallel := false
+
+	params := model.buildParams(&core.ChatRequest{
+		Model:         "gpt-4o",
+		Messages:      []core.Message{core.NewTextMessage(core.RoleUser, "hello")},
+		StopSequences: []string{"END", "\n\n"},
+		ProviderOptions: map[string]any{
+			"openai":    Options{Seed: &seed, ParallelToolCalls: &parallel, ServiceTier: "flex"},
+			"anthropic": struct{ TopK int }{TopK: 40},
+		},
+	})
+
+	if len(params.Stop.OfStringArray) != 2 || params.Stop.OfStringArray[0] != "END" {
+		t.Errorf("expected stop sequences to be wired, got %#v", params.Stop)
+	}
+	if params.Seed.Or(0) != seed {
+		t.Errorf("expected seed %d, got %d", seed, params.Seed.Or(0))
+	}
+	if params.ParallelToolCalls.Or(true) != false {
+		t.Errorf("expected parallel_tool_calls=false, got %#v", params.ParallelToolCalls)
+	}
+	if params.ServiceTier != openai.ChatCompletionNewParamsServiceTierFlex {
+		t.Errorf("expected flex service tier, got %q", params.ServiceTier)
+	}
+}
+
+func TestBuildParamsIgnoresMalformedProviderOptions(t *testing.T) {
+	model, _ := New("gpt-4o", WithAPIKey("test-key"))
+	seed := int64(7)
+
+	tests := []struct {
+		name     string
+		options  map[string]any
+		wantSeed int64
+	}{
+		{"absent", nil, 0},
+		{"wrong type under our key", map[string]any{"openai": "not-options"}, 0},
+		{"nil pointer", map[string]any{"openai": (*Options)(nil)}, 0},
+		{"pointer form is accepted", map[string]any{"openai": &Options{Seed: &seed}}, seed},
+		{"unknown service tier is dropped", map[string]any{"openai": Options{ServiceTier: "turbo"}}, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			params := model.buildParams(&core.ChatRequest{
+				Model:           "gpt-4o",
+				Messages:        []core.Message{core.NewTextMessage(core.RoleUser, "hello")},
+				ProviderOptions: tt.options,
+			})
+			if params.Seed.Or(0) != tt.wantSeed {
+				t.Errorf("expected seed %d, got %d", tt.wantSeed, params.Seed.Or(0))
+			}
+			if params.ServiceTier != "" {
+				t.Errorf("expected no service tier, got %q", params.ServiceTier)
+			}
+		})
 	}
 }
 
@@ -296,8 +499,6 @@ func TestBuildParams(t *testing.T) {
 	temp := 0.7
 	maxTokens := 500
 	topP := 0.9
-	freqPenalty := 0.5
-	presPenalty := 0.3
 
 	tc := core.ToolChoiceRequired
 	req := &core.ChatRequest{
@@ -305,11 +506,9 @@ func TestBuildParams(t *testing.T) {
 		Messages: []core.Message{
 			core.NewTextMessage(core.RoleUser, "hello"),
 		},
-		Temperature:      &temp,
-		MaxTokens:        &maxTokens,
-		TopP:             &topP,
-		FrequencyPenalty: &freqPenalty,
-		PresencePenalty:  &presPenalty,
+		Temperature: &temp,
+		MaxTokens:   &maxTokens,
+		TopP:        &topP,
 		Tools: []core.Tool{
 			{
 				Type: core.ToolTypeFunction,
@@ -361,8 +560,7 @@ func TestConvertResponse(t *testing.T) {
 			CompletionTokens: 5,
 			TotalTokens:      15,
 		},
-		Created:           1234567890,
-		SystemFingerprint: "fp_test",
+		Created: 1234567890,
 	}
 
 	result := model.convertResponse(resp)
@@ -372,23 +570,18 @@ func TestConvertResponse(t *testing.T) {
 	if result.Model != "gpt-4o" {
 		t.Errorf("expected model %q, got %q", "gpt-4o", result.Model)
 	}
-	if len(result.Choices) != 2 {
-		t.Fatalf("expected 2 choices, got %d", len(result.Choices))
+	// Only the first choice is converted; the API returns one per request.
+	if result.Message.GetTextContent() != "hello" {
+		t.Errorf("expected %q, got %q", "hello", result.Message.GetTextContent())
 	}
-	if result.Choices[0].Message.GetTextContent() != "hello" {
-		t.Errorf("expected %q, got %q", "hello", result.Choices[0].Message.GetTextContent())
+	if result.FinishReason != core.FinishReasonStop {
+		t.Errorf("expected stop, got %q", result.FinishReason)
 	}
-	if result.Choices[0].FinishReason != core.FinishReasonStop {
-		t.Errorf("expected stop, got %q", result.Choices[0].FinishReason)
-	}
-	if result.Choices[1].FinishReason != core.FinishReasonLength {
-		t.Errorf("expected length, got %q", result.Choices[1].FinishReason)
+	if result.RawFinishReason != "stop" {
+		t.Errorf("expected raw reason %q, got %q", "stop", result.RawFinishReason)
 	}
 	if result.Usage.TotalTokens != 15 {
 		t.Errorf("expected 15 total tokens, got %d", result.Usage.TotalTokens)
-	}
-	if result.SystemFingerprint != "fp_test" {
-		t.Errorf("expected fingerprint %q, got %q", "fp_test", result.SystemFingerprint)
 	}
 }
 

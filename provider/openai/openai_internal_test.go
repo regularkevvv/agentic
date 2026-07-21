@@ -35,8 +35,6 @@ func TestBuildParamsAppliesOptionalFields(t *testing.T) {
 	temperature := 0.6
 	maxTokens := 128
 	topP := 0.9
-	frequencyPenalty := 0.1
-	presencePenalty := 0.2
 	toolChoice := core.ToolChoiceRequired
 	strict := true
 
@@ -46,11 +44,9 @@ func TestBuildParamsAppliesOptionalFields(t *testing.T) {
 			core.NewTextMessage(core.RoleSystem, "system"),
 			core.NewTextMessage(core.RoleUser, "hello"),
 		},
-		Temperature:      &temperature,
-		MaxTokens:        &maxTokens,
-		TopP:             &topP,
-		FrequencyPenalty: &frequencyPenalty,
-		PresencePenalty:  &presencePenalty,
+		Temperature: &temperature,
+		MaxTokens:   &maxTokens,
+		TopP:        &topP,
 		Tools: []core.Tool{{
 			Type: core.ToolTypeFunction,
 			Function: core.Function{
@@ -88,12 +84,6 @@ func TestBuildParamsAppliesOptionalFields(t *testing.T) {
 	}
 	if got := params.TopP.Or(0); got != topP {
 		t.Fatalf("expected top_p %.1f, got %.1f", topP, got)
-	}
-	if got := params.FrequencyPenalty.Or(0); got != frequencyPenalty {
-		t.Fatalf("expected frequency penalty %.1f, got %.1f", frequencyPenalty, got)
-	}
-	if got := params.PresencePenalty.Or(0); got != presencePenalty {
-		t.Fatalf("expected presence penalty %.1f, got %.1f", presencePenalty, got)
 	}
 	if len(params.Tools) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(params.Tools))
@@ -165,7 +155,7 @@ func TestConvertResponseFormat(t *testing.T) {
 }
 
 func TestConvertContentPartAdditionalModalities(t *testing.T) {
-	imageData := convertContentPart(core.Part{
+	imageData, ok := convertContentPart(core.Part{
 		Type: core.ContentImageData,
 		ImageData: &core.ImageData{
 			Data:           "AQID",
@@ -173,29 +163,74 @@ func TestConvertContentPartAdditionalModalities(t *testing.T) {
 			VendorMetadata: map[string]interface{}{"detail": "high"},
 		},
 	})
-	if imageData.OfImageURL == nil {
+	if !ok || imageData.OfImageURL == nil {
 		t.Fatal("expected image data to convert to image URL part")
 	}
 
-	audio := convertContentPart(core.Part{
+	audio, ok := convertContentPart(core.Part{
 		Type:     core.ContentAudioURL,
 		AudioURL: &core.AudioURL{URL: "https://example.com/audio.mp3", Format: "mp3"},
 	})
-	if audio.OfInputAudio == nil {
+	if !ok || audio.OfInputAudio == nil {
 		t.Fatal("expected audio URL to convert to input audio part")
 	}
 
-	file := convertContentPart(core.Part{
+	file, ok := convertContentPart(core.Part{
 		Type:         core.ContentUploadedFile,
 		UploadedFile: &core.UploadedFile{FileID: "file_123"},
 	})
-	if file.OfFile == nil {
+	if !ok || file.OfFile == nil {
 		t.Fatal("expected uploaded file to convert to file part")
 	}
+}
 
-	cachePoint := convertContentPart(core.Part{Type: core.ContentCachePoint})
-	if cachePoint.OfText == nil {
-		t.Fatal("expected cache point to be skipped as an empty text part")
+// TestConvertContentPartSkipsUnrepresentableParts pins that parts OpenAI has
+// no representation for are dropped rather than emitted as an empty text part,
+// which the doc on convertContentPart has always promised.
+func TestConvertContentPartSkipsUnrepresentableParts(t *testing.T) {
+	tests := []struct {
+		name string
+		part core.Part
+	}{
+		{"cache point", core.Part{Type: core.ContentCachePoint, CachePoint: &core.CachePoint{TTL: "5m"}}},
+		{"thinking", core.Part{Type: core.ContentThinking, Thinking: &core.ThinkingBlock{Text: "hidden"}}},
+		{"unknown type", core.Part{Type: core.ContentType("something_new")}},
+		{"video without text", core.Part{Type: core.ContentVideoURL, VideoURL: &core.VideoURL{URL: "https://example.com/v.mp4"}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := convertContentPart(tt.part)
+			if ok {
+				t.Fatalf("expected part to be skipped, got %#v", got)
+			}
+		})
+	}
+}
+
+// TestConvertMessagesUserSkipsCachePoint pins that a skipped part leaves no
+// blank content entry behind in the emitted user message.
+func TestConvertMessagesUserSkipsCachePoint(t *testing.T) {
+	msgs := convertMessages(core.Message{
+		Role: core.RoleUser,
+		Content: []core.Part{
+			{Type: core.ContentText, Text: "hello"},
+			{Type: core.ContentCachePoint, CachePoint: &core.CachePoint{}},
+			{Type: core.ContentText, Text: "world"},
+		},
+	})
+
+	if len(msgs) != 1 || msgs[0].OfUser == nil {
+		t.Fatalf("expected a single user message, got %#v", msgs)
+	}
+	parts := msgs[0].OfUser.Content.OfArrayOfContentParts
+	if len(parts) != 2 {
+		t.Fatalf("expected the cache point to be dropped, got %d parts", len(parts))
+	}
+	for i, p := range parts {
+		if p.OfText == nil || p.OfText.Text == "" {
+			t.Fatalf("part %d is an empty text entry: %#v", i, p)
+		}
 	}
 }
 
@@ -220,5 +255,14 @@ func TestExtractOpenAIUsageIncludesReasoningAndCache(t *testing.T) {
 	}
 	if usage.CacheReadTokens != 8 {
 		t.Fatalf("expected cache read tokens, got %#v", usage)
+	}
+}
+
+// TestConvertContentPartFallsBackToText covers a part whose typed payload is
+// missing but which still carries text worth sending.
+func TestConvertContentPartFallsBackToText(t *testing.T) {
+	got, ok := convertContentPart(core.Part{Type: core.ContentVideoURL, Text: "a video"})
+	if !ok || got.OfText == nil || got.OfText.Text != "a video" {
+		t.Fatalf("expected a text fallback carrying the part's text, got %#v (ok=%v)", got, ok)
 	}
 }

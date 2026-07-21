@@ -52,6 +52,28 @@ func (e *MaxIterationsError) Error() string {
 	return fmt.Sprintf("agent reached maximum iterations (%d)", e.MaxIterations)
 }
 
+// ProviderError is returned when a provider completed the transport
+// successfully but did not produce a usable turn — an in-band failure reported
+// alongside a success status, or a response with no content at all.
+type ProviderError struct {
+	// Reason is the provider's own description of the failure when it gave
+	// one, otherwise a description of what this library observed.
+	Reason string
+}
+
+func (e *ProviderError) Error() string {
+	if e.Reason == "" {
+		return "provider returned no usable response"
+	}
+	return fmt.Sprintf("provider returned no usable response: %s", e.Reason)
+}
+
+// IsProviderError checks if an error is a ProviderError.
+func IsProviderError(err error) bool {
+	var pe *ProviderError
+	return errors.As(err, &pe)
+}
+
 // IsUsageLimitExceeded checks if an error is a UsageLimitExceededError.
 func IsUsageLimitExceeded(err error) bool {
 	var ule *UsageLimitExceededError

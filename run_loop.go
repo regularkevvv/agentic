@@ -58,12 +58,18 @@ func (c *agentCore) runAfterPreflight(ctx context.Context, prompt string, deps d
 		if err := ls.checkPostResponseLimits(); err != nil {
 			return ls.makeResult("", FinishReasonStop), err
 		}
-		if len(response.Choices) == 0 {
-			return nil, fmt.Errorf("no choices in response")
+		// A provider that reported an in-band failure has not produced a usable
+		// turn, even though the transport succeeded. Surface it rather than
+		// letting partial content read as a complete answer.
+		if response.FinishReason == FinishReasonError {
+			return ls.makeResult("", FinishReasonError), &ProviderError{Reason: response.RawFinishReason}
+		}
+		if len(response.Message.Content) == 0 {
+			return ls.makeResult("", FinishReasonError), &ProviderError{Reason: "empty response from provider"}
 		}
 
-		assistantMsg := response.Choices[0].Message
-		finishReason := response.Choices[0].FinishReason
+		assistantMsg := response.Message
+		finishReason := response.FinishReason
 		ls.messages = append(ls.messages, assistantMsg)
 		toolUses := assistantMsg.GetToolUses()
 		if len(toolUses) == 0 {
@@ -288,7 +294,7 @@ func (c *agentCore) processToolUses(ls *loopState, toolUses []ToolUse) (toolUseO
 					}
 					ls.retryCounts[toolCall.Name]++
 					ls.totalRetries++
-					ls.messages = append(ls.messages, NewToolResultMessage(toolCall.ID, retry.Message, true))
+					ls.messages = append(ls.messages, NewToolResultMessageFor(toolCall.ID, toolCall.Name, retry.Message, true))
 					outcome.retryRequested = true
 					continue
 				}
@@ -296,13 +302,13 @@ func (c *agentCore) processToolUses(ls *loopState, toolUses []ToolUse) (toolUseO
 		}
 		ls.totalUsage.ToolCalls++
 		ls.allToolResults = append(ls.allToolResults, result)
-		ls.messages = append(ls.messages, NewToolResultMessage(result.ToolUseID, FormatToolResult(result.Content), result.IsError))
+		ls.messages = append(ls.messages, NewToolResultMessageFor(result.ToolUseID, result.ToolName, FormatToolResult(result.Content), result.IsError))
 	}
 
 	if outcome.hasOutput && outcome.retryRequested {
 		for _, toolUse := range toolUses {
 			if c.outputToolNames[toolUse.Name] {
-				ls.messages = append(ls.messages, NewToolResultMessage(toolUse.ID, "Output discarded because another tool requested a retry.", true))
+				ls.messages = append(ls.messages, NewToolResultMessageFor(toolUse.ID, toolUse.Name, "Output discarded because another tool requested a retry.", true))
 			}
 		}
 	}
