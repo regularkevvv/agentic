@@ -63,13 +63,20 @@ func TestNewEmbedderNoAPIKey(t *testing.T) {
 }
 
 func TestNewEmbedderVertexAI(t *testing.T) {
-	// A custom base URL keeps Vertex client creation from reaching for
-	// application default credentials, matching the existing Vertex tests.
+	// A custom base URL plus an EMPTY project and location keeps Vertex client
+	// creation from reaching for application default credentials, matching
+	// TestGeminiNewVertexAIWithCustomBaseURL.
+	//
+	// Both halves matter. Naming a project sends the SDK down the full Vertex
+	// auth path, which resolves ADC and fails anywhere they are not
+	// configured — so a test that names one passes on a developer machine
+	// running gcloud and fails in CI. WithVertexAI's project and location
+	// plumbing is covered without a client by TestWithVertexAIOption.
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()
 	t.Setenv("GOOGLE_VERTEX_BASE_URL", server.URL)
 
-	e, err := NewEmbedder("gemini-embedding-001", WithVertexAI("proj", "us-central1"))
+	e, err := NewEmbedder("gemini-embedding-001", WithVertexAI("", ""))
 	if err != nil {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
