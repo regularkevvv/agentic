@@ -1,590 +1,1058 @@
-# Spike: Harness Framework, Monorepo Layout, and Embeddings/Rerankers Expansion
+# Harness Framework: Production Design and Delivery Plan
 
-**Status:** Proposed (spike deliverable)
-**Date:** 2026-07-19
-**Scope:** Research result + implementation plan. No code changes were made as part of this spike.
-
----
-
-## 1. Summary
-
-This spike answers three questions:
-
-1. **How do we restructure `agentic` into a monorepo** that contains `agentic` as a module plus a new `harness` module?
-2. **How should the harness framework be designed** so people can use a harness we ship *or* build their own from primitives?
-3. **What do we add to `agentic` proper** in embedding providers and rerankers?
-
-The recommendations:
-
-**Monorepo.** Keep `github.com/regularkevvv/agentic` at the repo root — moving it breaks the published import path and the two existing tags — and add a *nested* module at `harness/` (`github.com/regularkevvv/agentic/harness`), tied together with `go.work` for development. The harness builds only on the public `agentic.*` facade; `aliases.go` was effectively designed for this.
-
-**Harness design.** Part I of this document derives the design from first principles rather than from a feature list, because the research made clear that the tool loop is commodity and everything interesting is the machinery around it. The core claims: a harness answers seven separable questions; *substrates* want swappable interfaces while *policies* want composable hooks, and conflating them is the most common design error in the references; an agent instance is a closure over a captured environment, which makes multi-agent a capture-restriction problem rather than a subsystem; and the runtime is a **cooperative scheduler over an append-only log with a broadcast output** — five nouns, two yield points, four verbs.
-
-**Embeddings/rerankers.** Add Gemini, Ollama, Cohere, and Bedrock embedders (that effort order — the first two SDKs are already dependencies), and introduce a new `core.Reranker` interface with Voyage rerank-2.5 and Cohere Rerank as first implementations. Independent of the harness; ships as `agentic` v0.3.0.
+**Status:** Final proposal; ready to implement
+**Date:** 2026-07-21
+**Repository baseline:** `a67bbef` (`v0.3.0`)
+**Decision owner:** `agentic` maintainers
 
 ---
 
-## 2. Goals and non-goals
+## 1. Executive decision
 
-**Goals**
+Add a nested Go module, `github.com/regularkevvv/agentic/harness`, without moving
+the existing root module. The harness accepts an already-bound
+`agentic.Runner[O]`, resolves its execution-driver capability at build time, and
+uses only public `agentic` APIs.
 
-- A `harness` module where users can (a) instantiate a default harness and get sessions, compaction, permissions, subagents, and events out of the box; (b) assemble their own from the same primitives; (c) write third-party capabilities that plug into either.
-- Preserve `agentic`'s public API and its positioning as a lightweight, type-safe agent library. Nothing in the harness may force new dependencies or complexity onto `agentic` users.
-- Broaden retrieval in `agentic` itself (more embedders, new reranker capability).
-- Keep a path open to codemode via monty/gomonty.
+The harness is a cooperative scheduler around Agentic's tool loop. It owns the
+session inbox, durable transcript, environment, permissions, capability graph,
+and public event subscriptions. Agentic continues to own model requests, typed
+output validation, tool execution, retries, limits, and terminal arbitration.
 
-**Non-goals (for now)**
+This design requires a real execution seam in Agentic. It is not implementable
+by changing a single `return` or by adding static `AgentOption` hooks. The root
+module must first gain:
 
-- A TUI or CLI product. The harness is a library; a product is a possible later consumer.
-- Distributed/durable execution. We note the pattern (§16) and design so it can be added as a wrapper, but do not build it.
-- A vector store. Like pydantic-ai, we ship embeddings + rerankers and leave storage to the user.
+1. explicit start, continue, and suspended-turn resume driver entries;
+2. one shared fold for blocking and streaming model transports;
+3. terminal arbitration after typed output validation and complete tool-result
+   pairing;
+4. per-run turn, event, tool-overlay, and tool-gate options that still work
+   after dependencies have been bound, plus a tool-result projection seam; and
+5. partial, failed, suspended, stopped, interrupted, and completed execution
+   states.
+
+The public `Runner[O]` convenience interface remains source-compatible. Built-in
+runners additionally implement `Driver[O]`; the harness checks that capability
+when it is built.
+
+The retrieval work described by the original spike is no longer proposed work.
+Gemini, Ollama, Cohere, and Bedrock embedders plus Voyage and Cohere rerankers
+shipped in `v0.3.0`. The Cohere-on-Bedrock limit is 96 inputs per request and the
+implementation correctly chunks at that limit.
 
 ---
 
-# Part I — Foundations
+## 2. Review disposition
 
-Everything in Part III derives from this part. If a later decision seems arbitrary, the justification is here.
+The review dated 2026-07-21 is correct on all four points. This revision resolves
+them as follows.
 
-## 3. What a harness is
-
-A model is a pure function from context to tokens. An agent is a process that pursues a goal by acting over time. **The harness is everything that closes that gap** — it decides what enters context, what the tokens are permitted to mean, what they can affect, when to stop, and what survives. The model proposes; the harness disposes.
-
-That framing makes the decomposition fall out as *questions*, not features. A harness answers seven:
-
-| # | Question | The concern |
+| Finding | Assessment | Resolution in this design |
 |---|---|---|
-| 1 | What can it affect? | **Space of action** — filesystem, shell, network, browser, other agents |
-| 2 | How does intent become effect? | **Mode of action** — direct tool calls, code-mode program, plan-then-execute, delegation |
-| 3 | What surface is exposed? | **Interface of action** — tools, plus per-agent filtering/renaming/gating |
-| 4 | What does it know? | **Knowledge** — history, compaction, cross-session memory, retrieval |
-| 5 | When does it stop, and who steers? | **Control** — the loop, turns, budgets, termination, steering, interrupts |
-| 6 | What is it allowed to do? | **Governance** — permissions, approval, sandboxing |
-| 7 | How many, arranged how? | **Topology** — single agent, subagents, orchestrated fleets |
+| Cohere limit contradicts the implementation | Correct | Keep `cohereBatchLimit = 96`; cite the AWS v3/v4 model contracts; mark the work shipped |
+| Continue has more than one terminal return | Correct | Replace return-site interception with one terminal-arbitration stage shared by text and output-tool completion |
+| No continuation/resume entry exists | Correct | Add explicit `Driver.Drive` start/continue modes plus `Driver.Resume`; neither path appends an implicit user prompt |
+| Existing streaming channel already backpressures | Correct | Make `StreamEvent` a compatibility projection of the canonical fold; keep its documented lossless/blocking contract separate from nonblocking harness subscriptions |
+| Line anchors drifted | Correct | Refer to stable symbols and behavioral tests, not source line numbers |
 
-Plus two that are invisible until you build them and then are everywhere:
+The audit also found two blockers not called out in the review:
 
-**Resources and progressive disclosure.** A "skill" in pi is *markdown, not code*: the system prompt carries only name, description, and path; the model reads the body on demand with the `read` tool. Codex's deferred MCP schema loading is the same idea. This is a third category alongside tools and environment — instructions the agent can *acquire*, not just instructions it *was given*.
+- `WithTurnHook` and `WithEventSink` were proposed as `AgentOption`s, but the
+  harness receives a bound `Runner[O]`; static options cannot be installed for a
+  session. They must be `RunOption`s consumed by the new driver.
+- A capability cannot add tools to an opaque runner today. The driver therefore
+  needs an immutable per-run toolset overlay and a batch tool gate.
 
-**Output discipline.** The agent's perception is bounded, and bounding it is policy. pi has head/tail truncation with temp-file spill; pydantic-ai-harness has size bands with a pluggable `OverflowStore`. Both keep the full output reachable and hand the model a handle.
+---
 
-And one cross-cutting constraint that dictates *where* mutable state may live: **prompt-cache geometry.** pydantic-ai's `Planning` capability exists mostly to solve this — the plan is injected as an ephemeral tail after a `CachePoint`, mutating only the per-request message list so the cached prefix stays byte-identical. claw-code uses a `__SYSTEM_PROMPT_DYNAMIC_BOUNDARY__` marker for the same reason and reports ~84% savings on long Opus sessions. Anything mutable injected into context has a cache cost, so the harness needs one designated ephemeral region and everything else must be stable.
+## 3. Goals, non-goals, and release boundary
 
-## 4. Two abstraction shapes
+### Goals
 
-The single most useful rule this spike produced:
+- Ship a useful default harness and the public primitives required to assemble a
+  different one.
+- Preserve the root module's lightweight `Runner[O]` API and dependency typing.
+- Make steering, follow-up, interruption, deferred tools, resumption, and event
+  delivery explicit state-machine operations.
+- Preserve a protocol-valid transcript across normal completion, validation
+  retries, output tools, interruption, compaction, and crash recovery.
+- Keep environment capability and governance policy separate.
+- Support typed and text agents through the same harness API.
 
-> **Substrates want interfaces. Policies want hooks.**
+### Non-goals for `harness/v0.1.0`
 
-A *substrate* is something the same behavior can land on differently — a filesystem that might be local, overlaid, containerized, or remote. A *policy* is a decision layered over whatever substrate is present — compaction strategy, permission ruleset, guardrails, planning.
+- Distributed scheduling, multiple concurrent writers to one session, or
+  exactly-once external side effects.
+- A TUI or CLI product.
+- A vector database.
+- Mid-model-request steering or forced termination of arbitrary Go tool
+  handlers. Cancellation remains cooperative.
+- Codemode, shared-session role switching, or out-of-process subagents. Their
+  interfaces are reserved, but implementation comes later.
 
-The references prove the rule by violating it. pydantic-ai-harness reaches for a `@runtime_checkable Protocol` with multiple backends everywhere it wants substitutability — `MemoryStore`, `StepStore`, `OverflowStore`, `MediaStore`, four of them, with in-memory/file/SQLite/Postgres implementations. But its `FileSystem` and `Shell` capabilities got *neither* a protocol nor an alternate implementation: eight hand-written tools calling `pathlib` and `os` directly, with glob allow/deny/protect patterns as the only knob. The result is that **the only substitutable filesystem in the whole library is Monty's `mount=` parameter, which lives inside a mode-of-action capability.**
+Local crash-resumable sessions are a goal. That is different from distributed
+durable execution: one process owns a session, records a write-ahead JSONL log,
+and refuses to guess whether an indeterminate external side effect should be
+repeated.
 
-pi fails the same axis from the other side. It *defines* the interface — `ExecutionEnv = FileSystem & Shell`, ~16 methods, `Result<T,E>` returns, closed error-code enums, never throws — but never threads it into tool execution. `AgentTool.execute()` has no env parameter and `AgentHarness` touches `env` in 3 of 1029 lines. So tools close over their own environment at construction, which is why its one real sandbox consumer (the Gondolin micro-VM extension) has to rebuild each tool per call with swapped operations, and still escape-hatched out of `GrepOperations` because ripgrep doesn't fit a two-method interface.
+### Release boundary
 
-**Our rule: one environment interface, threaded through tool execution.** Details in §13.3.
+- Agentic `v0.4.0`: execution driver, shared fold, canonical events, per-run
+  overlays/gates/hooks/result processing, tool-call context, and
+  terminal-pairing fixes.
+- Harness `v0.1.0`: runtime, sessions, repair, environment, permissions,
+  capabilities, and default assembly, requiring Agentic `v0.4.0`.
 
-A corollary that also comes from the references: **governance is orthogonal to environment, and neither substitutes for the other.** The environment defines what is *possible*; governance defines what is *permitted*. pydantic-ai-harness's shell capability matches only the first token of a command against a denylist and its own source concedes the checks "are not a security boundary — a sufficiently motivated agent can bypass them." `foo && rm -rf /` walks straight through. If you want a boundary you change the substrate (container, VM, monty's zero-capability default), not the pattern list.
+---
 
-## 5. Agents as closures
+# Part I — Design laws
 
-An agent instance is a closure: a policy (model + instructions) over a **captured environment** (deps, execution env, toolset, permissions, history, budget). `agentic` already has the constructor — `Bind(deps) → Runner`.
+## 4. What the harness owns
 
-The payoff is at delegation, where "what does the child capture from the parent?" turns out to be *the* design question of multi-agent — and every system answers it field by field:
+A harness answers seven independent questions:
 
-| | history | deps | budget/usage | tools | env |
-|---|---|---|---|---|---|
-| **pydantic-ai `SubAgents`** | isolate | share | share (default) | not inherited unless asked | share |
-| **OpenHands delegation** | isolate (own `start_id`) | share | **share** (iteration + budget + metrics) | per-agent-class | share |
-| **codex threads** | isolate | isolate | isolate | isolate (own registry) | isolate |
+| Concern | Question |
+|---|---|
+| Action space | What resources can the agent affect? |
+| Action mode | Direct tools, code, planning, or delegation? |
+| Action interface | Which tools and schemas are visible this turn? |
+| Knowledge | Which history, compacted context, memory, and retrieval enter the request? |
+| Control | When does the run continue, suspend, stop, or accept steering? |
+| Governance | Which proposed effects are allowed, denied, or deferred? |
+| Topology | Which child agents exist and what do they capture? |
 
-Those aren't three architectures; they're three **capture lists**. Modelling delegation as explicit per-field capture semantics (`share | isolate | narrow`) expresses all three with one primitive, and "multi-agent" stops being a subsystem and becomes closure creation with a restricted capture.
+Two rules organize the implementation:
 
-The framing also predicts a real bug. OpenHands' parent forwards *all* events to an active delegate indiscriminately, so a user's steering message meant for the parent silently re-steers the sub-agent — and burns the parent's shared budget doing it. That is a capture-scope error, and naming captures explicitly is what makes it visible.
+> Substrates use interfaces. Policies use ordered hooks.
 
-## 6. The runtime model
+An environment is a substrate: local, memory-backed, containerized, or remote.
+Permissions and compaction are policies layered over that substrate. Putting
+permissions inside a filesystem does not make shell execution safe, and putting
+filesystem methods directly inside capabilities makes alternate backends
+impossible.
 
-### 6.1 Derivation
+> The durable transcript is truth; each provider request is a derived view.
 
-Three primitives, in order:
+Repair, compaction, cache-aware injection, and provider normalization transform a
+copy. They never rewrite the durable transcript to appease a provider.
 
-1. **The model call is a pure function.** `f(context) → tokens`, stateless, synchronous, one-shot. Every model call in every harness studied is strictly request/response. The non-linearity does not come from the model.
-2. **The transcript is the only state.** Strategy, plan, progress, memory — if it isn't in the message list, it doesn't exist. This is why re-steering is cheap: there is no plan object to invalidate, only a context to change.
-3. **The loop is a fold over the transcript**, repeated until a termination predicate holds.
+## 5. The five runtime nouns
 
-The single source of non-linearity is that **the user produces input on wall-clock time and the loop consumes it on its own time.** Two independent timelines, one shared log.
+The runtime has five distinct objects:
 
-That yields the termination predicate, which is *not* "the model stopped":
+1. **Inbox** — many writers, one session reader; durable queued input.
+2. **Transcript** — append-only authoritative history.
+3. **Loop** — Agentic's single fold over model and tool turns.
+4. **Provider view** — repaired and compacted messages for one request.
+5. **Event stream** — one producer projected to independent subscribers.
 
+The inbox is not an event bus. It changes future execution. The event stream is
+not persistence. A subscriber may disappear without changing execution.
+
+Each session is single-flight: at most one fold mutates its transcript. Tool
+calls within one admitted batch may run concurrently, but their results are
+committed in model call order.
+
+“Batch atomic” in this document means atomic admission with respect to steering
+and permissions: either preflight admits execution or no handler starts. It does
+not mean external side effects are transactional or rolled back together.
+
+## 6. Cooperative scheduling
+
+A model request and its admitted tool batch form a turn. The inbox is accepted
+concurrently but drained only at safe boundaries.
+
+```text
+boundary -> build provider view -> model request -> commit assistant
+         -> classify calls -> preflight regular-tool batch
+         -> execute admitted tools -> validate completion candidate
+         -> commit one result per tool call
+         -> TurnEnd -> terminal arbitration -> boundary/end/suspend
 ```
-stop when:  model produced no tool calls  AND  inbox is empty
+
+Steering is therefore queue acceptance during a turn, not preemption of that
+turn. Pi and Codex both use this shape: input may arrive while work is running,
+but the active model/tool critical section reaches a safe boundary before it is
+consumed. Pydantic AI's pending-message and deferred-tool mechanisms independently
+support the same separation.
+
+Interruption is different. It cancels the current context and requires an unwind
+path because a model stream or tool effect may be partial.
+
+## 7. The four input verbs
+
+| Verb | Accepted while | Drained at | Persists across interrupt? |
+|---|---|---|---|
+| `Steer` | active ordinary run | next turn boundary | no |
+| `FollowUp` | active ordinary run | only when it would naturally complete | no |
+| `NextTurn` | any session state | before the next explicit prompt | yes |
+| `Interrupt` | running or suspended | immediately | n/a |
+
+Rules:
+
+- `Steer` and `FollowUp` return only after their queue entries are durable.
+- One entry drains per boundary by default. `DrainAll` is an opt-in session
+  policy.
+- At terminal arbitration, `Steer` has priority over `FollowUp`; follow-up is
+  considered only when no steer is waiting.
+- A session atomically changes `Running -> Closing` while checking its queues.
+  Input arriving after that transition receives `ErrRunClosing`; it is never
+  silently lost.
+- `Steer` rejects compact, review, child-only, and other non-steerable turn kinds
+  with `ErrTurnNotSteerable`.
+- Explicit stop or interrupt marks undrained steer/follow-up entries cancelled.
+  `NextTurn` entries remain queued.
+- Accepted queue entry IDs and drain/cancel records live in the session log, so
+  restart cannot consume an entry twice.
+
+Queue acceptance and boundary drain use the same session mutex and write-ahead
+store. A failed acceptance write does not enqueue. At a boundary, the drain
+record is synced before its message is injected; if that write fails, the hook
+fails and recovery still sees the entry as accepted rather than consumed. This
+is the linearization point for the `Steer`/`Closing` race.
+
+If an input call's context is cancelled after its acceptance record syncs, the
+method still returns the `QueueReceipt`; it never reports cancellation for an
+entry that was durably accepted.
+
+The natural termination predicate is:
+
+```text
+validated completion candidate
+AND no model-requested continuation
+AND no accepted steer or follow-up to drain
 ```
 
-codex computes exactly this (`needs_follow_up = model_needs_follow_up || has_pending_input`); pydantic-ai converts an `End` node back into a `ModelRequestNode` when a pending message drains. The run ends when the model is done *and nobody has anything more to say*.
+“The model emitted no tool calls” is not, by itself, a terminal condition.
 
-### 6.2 Cooperative scheduling
+---
 
-The turn is a **critical section**; turn boundaries are **yield points**; the inbox is polled only at yields.
+# Part II — Agentic `v0.4.0` execution contract
 
-```mermaid
-flowchart LR
-    Y1([yield<br/>drain inbox]) --> B[build payload<br/>= repair view]
-    B --> M[model call<br/>ATOMIC]
-    M --> A1[append assistant]
-    A1 --> T[tool batch<br/>ATOMIC]
-    T --> A2[append results]
-    A2 --> Y2([yield<br/>drain inbox])
-    Y2 -.->|not done| B
-    Y2 -.->|done| E([end])
-```
+## 8. Current state and why the old seam is insufficient
 
-Everything empirical falls out of this:
+At `v0.3.0`:
 
-- **Steering is cheap** — it happens at a yield point where invariants hold. Nothing to repair.
-- **Interruption is expensive** — it is *preemption*, breaking the critical section, so `tool_use` blocks are orphaned and cleanup is owed.
-- **Nobody preempts mid-request.** Verified across all five references; codex has a regression test named `user_input_does_not_preempt_after_reasoning_item`. The one exception in the corpus: codex lets *inter-agent* mailbox mail break a stream mid-flight after a reasoning item. Agent-to-agent messages preempt; human ones don't — correct, since another agent's message is usually a blocking dependency while a human's is a course correction that loses nothing by waiting one turn.
+- `Runner[O]` exposes only `Run(ctx, prompt string, ...RunOption)`.
+- `prepareLoopAfterPreflight` always appends a new user text message, even when
+  `WithMessages` supplies history.
+- `runAfterPreflight` terminates separately for a validated no-tool text response
+  and for an output-tool response.
+- `typedRuntime.run` parses and validates typed output outside the core loop, so
+  a core turn hook cannot know whether a candidate is valid.
+- `runStreamTrue` duplicates the fold and writes directly to a bounded channel.
+- `processToolUses` under `EndStrategyEarly` can return with assistant tool calls
+  that have no matching tool-result messages.
+- Bound runners cannot receive session hooks, capability toolsets, or permission
+  gates after binding.
 
-This is textbook cooperative multitasking. Interrupt is the one preemptive operation, and like every preemptive operation in a cooperative system it needs an unwind handler (§8).
+Consequently, a hook added at one `return` would be incorrect for output tools,
+typed validation, and streaming. A resume implemented with `WithMessages` would
+also append a spurious user message after deferred tool results.
 
-### 6.3 The five nouns
+## 9. Additive public driver
 
-```mermaid
-flowchart TB
-    U[user] --> IN
-    C[capabilities] --> IN
-    S[subagents] --> IN
-
-    subgraph H["harness module"]
-        IN["<b>INBOX</b><br/>ordered · many writers · ONE reader<br/>steer · follow-up · next-turn · interrupt"]
-        TR["<b>TRANSCRIPT</b><br/>append-only · the ONLY state"]
-        EV["<b>EVENT STREAM</b><br/>broadcast · 1 → N"]
-    end
-
-    subgraph A["agentic module"]
-        LOOP["<b>LOOP</b><br/>run_loop.go — the fold<br/>TurnHook = the yield point"]
-    end
-
-    IN -->|drained inside TurnHook| LOOP
-    TR -->|projected to messages| LOOP
-    LOOP -->|append| TR
-    LOOP -->|WithEventSink| EV
-    LOOP -->|Repair = HistoryProcessor| PV["<b>PROVIDER</b><br/>pure f(context) → tokens"]
-    EV --> UI[TUI]
-    EV --> PS[persistence]
-    EV --> TC[tracing]
-    EV --> SV[supervisor]
-```
-
-**The input/output asymmetry is the part that is not one pattern.** The inbox is an actor mailbox — many writers, exactly one reader, consumed at the reader's pace. The event stream is genuine pub/sub — one producer, N independent consumers, none able to influence the run. Conflating them is what makes this architecture feel murky in discussion.
-
-Two properties fall out of the structure rather than being designed in: the run is **single-flight** (one fold at a time per session; concurrency lives in the inbox, not the loop), and the whole thing is **resumable** (state is a fold over an append-only log, so crash-recovery, fork, and branch are the same operation as normal execution).
-
-## 7. The four verbs
-
-Injection kinds differ *only* in which yield point drains them and whether they preempt. This is the API the whole steering story reduces to:
-
-| Verb | Drains at | Preempts? | Repair needed? | Survives Interrupt? |
-|---|---|---|---|---|
-| **Steer** | next yield point (turn boundary) | no | no | no — cleared |
-| **FollowUp** | after the run *would* have ended, re-opening it | no | no | no — cleared |
-| **NextTurn** | prepended to the next run, before the user's prompt | n/a | no | **yes** |
-| **Interrupt** | immediately; jumps the queue | **yes** | **yes** | n/a |
-
-Notes that matter:
-
-- **Steer ≠ Interrupt, and defaulting to Steer is the point.** Codex states it directly: interrupt is a last resort, not the primary mid-turn channel. Steering keeps full context and simply adds instructions; interrupting tears down and pays for repair.
-- **NextTurn is not user steering.** It's the channel for capability-injected ambient context, which is why it must survive `Interrupt` (pi asserts exactly this in a test).
-- **Drain mode defaults to one-at-a-time**, per pi. With `all`, two queued instructions arrive as adjacent user messages and the model tends to interleave or drop one; one-at-a-time guarantees the first is acted on, its tools run, and only then does the second enter.
-- **Only steerable turn kinds accept a steer.** codex rejects steering a Review or Compact turn with a typed error the UI catches and requeues. Our runtime needs the same typed rejection rather than silently queueing into a turn that will never drain.
-- **Undrained messages are an error, not a silent drop.** pydantic-ai raises `UndrainedPendingMessagesError` when a run reaches `End` with a non-empty queue. Copy this.
-- **Steering resets loop-detection windows.** OpenHands' stuck detector only examines events after the last user message. That is right: you manually broke the trajectory, so prior repetition shouldn't count.
-
-## 8. The repair contract
-
-Preemption breaks the protocol invariant that every `tool_use` has a matching `tool_result`. Four independent implementations converged on the same answer, which makes this the strongest empirical finding in the spike:
-
-> **Durable history is append-only truth. The provider payload is a derived, repaired view. Never mutate history to satisfy the API.**
-
-- **codex**: `for_prompt` consumes history *by value*, so normalization runs on a clone.
-- **pydantic-ai**: `_repair_dangling_tool_calls` is documented as deterministic and idempotent — synthesized returns derive timestamps from the response they repair and contain no wall-clock or random data, *specifically so repair never churns provider prompt-cache prefixes*.
-- **pi**: repair lives in `transformMessages` at the provider boundary; aborted assistant messages stay in the session and JSONL but are excluded from every outbound request.
-- **opencode**: repairs at write time and again at model-conversion time, with a comment naming the Anthropic constraint directly.
-
-**`agentic` already implements this seam.** `buildRequest` passes the message list through the configured `HistoryProcessor` on every iteration, and the interface contract states it exactly: *"The processor affects only what's sent to the model — the agent's internal message list remains complete."* Repair is therefore a `HistoryProcessor`, not new machinery — and it composes with compaction through the existing `ChainProcessors`.
-
-Our contract:
+Keep the existing convenience interface:
 
 ```go
-// Repair projects durable history into a protocol-valid provider payload.
-// It implements agentic.HistoryProcessor, so it plugs into the existing
-// per-request projection seam and chains with compaction via ChainProcessors.
-//
-// Deterministic and idempotent: synthesized parts derive their identity from
-// what they repair and contain no wall-clock or random data, so repeated calls
-// are byte-identical and never churn provider prompt-cache prefixes.
-// Never mutates the transcript.
-func Repair(opts RepairOptions) agentic.HistoryProcessor
-
-type RepairOptions struct {
-    // RepairFrontier synthesizes results for open tool calls in the final
-    // assistant message. Leave false when a deferred/HITL resume is pending —
-    // those open calls are exactly what the resume will answer.
-    RepairFrontier bool
+type Runner[O any] interface {
+    Run(context.Context, string, ...RunOption) (*Result[O], error)
 }
 ```
 
-Repair does four things: synthesize missing tool results for orphaned calls; drop orphaned results whose call is gone; exclude assistant messages marked aborted/errored; and preserve thinking blocks unchanged (never strip them — removal can trigger ordering/signature 400s).
-
-Two refinements worth keeping:
-
-- **Severity distinction** (codex): a missing function-call output is expected after an interrupt and logs at info; a missing custom-tool or local-shell output indicates a real bug and should be loud.
-- **One function, every path.** Compaction must not orphan pairs; interruption must not; crash-resume must not; steering-after-a-partial-batch must not. All of them funnel through the same projection at the wire boundary.
-
-## 9. Events: three destinations
-
-The naive assumption is that what the model produces, the user sees, and the transcript stores are the same content. In every mature implementation they are three streams, and the divergence is deliberate **in both directions**:
-
-- **User sees what the model won't.** codex streams message and reasoning deltas as UI-only events; history is recorded solely on `OutputItemDone`, so an assistant message cut off mid-stream is rendered and then discarded from history.
-- **Model sees what the user won't.** codex's `<turn_aborted>` marker is a `user`-role message registered in `CONTEXTUAL_USER_FRAGMENTS` — invisible in the event stream, present in the payload. Same mechanism carries `<environment_context>`, `<user_shell_command>`, `<subagent_notification>`, AGENTS.md, and skills.
-- **Tool results split.** pi's `AgentToolResult.content` goes to the model; `details` is "structured, for UI/logs" and never does. That is how a bash tool renders a rich progress pane while sending the model 200 tokens.
-
-```mermaid
-flowchart LR
-    A[completed assistant message] --> M
-    A --> U
-    C["tool result · content"] --> M
-    C --> U
-    D["tool result · details"] --> U
-    B["streaming deltas<br/>(text, thinking)"] --> U
-    F["aborted partial message"] --> U
-    E["contextual fragments<br/>turn_aborted · env · skills"] --> M
-
-    M["<b>MODEL SEES</b><br/>transcript → Repair → payload"]
-    U["<b>USER SEES</b><br/>event stream → TUI"]
-```
-
-The overlap is smaller than intuition suggests, and the divergence runs in **both** directions — that is the point of the diagram, and the reason the event stream must never be implemented as a mirror of the transcript.
-
-### 9.1 Taxonomy
-
-| Loop step | Event | → transcript? |
-|---|---|---|
-| drain inbox | `UserMessage` | yes |
-| build payload | `ModelRequestStart` | — |
-| stream: thinking begins | `ThinkingStart` | — |
-| stream: thinking summary | `ThinkingDelta` | **no** (preview) |
-| stream: text tokens | `MessageDelta` | **no** (preview) |
-| stream: complete | `MessageEnd` *(authoritative)* | yes |
-| | `ModelRequestEnd` | — |
-| tool dispatch | `ToolStart` (args) | — |
-| tool progress | `ToolUpdate` (partial) | **no** (preview) |
-| tool finish | `ToolEnd` (result) | `content` only; `details` no |
-| boundary | `TurnEnd` | — |
-| harness action | `CompactionStart/End`, `SubagentSpawned/Finished`, `PermissionAsked` | varies |
-
-Every event carries its nature, and consumers branch on it:
+Add a capability implemented by every built-in agent and bound runner:
 
 ```go
-type Nature uint8
+type Driver[O any] interface {
+    Runner[O]
+    Drive(context.Context, DriveInput, ...RunOption) (*Execution[O], error)
+    Resume(context.Context, ResumeInput, ...RunOption) (*Execution[O], error)
+}
+
+type DriveMode uint8
 
 const (
-    Lifecycle     Nature = iota // spans and boundaries; never in the transcript
-    Preview                     // deltas; UI only; may be shed under load
-    Authoritative               // corresponds to a transcript append
+    DriveStart DriveMode = iota
+    DriveContinue
+)
+
+type DriveInput struct {
+    Mode    DriveMode
+    History []Message
+    Prompt  *Message
+}
+
+type ResumeInput struct {
+    History    []Message
+    Suspension Suspension
+    Decisions  []ToolResumeDecision
+    Prompt     *Message // optional user message after tool results
+}
+
+type ToolResumeDecision struct {
+    CallID string
+    Action ToolResumeAction // execute or return supplied result
+    Input  map[string]any   // nil means use persisted arguments
+    Result *ToolExecutionResult
+}
+
+type ToolResumeAction uint8
+
+const (
+    ToolResumeInvalid ToolResumeAction = iota
+    ToolResumeExecute
+    ToolResumeReturn
+)
+
+func RequireDriver[O any](r Runner[O]) (Driver[O], error)
+```
+
+Validation is strict:
+
+- `DriveStart` requires one `RoleUser` prompt and history with no open tool
+  frontier.
+- `DriveContinue` forbids a prompt, requires non-empty history, and requires a
+  provider-valid, fully paired frontier: ordinarily a user or tool-result
+  message.
+- `Resume` requires the exact suspension returned by the driver, history whose
+  frontier hash matches it, and exactly one decision for every open executable
+  call. It completes that interrupted tool turn before starting another model
+  request. Its optional prompt must be `RoleUser` and is appended only after all
+  call results. Override inputs are validated against the original tool schema
+  before any handler in the resumed batch runs.
+- System prompts are inserted only if history does not already contain one.
+- Input slices are copied; caller mutation cannot change a running execution.
+
+`Run(ctx, "...")` remains a convenience wrapper over `DriveStart`. Existing
+`Bind` and `BindProvider` may keep returning `Runner[O]`; the concrete bound
+runner also implements `Driver[O]`. The harness accepts `Runner[O]` and calls
+`RequireDriver` during `Build`, preserving the settled post-binding boundary
+without silently accepting a runner it cannot control.
+
+A third-party type that implements only `Runner[O]` remains valid for Agentic but
+cannot be used by the harness; `RequireDriver` returns `ErrDriverRequired` with
+no fallback loop. Third parties may implement `Driver[O]` directly. The harness
+never reconstructs an agent loop from `Run`.
+
+`BindProvider` resolves and validates dependencies again on `Resume` before any
+handler executes. The harness puts session and suspension IDs in the standard
+context first, so a provider may rehydrate session-scoped resources. Applications
+that require object identity across suspension must use `Bind` or a provider
+keyed by that session; the harness never claims to serialize arbitrary Go
+dependency values.
+
+### Execution states
+
+```go
+type ExecutionStatus uint8
+
+const (
+    ExecutionCompleted ExecutionStatus = iota
+    ExecutionSuspended
+    ExecutionStopped
+    ExecutionInterrupted
+    ExecutionFailed
+)
+
+type Execution[O any] struct {
+    Status     ExecutionStatus
+    Result     *Result[O]   // transcript, usage, calls, and results so far
+    Suspension *Suspension // non-nil only when suspended
+}
+
+type Suspension struct {
+    ID           string
+    Kind         string
+    FrontierHash string
+    Payload      json.RawMessage // versioned, serializable, kind-specific data
+}
+```
+
+`Drive` may return both a non-nil partial `Execution` and an error. Provider,
+limit, event-sink, turn-hook, and cancellation errors never erase committed
+history. `Runner.Run` preserves its existing behavior by returning the completed
+`Result` or the typed error from `Drive`.
+
+`FrontierHash` is computed over a versioned canonical encoding of the committed
+messages and ordered open call IDs. It is a misuse/stale-state guard, not an
+authentication primitive.
+
+The suspension also carries usage, iteration/retry counters, end strategy, and a
+fingerprint of the model/output schema/tool definitions that define the
+execution. `Resume` restores counters instead of resetting limits and rejects a
+semantic configuration mismatch before effects. Event sink, turn hook, stream
+transport, and cancellation grace may be reattached; model, output mode,
+toolsets, limits, and retry policy may not change mid-suspension. Unknown payload
+versions return `ErrSuspensionVersion` rather than attempting a best-effort
+resume.
+
+## 10. One fold, two model transports
+
+Refactor `runAfterPreflight` and `runStreamTrue` into one generic outer fold.
+Blocking `Model.Request` and streaming `StreamModel.RequestStream` become
+transport strategies that both yield one reconstructed assistant message,
+usage, finish reason, and preview events.
+
+There is one implementation of:
+
+- iteration and usage limits;
+- provider-error handling;
+- assistant commits;
+- tool preflight, execution, retries, and pairing;
+- typed parsing and validation;
+- `TurnEnd` and terminal arbitration; and
+- partial execution/error semantics.
+
+Implement it as a generic package-level `driveLoop[O]` with a private
+`completionEvaluator[O]`. The text facade supplies the existing text validators;
+typed facades supply their parser plus typed validators. Remove
+`typedRuntime.run`'s outer validation/re-run loop so output retries, hook timing,
+usage, and streaming all pass through the same state machine.
+
+`RunStream` becomes a compatibility adapter over this fold. `StreamEvent` stays
+the public delta-oriented projection for existing consumers; it does not become
+a second authoritative taxonomy.
+
+Its channel contract remains intentionally lossless and backpressured: if a
+caller neither ranges `Events` nor calls `Wait`/`Text`, that particular streaming
+run may stall. The harness never consumes this adapter and is therefore not
+coupled to its channel capacity.
+
+On a hook or sink error during streaming, the fold retains already committed
+messages, projects one `StreamEventError`, closes the channel, and makes
+`Wait()` return the same error. Add a non-generic
+`StreamResult.Snapshot() (ExecutionSnapshot, bool)` with status, messages, calls,
+results, usage, and suspension metadata so text and typed agent-stream consumers
+can inspect final or partial state after `Wait`; it does not consume the channel
+independently. Provider-level streams return `false` because they do not own an
+agent execution.
+
+## 11. Per-run control seams
+
+These are `RunOption`s because the harness configures individual sessions after
+the runner has been bound:
+
+```go
+func WithRunTurnHook(TurnHook) RunOption
+func WithRunEventSink(EventSink) RunOption
+func WithRunToolsets(...Toolset) RunOption
+func WithRunToolGate(ToolGate) RunOption
+func WithRunToolResultProcessor(ToolResultProcessor) RunOption
+func WithRunModelStreaming(bool) RunOption
+func WithRunToolCancellationGrace(time.Duration) RunOption
+```
+
+Toolsets form an immutable registry overlay for the execution. A duplicate name
+between the agent registry and any overlay fails before the first model request.
+No shared agent registry is mutated.
+
+The shared tool scheduler observes cancellation. After
+`WithRunToolCancellationGrace`, it stops waiting for non-cooperative handlers,
+marks their calls indeterminate/aborted, and ignores late returns. This is an
+explicit replacement for the current unconditional `ExecuteBatch` wait and is
+required for `Session.Interrupt` to terminate predictably.
+
+The gate preflights the complete executable regular-tool batch before any
+handler runs. Output tools are classified separately as framework calls:
+
+```go
+type ToolGate interface {
+    EvaluateBatch(context.Context, []ToolUse) (ToolBatchDecision, error)
+}
+
+type ToolBatchDecision struct {
+    Calls    []ToolDisposition
+    Deferral *ToolDeferral
+}
+
+type ToolDisposition struct {
+    Kind     ToolDispositionKind // execute, return, suspend
+    Result   *ToolExecutionResult
+    Continue bool // expose this result to the model before accepting output
+}
+
+type ToolDeferral struct {
+    Kind    string
+    Payload json.RawMessage
+}
+
+type ToolDispositionKind uint8
+
+const (
+    ToolDispositionInvalid ToolDispositionKind = iota
+    ToolDispositionExecute
+    ToolDispositionReturn
+    ToolDispositionSuspend
 )
 ```
 
-### 9.2 Preview vs authoritative
+`EvaluateBatch` is side-effect free and must return one valid disposition per
+input call in the same order; a length mismatch or invalid kind fails before any
+handler runs. A suspend disposition requires one batch `Deferral`. If any call
+suspends, Agentic executes none of the batch and returns `ExecutionSuspended`
+with the entire assistant tool frontier still open. The driver wraps the gate
+deferral together with every call definition, its original order, and a hash of
+the exact history frontier in its serializable `Suspension`. Only
+`Driver.Resume` may re-enter that batch. This atomic preflight is what makes
+multi-call approval safe.
 
-**Deltas are a preview; the completed message is the truth.** Clients must reconcile, not concatenate-and-trust. Anthropic's Managed Agents documents the contract precisely and we should mirror it:
-
-- Accumulate deltas into a scratch buffer keyed by `(event_id, index)`.
-- When the authoritative event arrives with the same id, **discard the accumulation** and render the real content.
-- Delta delivery is **best-effort** — under load deltas are shed and you receive a contiguous prefix followed by silence. A UI that treats accumulated deltas as final will silently render truncated messages.
-- Previews are never persisted and never replayed on reconnect.
-- **Teardown is driven by the lifecycle event, never the content event.** If a turn errors or is interrupted the authoritative message may never arrive, but `ModelRequestEnd`/`TurnEnd` always does. Close unreconciled previews there or the UI hangs on a half-rendered bubble.
-
-### 9.3 Thinking
-
-Three constraints for a reasoning pane, all load-bearing:
-
-- **`thinking.display` defaults to `"omitted"`** on Fable 5, Opus 4.8/4.7, and Sonnet 5 — blocks arrive with empty text, which reads as an unexplained pause. The harness must set `display: "summarized"` explicitly when a consumer wants reasoning.
-- **Raw chain of thought is never returned** on Fable 5 / Mythos 5 — summaries only. Label the pane accordingly.
-- **Thinking blocks round-trip unchanged**, including empty ones. Render freely; never edit or reconstruct.
-
-Managed Agents emits only a `ThinkingStart` for reasoning with no deltas — a defensible default (spinner labelled "thinking…") that we should make configurable rather than hard-code.
-
-### 9.4 Interim messages
-
-Three sources with different reliability, worth keeping distinct:
-
-1. **Natural narration** between tool calls. Free, uncontrolled timing; Opus 4.8 does noticeably more of it than 4.7 by default.
-2. **A `send_to_user` tool.** The reliable one: tool *inputs* are never summarized or truncated, so content arrives verbatim mid-run. Render the input directly; return a bare acknowledgement as the result. This is the documented pattern for asynchronous agents that must deliver something exactly as written.
-3. **Harness self-narration** — "compacting…", "spawned subagent research-1", "waiting for approval". These are our events, not model output, and they are much of what makes a UI feel alive.
-
-### 9.5 Backpressure
-
-An explicit choice, not an accident. pi `await`s listeners in order, so a slow consumer slows the run; pydantic-ai uses a zero-buffer stream keeping the run at most one event ahead. **Proposed: bounded buffer per subscriber, with slow subscribers dropping `Preview` events and never dropping `Authoritative`/`Lifecycle` ones.** Preview loss is already an accepted condition (§9.2); lifecycle loss would break teardown.
-
----
-
-# Part II — Current state and references
-
-## 10. Where `agentic` is today
-
-Single Go module, `go 1.25.4`, tags `v0.1.0`/`v0.2.0`.
-
-- **The facade is the seam.** The root package re-exports everything from `internal/core` and `tool/` via type aliases (`aliases.go`). External consumers — including a future harness module — never need `internal/`. Single most important enabler for the split.
-- **Providers:** `core.Model` / `core.StreamModel` / `core.Embedder`; 11 chat providers (4 SDK-native: OpenAI, Anthropic, Gemini, Bedrock; 5 thin OpenAI wrappers: Azure, OpenRouter, Grok, Together, Ollama), 2 embedders (OpenAI, Voyage) + test mocks.
-- **Run loop:** fixed internal loop (`run_loop.go`); extension points limited to options (`ToolPrepare`, `HistoryProcessor`, `OutputValidator`, `EndStrategy`, `UsageLimits`). No step-wise API, no turn hooks, no inbox, no event bus beyond streaming deltas.
-- **Multi-agent = handoff only:** child runner as a tool, with `FullHistory`/`LastMessage`/`Summary` input filters. No isolated-context subagents, no sessions.
-- **Embeddings:** clean `Embedder` with batch-first requests, 3-value input-type hint, Matryoshka `Dimensions`. **Rerankers: none** — greenfield.
-- **Conventions that must survive:** 97% coverage gate, compile-fail fixtures for generic misuse, black-box vs internal test split, strict lint.
-
-## 11. What the references teach
-
-Local clones:
-
-| Reference | Location |
-|---|---|
-| Harness analyses (codex-cli, openhands, claw-code, opencode) | `~/dev/codesamples/multiagent/systems/` |
-| Harness sources (claw-code, codex-cli, opencode) | `~/dev/codesamples/multiagent/repos/` |
-| pydantic-ai source | `~/dev/codesamples/pydantic-ai/` |
-| pydantic-ai-harness source | `~/dev/codesamples/pydantic-ai-harness/` |
-| pi monorepo | `~/dev/codesamples/pi/` |
-| monty fork + extension system | `~/dev/opensource/monty-extended/` |
-
-### 11.1 The four coding harnesses
-
-Cross-cutting conclusion, quoted from the claw-code analysis: *"the tool loop is table stakes. The real engineering challenge is everything around it."* Recurring in **all four**, therefore in our primitive set: serialized loop with iteration/budget guards; tool permission gating; a read-only "plan" preset; compaction with the never-orphan-a-pair invariant; subagent delegation for context isolation (~200:1 compression); append-only JSONL with state rebuilt from events; pre/post-tool hooks; layered config; MCP.
-
-Where they **diverge** is exactly the menu we must keep swappable: compaction (LLM-summarize vs claw's zero-cost deterministic extraction), context injection (full re-send vs codex reference-diffing), permission model, multi-agent topology, persistence backend. The comparison doc's conclusion: the philosophies are *use-case-selectable, not ranked*.
-
-Steering behavior, which drove Part I:
-
-- **codex** — steering is the *default* mid-turn path (`steer_input` → `TurnState.pending_input`, drained at the top of the loop); only Regular turns are steerable; a hook gate may block a steer and the blocked remainder is re-queued preserving order; interrupt is separate, with a 100 ms cooperative-cancel grace window that lets aborted tools record their own results, per-tool `"aborted by user"` outputs carrying elapsed wall time, and a `<turn_aborted>` guidance message.
-- **opencode** — the minimal design: `prompt()` has no busy check, persists the message, and the running loop re-reads history each iteration; the exit condition `lastUser.id < lastAssistant.id` naturally becomes false. No abort, no repair, no steering machinery at all. Interrupt is a separate `AbortController` path with two independent repair points.
-- **OpenHands** — message queues in history behind `_pending_action`, absorbed at the next observation. Steering resets the stuck-detection window. Has the delegation capture hole (§5).
-- **claw-code** — cannot steer; `run_turn` is a blocking synchronous function. Its Ctrl-C reaches only the hook subsystem, so tools come back as `"PreToolUse hook cancelled tool X"` and the model is never told a human intervened — so it routes *around* the obstacle instead of re-planning. The cautionary case that proves the guidance message matters.
-
-### 11.2 pi
-
-Best structural template: `pi-ai` (~50-provider LLM I/O) → `pi-agent-core` (8.2k LOC reusable harness core) → `pi-coding-agent` (54k LOC product) → orchestrator. Mapped to us: **`agentic` ≈ pi-ai + a simple agent; `harness` ≈ pi-agent-core + the extension system.**
-
-Adopted: pure functional loop with an `emit` sink and hooks as the public contract; errors-as-values discipline (the loop stays total, no panics across seams); three queues with drain modes; session as a git-like entry tree with a movable leaf; two-tier "use ours or bring your own" story; provider-boundary repair.
-
-Rejected: `ExecutionEnv` not threaded into tools (§4); no permission system at all (we ship one, opt-in); per-tool micro-`Operations` interfaces.
-
-### 11.3 pydantic-ai + pydantic-ai-harness
-
-The strategic confirmation: pydantic moved everything harness-like into a **separate library** — "the batteries for your Pydantic AI agent" — with 40+ capabilities (`code_mode`, `subagents`, `planning`, `memory`, `compaction`, `context`, `filesystem`, `shell`, `guardrails`, `step_persistence`, …), and grew the core exactly one seam to support it: `Agent(..., capabilities=[...])`. Independent validation of our two-module plan, down to the name.
-
-Adopted: the capability seam and its `before_/after_/wrap_/on_*_error` hook quartet with explicit ordering (`outermost`/`innermost`); `agent.iter()` as the drive-it-yourself seam; toolset composition via fluent wrappers; HITL via deferred results rather than blocking; the store-`Protocol`-per-substrate pattern; **durable vs ephemeral injection**; the deterministic-idempotent repair contract; `UndrainedPendingMessagesError`.
-
-Noted: pydantic-ai now ships an `embeddings/` abstraction (validating our v0.2.0 direction) and still has **no reranker** — a differentiator for `agentic`. Its graph *removed* `StatePersistence`; durability is now a `TemporalAgent`-style wrapper over the model/tool boundaries. Lesson: don't design checkpointing into the loop.
-
-### 11.4 Codemode: monty / gomonty
-
-Codemode = the model writes one program that calls tools as functions in a sandbox instead of N round-tripped calls. Anthropic's MCP write-up reports 98.7% token reduction on their example; pydantic ships `CodeMode()` over **monty** (Rust, zero-capability Python subset; external functions as the only side-effect channel; resource limits; **state snapshots** at tool-call boundaries, which is what makes approval-gating and pause/resume possible).
-
-| Option | Verdict |
-|---|---|
-| **A. gomonty** (community, purego FFI over a C-ABI Rust shim) | API-complete (external functions, REPL, snapshots, limits), in-process fast. Risks: experimental single-maintainer binding of an experimental 0.0.x upstream; prebuilt shared libs; no crash isolation. **Fastest to a working prototype.** |
-| **B. WASM (wazero)** | Strongest isolation, pure Go — but upstream's wasm build is JS-targeted; we'd own a Rust→WASI build and host-function bridge. Contingency. |
-| **C. monty-pool subprocess protocol** | How pydantic's own Python binding works. Crash isolation, OS-level hardening, and **the only option that reuses our `monty-extended` native-extension architecture** (`polars-monty` works for free). Protocol is internal/unstable. **Best long-term leverage.** |
-| **D. starlark-go / goja** | Mature, pure Go, no Rust — but not Python (starlark) or needs JS plumbing (goja), and codemode quality tracks model fluency in the sandbox language. Escape hatch. |
-
-**Recommendation:** define `codemode.Executor`, prototype on **A**, target **C**, keep **D** as the no-Rust contingency. Codemode is a *capability* selected per-tool via toolset metadata — never a core-loop change.
-
-### 11.5 Embeddings & rerankers landscape (mid-2026)
-
-- **Gemini** (`google.golang.org/genai` already in go.mod): `EmbedContent`, 8-value taskType, MRL 128–3072. ~~Truncated `gemini-embedding-001` vectors are **not normalized**; the provider must renormalize.~~ **Corrected 2026-07-20:** this claim did not survive checking. pydantic-ai's `embeddings/google.py:280` returns `emb.values` verbatim, never renormalizes, and their recorded 768-dim response is already unit-norm. Silent renormalization would be behavior no other embedder in this tree has — implemented as opt-in only, if at all.
-- **Ollama** (official `ollama/api`): native `/api/embed` with batch input, dimensions, usage. Covers the local/self-hosted story; the OpenAI-compat route already works via `openai.NewEmbedder` + base URL.
-- **Cohere** (official `cohere-go/v2`): embed-v4.0, `input_type` **required** (needs a documented default for `EmbeddingInputNone`), MRL enum dims. Same package later hosts Rerank.
-- **Bedrock** (SDK in go.mod): Titan V2 is one-text-per-call → provider must fan out internally to keep the batch contract. ~~Cohere-on-Bedrock caps at 96.~~ **Corrected 2026-07-20:** the "96" figure could not be sourced — it appears nowhere in pydantic-ai, and neither of their Cohere paths chunks. Shipped without a hard-coded cap; a limit violation surfaces as the provider's own 400, whose body is included in our error and is therefore self-diagnosing.
-- **Skip for now:** Jina, Mistral (easy voyage-style clones on demand); Anthropic has no embedding models (docs point to Voyage — already supported).
-- **Rerankers** converge on one shape — `(query, documents, topN) → sorted [{index, score}]` — across Cohere, Voyage, Jina, ZeroEntropy, Bedrock, TEI. Only Cohere/ZeroEntropy document 0–1 calibration; scores are ordinal, not comparable across providers.
-
----
-
-# Part III — Plan
-
-## 12. Monorepo layout
-
-### 12.1 Chosen shape
-
-```
-agentic/                      # repo root = module github.com/regularkevvv/agentic (UNCHANGED)
-├── go.work                   # dev-only: use ., ./harness
-├── go.mod
-├── *.go, internal/, tool/, mcp/, provider/, examples/, e2e/
-├── docs/
-└── harness/                  # NEW nested module: .../agentic/harness
-    ├── go.mod
-    ├── harness.go            # Harness, Builder, Capability seam        §13.1
-    ├── runtime/              # inbox, events, repair, session driver    §13.2
-    │                         #   (the fold itself stays in agentic)
-    ├── env/                  # ExecutionEnv substrate                   §13.3
-    ├── session/              # entry tree + JSONL store                 §13.4
-    ├── contextmgmt/          # compaction & injection policies          §13.5
-    ├── permission/           # ruleset policy + deferred approvals      §13.6
-    ├── subagent/             # capture-restricted delegation            §13.7
-    ├── codemode/             # Executor interface + backends            §13.8
-    └── examples/
-```
-
-### 12.2 Why not move `agentic` into a subdirectory
-
-"Monorepo containing agentic as a module" could mean `repo/agentic/` + `repo/harness/`. We recommend **against** moving it:
-
-- The module path derives from the repo root; moving to `agentic/` either breaks every import (path becomes `.../agentic/agentic`) or forces a rename/major-version dance. Two tags already published.
-- Root module + nested modules is the idiomatic Go monorepo shape (`golang.org/x/tools` + `x/tools/gopls`). Tags disambiguate: `v0.3.0` for agentic, `harness/v0.1.0` for the harness.
-- pi and pydantic-ai both keep the core primary and layer the harness beside it; neither demotes the core into a subfolder.
-
-### 12.3 Module discipline
-
-- **The harness imports only the public `agentic.*` facade** (plus `provider/*`, `tool/`, `mcp/`). Go would permit a nested module to reach `internal/core`, but that couples the modules invisibly. Rule: *needing something from `internal/core` means promoting it to `aliases.go` first* — precedent: the new reranker types.
-- `go.work` for local development; CI builds and tests each module independently so the harness never silently depends on unreleased `agentic` changes. Release order: agentic, then harness bumps its requirement.
-- Coverage: agentic keeps 97%; harness starts lower (proposed 85%) with its own Makefile targets, ratcheting as it stabilizes. Experimental packages (`codemode/` backends) get the `e2e`-style carve-out.
-
-## 13. Harness design
-
-### 13.1 Layering and the capability seam
-
-```
-Level 0  agentic            Model/StreamModel, tools & toolsets, typed agents, output
-                            modes, embeddings, rerankers, MCP, handoff. Unchanged.
-Level 1  harness primitives runtime (loop/inbox/events/repair), env, session,
-                            contextmgmt, permission, subagent, codemode. À la carte.
-Level 2  harness presets    harness.Default(). Users copy the assembly and swap parts.
-```
-
-```mermaid
-flowchart BT
-    subgraph L2["Level 2 — presets"]
-        P["harness.Default()<br/>(built only from public capability APIs)"]
-    end
-    subgraph L1["Level 1 — harness primitives"]
-        H1["runtime<br/>inbox · events · repair"]
-        H2[env]
-        H3[session]
-        H4[contextmgmt]
-        H5[permission]
-        H6[subagent]
-        H7[codemode]
-    end
-    subgraph L0["Level 0 — agentic"]
-        A1["Model · Toolset · Message · OutputSpec"]
-        A2["run_loop.go — the fold<br/>+ TurnHook + EventSink"]
-        A3["embeddings · rerankers · MCP"]
-    end
-    L1 --> L0
-    L2 --> L1
-```
-
-Dependency direction is strictly upward-to-downward: harness depends on agentic, presets depend on primitives, and nothing in `agentic` knows the harness exists.
-
-The composition seam is a **Capability** — the analogue of `pydantic_ai.capabilities` and pi's `ExtensionAPI`:
+Before invoking a handler, Agentic adds public call metadata to the standard Go
+context:
 
 ```go
-type Capability interface {
-    Name() string
-    Attach(b *Builder) error
+type ToolCallContext struct {
+    ID      string
+    Name    string
+    Attempt int
 }
 
-type Builder struct{ /* ... */ }
-
-func (b *Builder) AddToolset(ts agentic.Toolset)
-func (b *Builder) AddInstructions(fn InstructionsFunc)      // dynamic prompt fragments
-func (b *Builder) OnEvent(h EventHandler)                   // §9
-func (b *Builder) InterceptTool(i ToolInterceptor)          // before/after; may block or patch
-func (b *Builder) OnTurn(h TurnHook)                        // prepare-next / should-stop
-func (b *Builder) TransformContext(f ContextTransform)      // durable or ephemeral — §13.5
-func (b *Builder) Order(o Ordering)                         // outermost | innermost | after(X)
+func CurrentToolCall(context.Context) (ToolCallContext, bool)
 ```
 
-`Ordering` is taken from pydantic-ai, which needs it in practice: `CodeMode` declares `outermost` (so it wraps tool-search), `InputGuard` declares `innermost` (so it sees the final prompt after other capabilities have morphed it). Prefer type-based references over instance-based ones — instance refs break when a capability returns a fresh object per run.
-
-Everything below is *just a capability* using these registration points. Our `harness.Default()` must be implementable with no privileged API — that is the real test of "build your own", and we should enforce it by construction.
-
-### 13.2 `runtime` — the five nouns
-
-**The harness does not own a loop.** `agentic`'s `runAfterPreflight` (`run_loop.go:45`) already *is* the fold from §6.1 — iterate to `maxIterations`; build request; model call; append assistant; return if no tool calls; else execute the batch and append results. Reimplementing that in the harness would give us a third loop in the codebase (agentic already has two — see §16) and two homes for the tool-pair invariant, retry accounting, and usage limits. The harness instead owns everything *outside* the fold — inbox, transcript, events, capabilities — and drives agentic's loop through a small seam added to it.
-
-Better still, **the repair contract of §8 already exists in agentic.** `buildRequest` (`run_loop.go:158`) runs the message list through the configured `HistoryProcessor` on every iteration, and that interface's contract is verbatim the rule the references converged on:
-
-> *"The processor affects only what's sent to the model — the agent's internal message list remains complete for `RunResult.AllMessages()`."*
-
-So `Repair` is registered as a `HistoryProcessor`, not built as new machinery.
-
-**Three additive changes to `agentic` close the gap** (a nil hook preserves current behavior exactly; no new dependencies; both are useful to `agentic` users independent of the harness):
+Dependency-aware handlers already receive that standard context as
+`RunContext[D].Ctx`; no handler signature needs to change.
 
 ```go
-// 1. A yield point at the turn boundary.
-type TurnHook func(ctx context.Context, t Turn) (TurnDecision, error)
+type ToolResultProcessor interface {
+    Process(context.Context, ToolUse, ToolExecutionResult) (ToolExecutionResult, error)
+}
+```
 
+The processor runs after the handler returns and before result commit/formatting.
+It may replace model-visible content while retaining the call ID, tool name, and
+error truth: an original error cannot become success, and ID/name changes are
+rejected. On processor failure, Agentic commits a paired error result stating
+that the side effect may have completed but result processing failed, then
+emits a failed `TurnEnd`/`RunError` without invoking the turn hook, and returns
+`ExecutionFailed`. This seam supports output bounding and artifact spill without
+wrapping or re-registering application tools.
+
+## 12. Turn commit and terminal arbitration
+
+The shared fold executes this order for every iteration:
+
+1. Check pre-request limits.
+2. Build the repaired/compacted provider view.
+3. Perform one blocking or streaming model request.
+4. Check post-response limits and reconstruct a complete assistant message.
+5. Commit the assistant message and canonical assistant event.
+6. Classify regular and output tool calls. A truncated response is never a valid
+   completion candidate and none of its partial calls execute.
+7. Under `EndStrategyEarly`, select the first output call and skip all other
+   calls. Otherwise preflight the complete executable regular-tool batch and
+   execute admitted calls. Output tools never enter the permission gate.
+8. If the gate suspends, persist the whole open assistant frontier and return
+   `ExecutionSuspended`; `Driver.Resume` re-enters this same step.
+9. Parse and validate a text or output-tool completion candidate after admitted
+   regular tools finish, preserving current exhaustive-tool semantics. A model
+   retry or gate result marked `Continue` discards an otherwise valid output
+   candidate so the model sees those results first.
+10. Build and append exactly one result for every tool call in original model
+    order. On validation failure, include the output failure and normal retry
+    feedback; regular-tool effects/results are not repeated.
+11. Emit `TurnEnd` and call the turn hook, including on validation-retry and
+    ordinary tool-only turns.
+12. Apply one terminal-arbitration decision.
+
+The hook receives defensive copies of committed state. A non-empty candidate has
+already passed parsing and validation:
+
+```go
 type Turn struct {
     Index     int
-    Messages  []Message              // transcript so far (read-only)
+    Messages  []Message
     Assistant Message
     Results   []ToolExecutionResult
     Usage     Usage
+    Candidate CompletionCandidate
 }
+
+type TurnAction uint8
+
+const (
+    TurnDefault TurnAction = iota
+    TurnContinue
+    TurnStop
+)
 
 type TurnDecision struct {
-    Inject   []Message // appended before the next request
-    Continue bool      // force another iteration even with no tool calls
-    Stop     bool      // end the run at this boundary
+    Action TurnAction
+    Inject []Message
 }
 
-func WithTurnHook(h TurnHook) AgentOption
-
-// 2. An event sink. processToolUses already holds the data; nothing publishes it.
-func WithEventSink(fn func(Event)) AgentOption
-
-// 3. The un-ending termination condition (§6.1). run_loop.go:69 is currently
-//    `if len(toolUses) == 0 { return }` and must become
-//    `if len(toolUses) == 0 && !decision.Continue { return }`.
+type TurnHook func(context.Context, Turn) (TurnDecision, error)
 ```
 
-`TurnDecision.Continue` is how the inbox un-ends a run — the same mechanism as codex's `needs_follow_up || has_pending_input` and pydantic-ai's `End` → `ModelRequestNode` conversion.
+Decision rules are deliberately non-ambiguous:
 
-With that seam, the harness maps cleanly onto the five nouns with no duplicated control flow: **Inbox** drains inside `TurnHook` and returns `Inject`/`Continue`/`Stop`; **Transcript** is the harness's log, projected into `Messages` per run; **Repair** is the `HistoryProcessor`; **Event stream** is fed by `WithEventSink` plus harness-level events; the **Loop** stays in `agentic`.
+- `Inject` requires `TurnContinue`, at least one message, and only `RoleUser`
+  messages. Deferred tool results enter through `Driver.Resume` or an explicit
+  `DriveContinue` history, never through a turn hook.
+- `TurnContinue` without an injection is rejected. This prevents a request whose
+  last message is still the assistant completion.
+- `TurnStop` with a validated candidate completes with that candidate. Without
+  one, it returns `ExecutionStopped` and a partial result.
+- `TurnDefault` completes only if the candidate is valid and no model retry or
+  tool continuation remains.
+- A hook error occurs after the turn commit. It returns the partial execution,
+  attempts `RunError` then `RunEnd`, and never rolls back the transcript.
+
+Error-path lifecycle emission is best effort. The original hook or sink error
+wins; a failing sink is not recursively called to report its own failure. The
+legacy stream adapter still publishes its independent terminal error projection.
+
+This explicitly answers the output-validation question: queued input does not
+bypass validation. The candidate is first validated, then treated as an
+intermediate valid answer when `TurnContinue` injects new input. Only the final
+validated candidate becomes `Result.Output`.
+
+### Output-tool pairing and `EndStrategyEarly`
+
+Every assistant tool call receives a result before terminal arbitration,
+including output tools and deliberately skipped calls.
+
+For `EndStrategyEarly`, the first output tool is the candidate and no regular
+tool in that same assistant batch executes, regardless of source order. The
+output call gets a non-error acknowledgement result; every skipped call gets a
+deterministic error result explaining that early output ended the batch. If the
+candidate fails validation, its result carries the validation failure and the
+normal retry path continues. If queued input continues the run, the accepted
+output remains an intermediate, fully paired turn.
+
+For `EndStrategyExhaustive`, regular calls finish before the output candidate is
+validated, matching existing side-effect ordering. If a regular-call gate
+suspends the batch, the whole assistant frontier remains open; `Driver.Resume`
+resolves the regular calls, then parses and validates the output call and appends
+all results in source order. If a regular tool requests a model retry or a gate
+result has `Continue`, the output call instead receives a deterministic
+“discarded because another call requires continuation” result. No typed output
+is hidden in an opaque suspension token.
+
+This preserves the existing “do not run side effects after early output” intent
+while eliminating histories that end in unmatched calls.
+
+## 13. Canonical Agentic events
+
+The fold emits typed events at deterministic commit points:
 
 ```go
-// Run drives agentic's loop for one prompt: projects the transcript into
-// messages, installs the TurnHook (inbox drain) and event sink, and folds the
-// result back into the transcript. It never panics; every failure is a value.
-func Run(ctx context.Context, req Request, cfg Config, emit EmitFunc) (Result, error)
+type EventNature uint8
 
-type EmitFunc func(Event)
+const (
+    EventPreview EventNature = iota
+    EventAuthoritative
+    EventLifecycle
+)
 
-// Session is the stateful facade: single-flight run + inbox + subscriptions.
-type Session struct{ /* ... */ }
+type Event interface {
+    Nature() EventNature
+    Type() EventType
+    TurnIndex() int
+}
 
-func (s *Session) Prompt(ctx context.Context, m Message) (Result, error)
-func (s *Session) Steer(m Message) error      // §7
-func (s *Session) FollowUp(m Message) error
-func (s *Session) NextTurn(m Message) error
-func (s *Session) Interrupt(ctx context.Context) error
-func (s *Session) Subscribe(h EventHandler) (unsubscribe func())
-func (s *Session) WaitForIdle(ctx context.Context) error
-
-// Steps exposes the fold one yield point at a time — the drive-it-yourself seam.
-func (s *Session) Steps(ctx context.Context, m Message) iter.Seq2[Step, error]
+type EventSink interface {
+    Emit(context.Context, Event) error
+}
 ```
 
-Runtime-enforced invariants, not conventions:
+Each event kind is a concrete typed struct; there is no untyped `map[string]any`
+payload in the commit path. Harness persistence converts the closed set of root
+events into versioned session entries.
 
-- **Errors as values.** Hook and tool failures become error results; the loop stays total. No panic crosses a harness seam.
-- **The tool batch is atomic.** A steer never splits it.
-- **Truncated assistant turns fail their unexecuted tool calls** (pi's `failToolCallsFromTruncatedMessage`) rather than executing a partial batch.
-- **Every payload goes through `Repair`** (§8). There is no other path to the provider.
-- **Iteration and usage guards always on.**
-- **Interrupt writes a truthful marker** (§13.9).
+Minimum taxonomy:
 
-### 13.3 `env` — the substrate
+- preview: text, thinking, and tool-argument deltas;
+- authoritative: assistant committed, tool batch planned, tool started, tool
+  result committed, output validated, turn messages injected;
+- lifecycle: run started, turn started, turn ended, run suspended, run completed,
+  run interrupted, run error, run ended.
 
-One interface, per §4, with pi's contract details and our fix for its mistake:
+Agentic calls the sink synchronously. A sink is a low-level commit participant,
+not a public subscriber: blocking is allowed and an error stops further effects.
+The harness sink persists authoritative and lifecycle state first and only then
+fans events out to subscribers.
+
+Legacy `StreamEvent` is a documented projection of the same source events:
+
+| Canonical event | Legacy projection |
+|---|---|
+| text/thinking/tool-argument preview | corresponding delta event |
+| tool started | `StreamEventToolCallStart` |
+| tool result committed | `StreamEventToolResult` |
+| completed | `StreamEventDone` |
+| any terminal error, including hook error | `StreamEventError` |
+
+There is no independent streaming fold and no parallel authoritative channel.
+
+---
+
+# Part III — Harness architecture
+
+## 14. Monorepo layout and module rules
+
+```text
+agentic/                       root module: github.com/regularkevvv/agentic
+├── go.mod
+├── go.work                    committed; uses . and ./harness
+├── docs/
+├── internal/
+├── provider/
+├── tool/
+└── harness/                   nested module
+    ├── go.mod                 github.com/regularkevvv/agentic/harness
+    ├── harness.go
+    ├── artifact/
+    ├── capability/
+    ├── contextpolicy/
+    ├── env/
+    ├── event/
+    ├── permission/
+    ├── runtime/
+    ├── session/
+    └── subagent/              later phase
+```
+
+Do not move the root module into `agentic/`; doing so changes its published import
+path. Nested-module releases use subdirectory tags such as `harness/v0.1.0`, as
+required by Go module versioning.
+
+`go.work` is committed for local cross-module development. No committed
+`replace` directive points at `..`. CI proves all three views:
+
+```sh
+GOWORK=off go test -race -count=1 ./...
+(cd harness && GOWORK=off go test -race -count=1 ./...)
+go test -race -count=1 ./... ./harness/...
+```
+
+The independent harness job downloads the released root version from its
+`go.mod`; the workspace job tests the pending pair. Release Agentic first, update
+the harness requirement, then tag `harness/vX.Y.Z`.
+
+The harness imports only root public packages. If it needs an `internal/core`
+symbol, that symbol must first be promoted through the root facade.
+
+## 15. Capability graph and builder
+
+The builder accepts the already-bound runner:
+
+```go
+func New[O any](runner agentic.Runner[O], opts ...Option) *Builder[O]
+
+type Capability interface {
+    ID() string
+    Ordering() Ordering
+    Register(*Registry) error
+}
+
+type Ordering struct {
+    Before []string
+    After  []string
+}
+```
+
+`Build`:
+
+1. resolves `agentic.Driver[O]` with `RequireDriver`;
+2. rejects duplicate capability IDs, missing ordering references, and cycles;
+3. performs a stable topological sort;
+4. combines toolsets, gates, context transforms, event middleware, and lifecycle
+   hooks into immutable per-session plans; and
+5. returns an immutable `Harness[O]` safe for concurrent session creation.
+
+The registry installs one composed root gate. Capabilities contribute ordered
+`ToolGateMiddleware` wrappers around an allow-all base instead of competing
+independent gates; each wrapper must preserve batch cardinality and may only
+narrow/return/suspend calls that are still executable. Context and event
+middleware use the same explicit ordered-chain pattern.
+
+Capability registration may contribute only through public registry points.
+`Default()` is assembled from ordinary capabilities and has no privileged hook.
+That is the acceptance proof that third parties can build a different harness
+from the same primitives.
+
+Resolved names are `Capability`, `contextpolicy`, `Steer`, `FollowUp`, and
+`NextTurn`.
+
+### Default assembly
+
+The convenient default is explicit about where it may read/write:
+
+```go
+type DefaultConfig struct {
+    WorkspaceRoot      string // required, absolute
+    SessionDir         string // required, absolute and outside model-visible tools
+    ContextWindowTokens int   // required, model's advertised input window
+}
+
+func Default[O any](runner agentic.Runner[O], cfg DefaultConfig) (*Harness[O], error)
+```
+
+`Default` installs `Local` rooted at `WorkspaceRoot`, synchronized `JSONLStore`,
+file-backed artifact storage under `SessionDir`, deterministic compaction,
+`Repair`, the canonical event bus, and `WorkspaceWrite` permissions. Shell and
+network remain `ask`; outside-root paths remain denied. Zero paths are errors,
+not process-working-directory defaults. Build canonicalizes both paths and
+rejects overlap, so ordinary filesystem/shell tools cannot browse or modify
+session logs and spilled results.
+
+The default tool-cancellation grace is one second and is configurable per
+harness. The deadline begins when interruption cancels the run context.
+
+Default deterministic compaction triggers when the conservative estimated
+request size reaches 70% of `ContextWindowTokens` and targets 50%, leaving room
+for tool schemas and output. The estimator conservatively counts the full UTF-8
+byte length as tokens unless the caller supplies a model-specific
+`TokenCounter`, adds fixed framing overhead per message/content block/tool, and
+includes system/context fragments plus serialized tool schemas. An
+absent/non-positive context window is a build error, not a guessed model
+constant.
+
+The default tool-result processor formats each result once. Results above 64 KiB
+are stored in full in the artifact store; the model receives a 24 KiB head, a
+24 KiB tail, byte counts, and an opaque artifact handle exposed through a gated
+`read_artifact` tool. Handles are unguessable, scoped to the current session,
+and cannot express paths. Limits are configurable, but disabling the limit
+requires an explicit option. `Default` in `v0.1.0` does not include subagents,
+memory, skills, or codemode; those arrive through later ordinary capabilities.
+
+Head/tail cuts preserve UTF-8 boundaries. Non-text results use Agentic's one
+canonical JSON formatting pass before size measurement, so persistence,
+model-visible previews, and retrieval all refer to the same bytes.
+
+## 16. Runtime and session API
+
+```go
+type Harness[O any] struct { /* immutable */ }
+
+func (h *Harness[O]) NewSession(ctx context.Context, opts ...session.Option) (*Session[O], error)
+func (h *Harness[O]) ResumeSession(ctx context.Context, id string) (*Session[O], error)
+
+type Session[O any] struct { /* single-flight state machine */ }
+
+func (s *Session[O]) Prompt(context.Context, agentic.Message) (*agentic.Execution[O], error)
+func (s *Session[O]) Resume(context.Context, ResumeRequest) (*agentic.Execution[O], error)
+func (s *Session[O]) Steer(context.Context, agentic.Message) (QueueReceipt, error)
+func (s *Session[O]) FollowUp(context.Context, agentic.Message) (QueueReceipt, error)
+func (s *Session[O]) NextTurn(context.Context, agentic.Message) (QueueReceipt, error)
+func (s *Session[O]) Interrupt(context.Context) error
+func (s *Session[O]) Snapshot(context.Context) (Snapshot, error)
+func (s *Session[O]) Subscribe(SubscribeOptions) *Subscription
+func (s *Session[O]) WaitForIdle(context.Context) error
+
+type Snapshot struct {
+    Cursor     uint64
+    State      SessionState
+    Messages   []agentic.Message
+    Pending    []QueueEntry
+    Suspension *agentic.Suspension
+    Usage      agentic.Usage
+}
+```
+
+`Prompt` is valid only while idle. A suspended session must use `Resume` or
+`Interrupt`; a second prompt cannot accidentally paper over unresolved calls.
+`Snapshot` copies state under the session mutex at its returned durable cursor;
+it contains no uncommitted preview data.
+
+The runtime calls `Driver.Drive(DriveStart)` for a prompt,
+`Driver.Resume` for a gate-suspended tool frontier, and
+`Driver.Drive(DriveContinue)` only when complete tool results already exist in
+history, such as an externally fulfilled deferred tool. `NextTurn` entries are
+appended before the new prompt in FIFO order. All user-supplied messages are
+role-checked.
+
+The session persists the prompt/next-turn entries before calling the driver. Its
+synchronous event sink persists each Agentic assistant/tool commit as it occurs;
+it does not append `Result.Messages` again at the end. `Result.NewMessages()` and
+the persisted run-message sequence (prompt/injection entries plus Agentic commit
+events) are compared as an invariant check before normal close. A mismatch
+faults the session as `ErrCommitProjectionMismatch`.
+
+Session usage is accumulated in durable turn entries and restored on restart. An
+optional session budget is converted into remaining Agentic `UsageLimits` for
+each start/resume; budget exhaustion returns `ErrBudgetExceeded`, cancels
+steer/follow-up entries under the ordinary explicit-stop rule, and leaves
+`NextTurn` queued. Provider-reported post-response usage is still committed even
+when that response crosses the limit.
+
+### State machine
+
+```text
+Idle --Prompt--> Running --natural/error--> Closing --> Idle
+Running --suspend--> Suspended --Resume--> Running
+Running/Suspended --Interrupt--> Interrupting --> Idle
+Running/Closing/Suspended --store failure--> Faulted
+```
+
+The `Closing` transition and queue check occur under the session mutex. Public
+callbacks are never invoked while that mutex is held.
+
+A write-ahead store failure after in-memory state changes is not ordinary idle:
+the session enters `Faulted`, cancels work, rejects new input, and makes
+`WaitForIdle` return the storage error. After storage is repaired, the caller
+reopens it through `ResumeSession`, which runs normal log recovery. A queue
+acceptance write that fails before in-memory enqueue does not fault the session.
+
+## 17. Durable transcript and recovery
+
+The session store is an append-only entry tree:
+
+```go
+type Entry struct {
+    Schema   uint16
+    Seq      uint64
+    ID       string // UUIDv7
+    ParentID string
+    Kind     EntryKind
+    Payload  json.RawMessage
+}
+```
+
+Entry kinds include messages, queue accepted/drained/cancelled, turn boundaries,
+tool batch planned, tool started, tool result, suspension, resolution,
+compaction, branch movement, model/toolset changes, and run termination.
+
+The schema retains `ParentID` and branch-movement entries, but `v0.1.0` exposes
+one active leaf and no public fork/move API. Readers must preserve unknown branch
+entries for forward compatibility. Public branching is deferred until a
+single-writer store coordinator can prevent two branch sessions from writing the
+same file independently.
+
+`JSONLStore` has one writer per session, opens with append semantics, and
+serializes writes. It calls `fsync` before
+acknowledging queue acceptance, tool start/result, suspension/resolution, and
+turn/run termination, and syncs the parent directory when creating a session
+file. `v0.1.0` has no buffered mode that weakens the word
+“durable.” A trailing partial JSON line after a crash is copied to a diagnostic
+sidecar and the incomplete tail is truncated before append resumes; earlier
+valid entries remain. Moving the leaf or creating a branch is another append,
+not an in-place rewrite or an “atomic rename.” `MemStore` implements the same
+contract for tests.
+
+Recovery folds valid entries from root to leaf, reapplies the last compaction,
+restores unconsumed inbox entries, and examines tool states:
+
+- planned but not started: safe to resolve or execute after permission checks;
+- started with a committed result: complete;
+- started without a result: **indeterminate**. Never auto-retry unless the tool
+  declares an idempotency contract keyed by call ID. Otherwise suspend for an
+  operator-provided result or denial.
+
+This is honest local durability without claiming exactly-once external effects.
+
+## 18. Repair and provider projection
+
+Repair remains an `agentic.HistoryProcessor` and is always the terminal transform
+after compaction:
+
+```go
+type FrontierMode uint8
+
+const (
+    CloseInterruptedFrontier FrontierMode = iota
+    PreserveDeferredFrontier
+)
+
+func Repair(mode FrontierMode, pending PendingCalls) agentic.HistoryProcessor
+```
+
+It is deterministic, idempotent, and non-mutating. It:
+
+- creates stable synthetic error results for open calls after interrupt,
+  truncation, or abandoned recovery;
+- removes orphan results only from the provider projection;
+- excludes incomplete assistant preview content that was never authoritatively
+  committed;
+- preserves completed thinking blocks, IDs, provider names, and signatures; and
+- never splits a call/result pair during compaction.
+
+Matching is scoped to one assistant tool frontier, not global ID uniqueness.
+Duplicate call IDs within a frontier or multiple results for one call are hard
+`ErrTranscriptInvalid` failures; repair does not silently choose one.
+
+`PreserveDeferredFrontier` is valid only when the active suspension lists exactly
+the open tool call IDs. It does not send that open frontier to a provider. Once
+resume results have been appended, normal projection continues.
+
+Required property tests:
+
+```text
+Repair(Repair(history)) == Repair(history)
+Repair(history) is byte-stable across invocations
+every outbound call has exactly one later matching result
+compaction followed by repair preserves the same open-call set
+```
+
+## 19. Deferred tools, permissions, and resume
+
+Permissions are a policy capability over the environment, not part of the
+environment itself. The initial ruleset is hierarchical
+`pattern -> allow|ask|deny`, with most-specific match winning and default deny.
+Ship `ReadOnly` and `WorkspaceWrite` presets.
+
+Capability tools translate calls into structured
+`PermissionRequest{Capability, Action, CanonicalResource}` values before rule
+matching. An application tool without effect metadata is matched as
+`tool:<name>` and remains denied unless the application adds a rule. `ReadOnly`
+allows filesystem reads/listing and denies writes, shell, and network;
+`WorkspaceWrite` allows canonicalized reads/writes inside the configured root,
+asks for shell/network, and denies paths outside it. Command-string matching is
+advisory policy, never a sandbox boundary.
+
+The permission capability implements `agentic.ToolGate`. It evaluates the whole
+batch before effects:
+
+- all allowed: execute the batch;
+- any denied: execute none and return deterministic error results for every call,
+  identifying denied calls and calls skipped by atomic policy; every disposition
+  sets `Continue`, so a same-turn output candidate cannot hide the denial;
+- any asked and none denied: execute none and return one suspension containing
+  the whole batch plus the IDs that require a user resolution.
+
+The v0.1 policy is always atomic for non-allow outcomes. Mixed-batch execution is
+not configurable in this release; this avoids executing an allowed side effect
+beside another call the user has not approved.
+
+```go
+type ResumeRequest struct {
+    SuspensionID string
+    Resolutions  []ToolResolution
+    Prompt       *agentic.Message // optional user text after all results
+}
+
+type ToolResolution struct {
+    CallID       string
+    Action       ResolutionAction // approve, deny, external-result
+    OverrideArgs map[string]any
+    Result       any
+    Reason       string
+}
+```
+
+Resume requires exactly one resolution for every `RequiredResolutionID` in the
+suspension and rejects unknown, duplicate, or missing IDs before effects. Calls
+that were already allowed require no redundant user approval. The harness then
+builds one root `ToolResumeDecision` for every open executable call: approved or
+pre-allowed calls use `execute`, while denial and external results use `return`.
+`Driver.Resume` validates the suspension ID, history-frontier hash, and complete
+decision set; executes admitted handlers; appends all results in original call
+order; appends the optional user prompt; completes `TurnEnd`; and re-enters the
+fold. No implicit user message is added.
+
+The low-level stateless primitive has the same validation:
+
+```go
+runtime.Resume(ctx, driver, transcript, suspension, request, opts...)
+```
+
+This primitive delegates the actual tool re-entry to `Driver.Resume`; it does not
+try to invoke opaque runner tools from the harness. `Session.Resume` supplies the
+persisted transcript and suspension so normal callers cannot resume the wrong
+frontier.
+
+## 20. Environment threading
 
 ```go
 package env
@@ -592,185 +1060,315 @@ package env
 type Environment interface {
     FileSystem
     Shell
-    Cleanup() error // best-effort; must not fail the run
+    Cleanup(context.Context) error
 }
 ```
 
-- Closed, backend-independent error-code enums (`ErrNotFound`, `ErrPermissionDenied`, `ErrIsDirectory`, `ErrAborted`, …). A remote or containerized backend maps its native errors into this set.
-- **Never panics**; all failures are returned.
-- `Cwd` on the environment; paths absolute or relative to it.
-- **No implicit symlink resolution** — explicit `CanonicalPath` is the only resolver, and authorization checks run on the canonical path to avoid TOCTTOU.
-- `MaxLines` on line reads as the streaming escape hatch.
-- **Temp-file spill goes through the environment** (`CreateTempFile`/`AppendFile`), which is what makes overflow work end-to-end on a remote backend — pi's harness gets this right and its product layer doesn't.
+Initial implementations are `Local` and `Memory`; container and remote backends
+come later. Errors map to a closed backend-independent code set. Relative paths
+resolve against environment `Cwd`. Authorization checks use a canonical path and
+the operation must guard against path replacement between check and use.
 
-**Threaded into tool execution**, which is the whole point:
+`Local` rejects path traversal and follows an explicit symlink policy, but its
+permission rules are not an OS security boundary against a hostile shell command
+or another local process racing the filesystem. A caller needing containment
+must supply a container/VM environment; governance never upgrades an
+uncontained substrate into a sandbox.
+
+The harness attaches its runtime services to the standard execution context:
 
 ```go
-type ToolContext struct {
-    Env     env.Environment
-    Emit    func(ToolUpdate)  // progress → ToolUpdate events (§9.1)
-    Session string
-    CallID  string
+type ToolRuntime struct {
+    Environment env.Environment
+    SessionID   string
+    Emit        func(ToolUpdate)
 }
+
+func FromContext(context.Context) (ToolRuntime, bool)
 ```
 
-Implementations: `Local`, `Memory` (tests), and later `Container`/`Remote`. Governance sits *above* this as a separate hook layer (§13.6), never inside it.
+Agentic separately attaches `ToolCallContext`. Capability tools retrieve both
+from `RunContext[D].Ctx`. Application dependency values remain untouched, and a
+bound runner preserves its exact dependency type.
 
-### 13.4 `session` — the log
+Environment cleanup is bounded and best effort. Cleanup failures emit lifecycle
+errors but do not replace an earlier run failure.
 
-Modeled on pi's entry tree with the JSONL consensus from the analyses:
+## 21. Harness events and backpressure
 
-- Typed entries (`message`, `compaction`, `model_change`, `tools_change`, `label`, `custom`) with `ID`/`ParentID` (UUIDv7) forming a tree, plus a movable **leaf pointer**. `Fork(id)` and `MoveTo(id)` are pointer operations.
-- `Store` interface with `JSONLStore` (append-only, one file per session, atomic rename) and `MemStore`.
-- `BuildTranscript(path)` walks root→leaf, applies the compaction transform (replace everything before `FirstKeptEntryID` with the summary), and projects to messages. Custom entries are excluded from model context unless a projector opts them in — the "UI-only entry" concept (§9).
-- State is *always* rebuilt from entries, so resume, branch, and replay are the same operation as normal execution.
+The harness assigns a monotonically increasing durable cursor to each
+authoritative/lifecycle entry and persists it inline before publication.
+Preview events carry the latest durable cursor plus a transient per-turn ordinal;
+they do not advance the durable cursor. Persistence is not a subscriber.
 
-### 13.5 `contextmgmt` — policies
+Each `Subscription` has a bounded queue and a nonblocking producer path:
 
-Two small interfaces, both registered through `TransformContext`:
-
-- **`Compactor`** — `LLMSummarize` (summarize old, keep recent-N tokens, preserve user messages) and `Deterministic` (claw-style zero-cost structured extraction: tool names, files touched, timeline). Trigger policy (threshold, reserve) is config. The never-orphan-a-pair invariant is enforced by `Repair` regardless of strategy.
-- **`Injector`** — `Full` (default), later `RefDiff` (codex-style: re-inject only changed context fields per turn).
-
-**Injection is durable or ephemeral, explicitly** — the pydantic-ai distinction:
+- a full queue may drop/coalesce `Preview` events; the next delivered event
+  includes `EventsDropped{Preview: n}`;
+- a full queue for an `Authoritative` or `Lifecycle` event disconnects that
+  subscriber with `ErrSubscriberLagged{LastCursor}`;
+- the run never waits for a public subscriber;
+- the consumer calls `Snapshot` and re-subscribes from a durable cursor to
+  recover authoritative state.
 
 ```go
-type ContextTransform func(ctx TransformContext) error
+type SubscribeOptions struct {
+    AfterCursor uint64
+    Buffer      int
+    Preview     bool
+}
 
+type Subscription struct {
+    Events <-chan Event
+    Err    <-chan error // exactly one terminal delivery, then close
+}
+
+func (s *Subscription) Close()
+```
+
+Historical replay contains authoritative/lifecycle events only. Preview starts
+live after replay, so a cursor never promises recovery of token deltas.
+
+This is the only coherent way to combine bounded memory, nonblocking execution,
+and no silent loss of authoritative events. “Never drop and never block” without
+disconnect/spooling is impossible.
+
+Callbacks, if offered as convenience wrappers, are invoked by the subscriber's
+consumer goroutine and cannot fail the run. Low-level Agentic `EventSink` and
+`TurnHook` are different: they are synchronous execution participants and their
+errors return a partial execution as specified in §§10–13.
+
+## 22. Interruption contract
+
+`Interrupt`:
+
+1. atomically marks the run interrupting and cancels its context;
+2. prevents new tool admissions;
+3. waits up to a configurable grace period for cancellation-aware model/tool
+   work;
+4. commits deterministic aborted/indeterminate results for every open call;
+5. records a contextual marker explaining that interruption was deliberate,
+   processes may still be running, and side effects may have partially occurred;
+6. marks queued steer/follow-up entries cancelled while retaining `NextTurn`;
+7. emits `RunInterrupted` and `RunEnd`; and
+8. returns the session to idle.
+
+The context passed to `Interrupt` bounds the caller's wait, not the cancellation
+request. Once accepted, interruption continues even if that context expires;
+the caller may observe completion through `WaitForIdle` or events.
+
+Go cannot safely kill an arbitrary handler goroutine. Tool documentation must
+require prompt context handling. A handler still running after grace is detached
+from the session; its late return is ignored and an event records that fact.
+
+The contextual marker is durable but filtered from user-facing chat and normal
+memory extraction. The provider projection receives it as a harness-authored
+context fragment using the best provider-supported role, with tagged user text
+as the portable fallback.
+
+## 23. Context policy and cache geometry
+
+Context transformations distinguish durable from ephemeral injection:
+
+```go
 type TransformContext struct {
-    Durable   *Transcript          // writes persist into history
-    Ephemeral *[]agentic.Message   // per-request only; never written back
+    Durable   *Transcript
+    Ephemeral *[]agentic.Message
 }
 ```
 
-Ephemeral writes are for re-derived-every-turn content (plan reminders, budget countdowns) and must be placed after a cache breakpoint so the cached prefix stays byte-identical. Durable writes are for anything that should survive into the next turn's prefix.
+- Durable content survives future turns.
+- Ephemeral content is re-derived for one request and never written back.
+- Mutable reminders, budgets, and plans occupy one designated tail after the
+  stable cached prefix.
+- `Repair` is always last, after compaction and injection.
 
-### 13.6 `permission` — governance
+Ship two compactors: deterministic structured extraction and LLM summary with a
+recent-message reserve. Both select cuts only at protocol-valid boundaries;
+`Repair` is still the final guard.
 
-Opt-in capability. Default model is opencode's, chosen for being the easiest to reason about and configure:
+## 24. Subagents and codemode
 
-- Hierarchical ruleset `{pattern: allow|ask|deny}`, most-specific-first, `*` default deny. Presets `ReadOnly` (the universal "plan agent") and `WorkspaceWrite`.
-- Hook layer may override a decision (codex/claw pattern).
-- **`ask` resolves through the deferred-tool flow**, not a blocking call: the run ends with `DeferredRequests{Approvals, Calls}` and the caller resumes with `runtime.Resume(transcript, DeferredResults{...})`. Because sessions are event-sourced this works across process restarts. Resume also accepts a free-form user prompt and per-call argument overrides — pydantic-ai's HITL is a genuine three-channel intervention (approve / deny-with-reason / rewrite-args), not a yes-no gate.
-- `Repair` runs with `RepairFrontier: false` while a deferred resume is pending (§8).
-
-This supersedes `agentic`'s blocking `ApprovalTool` for harness use; the tool stays for simple non-harness cases.
-
-### 13.7 `subagent` — capture-restricted closures
-
-Per §5, delegation is closure creation with an explicit capture list:
+Subagents are Phase 4. They are bound runners created with an explicit capture
+list:
 
 ```go
 type Capture struct {
-    History     Mode // Isolate (default) | Share
-    Deps        Mode // Share (default) | Isolate
-    Env         Mode // Share | Narrow(root string)
-    Tools       Mode // Isolate (default) | Share
-    Permissions Mode // Narrow(preset) | Share
-    Budget      Mode // Share (default) | Isolate
+    History     Mode // isolate default
+    Dependencies Mode // share default
+    Environment Mode // share or narrow
+    Tools       Mode // isolate default
+    Permissions Mode // narrow default
+    Budget      Mode // share default
 }
 ```
 
-The capability spawns a child runtime with that capture, a depth limit, its own inbox, and child events forwarded to the parent bus tagged with the subagent ID. It returns a bounded summary as the tool result — the ~200:1 compression pattern.
+Children get separate inboxes and transcripts. Parent steering never enters a
+child inbox unless addressed to that child. Delegation tools are removed from
+inherited toolsets unless recursion is explicitly enabled with a depth limit.
+Child events are tagged and projected onto the parent bus; the bounded child
+summary is the tool result.
 
-Two rules the references teach: a delegate must not receive the parent's steering messages unless explicitly addressed (the OpenHands hole), and inherited tools must exclude the delegation tool itself so children cannot recurse.
+Codemode is Phase 5 behind an `Executor` interface. It must use the same tool
+gate, suspension, event, and recovery contracts; it does not introduce another
+loop. Monty/gomonty maturity is contained behind that interface, with a
+subprocess backend preferred for crash isolation.
 
-Topology presets (orchestrator/worker fan-out, planner→worker→reviewer) are thin recipes over this — pi shows they are prompt-plus-config, not new machinery. Out-of-process orchestration and shared-session role-switching are explicitly deferred; the event bus plus JSONL sessions leave the door open.
+---
 
-### 13.8 `codemode`
+# Part IV — Shipped retrieval track
 
-Selected tools (by name or `WithMetadata(codemode=true)`) are removed from the model-visible toolset and compiled into a function namespace inside a single `run_code` tool.
+## 25. `v0.3.0` status
 
-```go
-type Executor interface {
-    // Run executes model-written code, resolving tool calls through bridge.
-    // Must enforce limits and never panic; suspensions (approval, async)
-    // surface as a Snapshot for resume.
-    Run(ctx context.Context, code string, bridge ToolBridge, lim Limits) (*Outcome, error)
-}
-```
+The retrieval work landed in `3cd5c46` and was published by tag `v0.3.0`:
 
-Backends in order: gomonty (prototype) → monty-pool subprocess (target) → starlark/goja (contingency). Snapshots are what connect codemode to §13.6's deferred approvals. Tools carrying a code-execution marker are force-excluded from folding, so a sandbox never nests inside a sandbox.
+- `core.Reranker` and root facade helpers;
+- Voyage AI and Cohere rerankers;
+- Gemini, Ollama, Cohere, and Bedrock embedders;
+- shared internal batch fan-out/chunking utilities; and
+- retrieval transport/e2e coverage.
 
-### 13.9 Telling the model the truth
+The Bedrock embedder supports Titan fan-out and Cohere batching. Both AWS Bedrock
+model contracts document a maximum of 96 inputs for Cohere Embed v3/v4, so the
+current `cohereBatchLimit = 96` and `embedbatch.Chunked` call are intentional.
+The original statement that this cap could not be sourced was wrong.
 
-The one lever that changes model *behavior* rather than just satisfying the protocol. On interrupt the runtime writes a marker into the transcript, in a registry of **contextual fragments** — structurally user-role messages, semantically harness-authored, filtered out of the event stream and the memory pipeline:
+The following original polish item did **not** ship and is not a harness
+dependency:
 
-```go
-// Registered fragment kinds: turn_aborted, environment_context, subagent_notification,
-// user_shell_command, project_instructions, skill_listing.
-func IsContextualFragment(m agentic.Message) bool
-```
+- optional public `BatchLimit()` hints and an `agentic.EmbedChunked` helper.
 
-The interrupt text must convey three separable facts, following codex: the stop was **deliberate** (don't just retry), background processes **may still be running**, and aborted tools **may have partially executed** (re-verify state; don't assume rollback). Per-tool abort results should carry elapsed wall time so the model can reason about how far a command got.
+Track that separately as retrieval API work; do not put it on the harness
+critical path.
 
-claw-code is the counter-example that justifies the effort: its interrupt is laundered through the hook layer, the model is told a policy hook failed, and it tries to route around the obstacle instead of stopping to re-plan.
+---
 
-On Opus 4.8 there is now a real out-of-band channel — `{"role": "system"}` messages inside `messages[]`, which don't invalidate the cached prefix — and the harness should prefer it where supported, falling back to the tagged-user-message fragment elsewhere.
+# Part V — Delivery and proof
 
-### 13.10 Toolsets (in `agentic`, not the harness)
+## 26. Implementation sequence
 
-Extend `tool.Toolset` (Combine/Filter/Prefix exist) with the missing pydantic-ai wrappers, since they're generally useful: `Renamed`, `Prepared` (mutate defs per run), `WithMetadata` (tags — required for codemode selection), `ApprovalRequired` (wraps calls into the deferred flow). MCP toolsets already compose. Deferred/lazy tool loading (codex's ToolSearch) becomes a harness capability later.
-
-## 14. Embeddings and rerankers in `agentic`
-
-Independent of the harness; ships as v0.3.0.
-
-**New core capability — `internal/core/reranking.go` + aliases:**
-
-```go
-type Reranker interface {
-    Rerank(ctx context.Context, req *RerankRequest) (*RerankResponse, error)
-    Name() string
-}
-
-type RerankRequest struct{ Query string; Documents []string; TopN int } // TopN 0 = all
-type RerankResult  struct{ Index int; Score float64; Document string }  // Document filled client-side
-type RerankResponse struct{ Results []RerankResult; Model string; Usage RerankUsage }
-type RerankUsage   struct{ TotalTokens int; SearchUnits int }
-```
-
-Design rules from the survey: fill `Document` from the input slice (never send `return_documents` — normalizes Voyage/TEI/Bedrock shape differences); results sorted by score descending; godoc must warn that scores are ordinal and only Cohere/ZeroEntropy are 0–1 calibrated, so never threshold across providers; truncation stays a provider option. Facade helper `agentic.Rerank(ctx, r, query, docs, topN)` mirroring `EmbedQuery`.
-
-**Work items, effort-ordered:**
-
-1. `provider/gemini.NewEmbedder` — SDK present; map InputType→`RETRIEVAL_*`; chunk at ~100. (The "renormalize truncated dims" step originally listed here was withdrawn — see §11.5.)
-2. `provider/ollama.NewEmbedder` — official client, native `/api/embed`; document the existing OpenAI-compat base-URL route for TEI/Together.
-3. `core.Reranker` + `provider/voyageai` Rerank — reuses its existing retry/backoff plumbing.
-4. New `provider/cohere` — embedder (`input_type` required; default `search_document`, option to override) + Rerank v4. Official SDK vs hand-rolled decided at implementation; fewer deps favors hand-rolled.
-5. `provider/bedrock` embedder — Titan V2 with internal fan-out; Cohere-on-Bedrock batch 96.
-6. Core polish — optional `BatchLimit()` hint + `agentic.EmbedChunked` (split, fan out, reorder, sum usage); dimension-enum validation; update the stale limits comment in `internal/core/embedding.go`.
-7. Later, on demand — Jina/Mistral embedders, Jina reranker, Bedrock rerank (new `bedrockagentruntime` dep), TEI-shape provider.
-
-## 15. Roadmap
-
-| Phase | Contents | Notes |
+| Phase | Deliverable | Exit condition |
 |---|---|---|
-| **0 — Spike** | This document | Done |
-| **1 — Foundations** | Monorepo scaffolding (`harness/` module, `go.work`, CI matrix, tag scheme). Embeddings/rerankers items 1–6 → **agentic v0.3.0** | Two independent tracks; rerankers ship value immediately |
-| **2 — Runtime** | **In `agentic`:** `WithTurnHook` + `WithEventSink` + the un-ending termination condition, in both loop paths (§16). **In `harness`:** inbox + four verbs, transcript, `Repair` as a `HistoryProcessor`, event taxonomy with `Nature`, `env` substrate threaded into tool execution, `session` entry tree + JSONL | The five nouns. The `agentic` side is small and additive (nil hook = today's behavior) and ships in the same release as the embedders |
-| **3 — Policies** | `contextmgmt` (both compactors, durable/ephemeral injection), `permission` (ruleset + deferred approvals + `Resume`), Capability/Builder seam with `Ordering` → **harness v0.1.0 (experimental)** | First point where "use our harness" is real |
-| **4 — Topology & proof** | `subagent` with explicit `Capture`; toolset wrappers in `agentic`; `harness.Default()`; a worked example building a *different* harness from the same primitives | The "build your own" proof: `Default()` must use only public capability APIs |
-| **5 — Codemode & beyond** | `codemode` (gomonty → monty-pool); memory capability; evals module; possible demo CLI | monty is 0.0.x — stays behind `Executor` |
+| 0 | This corrected production design | Complete |
+| 1 | Root `v0.4.0` shared fold and `Driver[O]` | Blocking/streaming/typed parity and all terminal-pair invariants pass |
+| 2 | Monorepo scaffolding plus harness runtime/session/events/repair/env/artifacts | Both modules pass independently with `GOWORK=off`; restart, spill, and lag tests pass |
+| 3 | Capability graph, context policy, permissions, deferred resume, `Default()` | `harness/v0.1.0` experimental; default uses only public capability APIs |
+| 4 | Capture-restricted subagents and remaining toolset wrappers | Parent/child routing, budget, recursion, and cancellation tests pass |
+| 5 | Codemode, memory, evals, optional product surface | Separate proposal and release |
 
-Suggested first PR: Phase 1 scaffolding + Gemini/Ollama embedders — small, self-contained, unblocks everything.
+Do not combine Phase 1 with harness scaffolding in one review. The execution
+contract needs focused proof before a second module depends on it.
 
-## 16. Risks and open questions
+## 27. Required tests
 
-- **Two loop paths inside `agentic`.** The yield seam (§13.2) must land in both `runAfterPreflight` (`run_loop.go`) and `runStream` (`stream.go`, which uses true streaming for `StreamModel` and otherwise wraps the blocking run). Options: add the hook to both, or refactor `runStream` to share the fold. Prefer the refactor if it's tractable — the duplication predates this work and adding a second seam to it entrenches the split. **This is the decision to make in the Phase 2 PR, and it replaces the earlier (wrong) plan to let the harness own its own loop.**
-- **monty maturity.** monty (0.0.18) and gomonty (0.0.14, single maintainer) are experimental; the monty-pool wire protocol is internal and unstable. Mitigated by `Executor` + pure-Go fallback; codemode is Phase 5.
-- **Backpressure policy.** §9.5 proposes dropping `Preview` for slow subscribers. Needs validation against a real TUI before it's locked in.
-- **Repair determinism under compaction.** The idempotence guarantee must hold when compaction and repair interact; wants a property test (repair∘repair = repair, and repair output is byte-stable across runs).
-- **`go.work` committed or not?** Proposed: commit it, CI ignores it and tests per module.
-- **Coverage policy for harness.** Starting threshold (85%?) and carve-outs — decide in the Phase 1 PR.
-- **Cohere client.** Official SDK vs hand-rolled HTTP — decide at implementation.
-- **Naming.** `Capability` vs `Extension`; `contextmgmt` package name; `Steer`/`FollowUp`/`NextTurn` verb names. Bikeshed in the Phase 2/3 PRs.
+### Agentic `v0.4.0`
 
-## 17. Reference index
+- parity matrix: text/typed × blocking/streaming × no-tool/output-tool/regular
+  tools × exhaustive/early;
+- valid typed output plus queued continuation produces a later final output;
+- invalid typed output retries before the turn hook sees a terminal candidate;
+- every output and skipped tool call has exactly one result;
+- `DriveContinue` sends no implicit prompt and accepts history ending in tool
+  results;
+- `Driver.Resume` rejects a wrong frontier hash or incomplete decision set before
+  executing handlers, then completes the suspended turn in original call order;
+- `TurnContinue` without valid injected input is rejected;
+- hook/sink errors return committed partial executions identically in blocking
+  and streaming modes;
+- batch gate suspension runs zero handlers;
+- per-run tool overlays do not mutate the shared runner; and
+- result processors preserve call identity/error truth and pair failures; and
+- race tests for concurrent runner reuse.
 
-- Local: `~/dev/codesamples/multiagent` (analyses + sources), `~/dev/codesamples/pi`, `~/dev/codesamples/pydantic-ai`, `~/dev/codesamples/pydantic-ai-harness`, `~/dev/opensource/monty-extended`, `~/dev/opensource/polars-monty`
-- pydantic-ai + harness: <https://github.com/pydantic/pydantic-ai> · <https://github.com/pydantic/pydantic-ai-harness> · code mode: <https://pydantic.dev/docs/ai/harness/code-mode/>
-- monty: <https://github.com/pydantic/monty> · <https://pydantic.dev/articles/pydantic-monty> · gomonty: <https://github.com/ewhauser/gomonty>
-- Codemode pattern: <https://www.anthropic.com/engineering/code-execution-with-mcp> · <https://blog.cloudflare.com/code-mode/>
-- pi: <https://github.com/earendil-works/pi>
-- Embeddings/rerankers: Voyage <https://docs.voyageai.com/reference/embeddings-api>, Cohere <https://docs.cohere.com/reference/embed> · <https://docs.cohere.com/reference/rerank>, Gemini <https://ai.google.dev/gemini-api/docs/embeddings>, Ollama <https://docs.ollama.com/capabilities/embeddings>, Bedrock <https://docs.aws.amazon.com/bedrock/latest/userguide/titan-embedding-models.html>, Jina <https://jina.ai/models/jina-reranker-v3/>, ZeroEntropy <https://docs.zeroentropy.dev/api-reference/models/rerank>, TEI <https://github.com/huggingface/text-embeddings-inference>
+### Harness `v0.1.0`
+
+- linearized steer/follow-up versus the `Running -> Closing` race;
+- durable queue acceptance, exactly-once drain, and restart recovery;
+- durable cumulative usage and session-budget enforcement across restart;
+- store failure before and after in-memory mutation, including `Faulted`
+  rejection and reopen recovery;
+- subscriber lag: preview gaps, authoritative disconnect, snapshot/resubscribe;
+- crash points before tool start, after start, and after result;
+- indeterminate tools never auto-repeat without idempotency declaration;
+- deferred resume rejects missing/unknown/duplicate IDs before effects;
+- oversized tool output spills once, remains session-scoped, and is retrievable
+  only through its opaque handle;
+- interrupt repairs every frontier and preserves `NextTurn`;
+- repair idempotence and byte stability, including after compaction;
+- `Default()` can be reconstructed from exported capability APIs; and
+- `go test -race` for session, event, and store packages.
+
+Both modules inherit the repository's **97% aggregate coverage gate** from the
+first testable PR. Critical state-machine packages have no coverage carve-out.
+Keep the existing compile-fail fixtures for generic misuse and add fixtures for
+incorrect driver/output pairing where compile-time enforcement is possible.
+
+## 28. CI and release gates
+
+Before `v0.4.0`:
+
+```sh
+make fmt
+make vet
+make lint
+make test
+make coverage-check
+```
+
+Before `harness/v0.1.0`, run equivalent targets inside `harness/`, the root
+`GOWORK=off` job, the harness `GOWORK=off` job, and the workspace integration
+job. Add a fresh temporary consumer that imports the released root and harness
+versions with clean `GOMODCACHE` and `GOCACHE`; local workspace success is not a
+release proof.
+
+## 29. Explicitly deferred risks
+
+- Exactly-once external side effects require tool-specific idempotency or an
+  external transaction system.
+- Multi-process session ownership requires leases and a different store.
+- Remote/container environments need backend-specific TOCTTOU and cancellation
+  audits.
+- Codemode depends on experimental runtimes and remains isolated behind
+  `Executor`.
+- Subagent topology presets are recipes over capture semantics, not part of the
+  v0.1 runtime.
+- Public transcript fork/move APIs are deferred until branch ownership has a
+  single-writer implementation.
+
+These are deferred scope, not unresolved decisions in the v0.1 architecture.
+
+---
+
+## 30. Reference index
+
+Reference behavior was checked against pinned local source snapshots:
+
+- Pi `3da591ab74ab9ab407e72ed882600b2c851fae21`: separate start/continue entry
+  points, boundary-drained steering, and harness commit ordering.
+- Pydantic AI `9688a9cca2fcf81451cdac35e701250dbdfec75e`:
+  pending-message priorities, undrained-message errors, deferred results, and
+  history continuation without a prompt.
+- Pydantic AI Harness `e4839c654b855ce52d09348930e6858c165a1e74`:
+  capability ordering, persistence, environments, and codemode boundaries.
+- OpenAI Codex `3b948d9dd8d2e13a36e95a05efb6bb2288b801c4`:
+  typed steering rejection, safe-boundary draining, and explicit lag signaling.
+- OpenCode `32ce0f4b0d1a5015c965676c9feae341b13b87a5` and claw-code
+  `2d5f83698893e45e5340f0f1fe854ae7ad87b22b`: transcript repair,
+  permission, and interruption comparisons.
+
+Authoritative external contracts:
+
+- Go multi-module repositories and workspaces:
+  <https://go.dev/doc/modules/managing-source> and
+  <https://go.dev/doc/tutorial/workspaces>
+- Pydantic AI deferred tools and message history:
+  <https://ai.pydantic.dev/deferred-tools/> and
+  <https://ai.pydantic.dev/message-history/>
+- Cohere Embed v3 on Bedrock:
+  <https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v3.html>
+- Cohere Embed v4 on Bedrock:
+  <https://docs.aws.amazon.com/bedrock/latest/userguide/model-parameters-embed-v4.html>
+- Pi source:
+  <https://github.com/earendil-works/pi/tree/3da591ab74ab9ab407e72ed882600b2c851fae21>
+- OpenAI Codex source:
+  <https://github.com/openai/codex/tree/3b948d9dd8d2e13a36e95a05efb6bb2288b801c4>
