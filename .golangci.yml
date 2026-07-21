@@ -14,6 +14,12 @@ linters:
   settings:
     misspell:
       locale: US
+      # "cancelled" is a finish_reason value the xAI API actually returns.
+      # Correcting the spelling would change a wire-format string constant and
+      # silently break finish-reason mapping, so it is exempt here rather than
+      # suppressed line by line in provider/grok.
+      ignore-rules:
+        - cancelled
   exclusions:
     rules:
       - path: _test\.go

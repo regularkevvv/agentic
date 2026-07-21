@@ -126,20 +126,58 @@ func TestAgentModelRequestError(t *testing.T) {
 	}
 }
 
-func TestAgentNoChoicesInResponse(t *testing.T) {
-	model := &testutil.StubModel{
-		NameValue: "empty-model",
-		Response:  &agentic.ChatResponse{Choices: nil},
-	}
-	agent := agentic.NewAgent("test", model)
+// TestAgentEmptyResponseIsRejected covers both ways a provider can complete the
+// transport successfully without producing a usable turn. Neither may be
+// mistaken for a real answer, so both must surface as *agentic.ProviderError.
+func TestAgentEmptyResponseIsRejected(t *testing.T) {
+	t.Run("message has no content parts", func(t *testing.T) {
+		model := &testutil.StubModel{
+			NameValue: "empty-model",
+			Response: &agentic.ChatResponse{
+				Message:      agentic.Message{Role: agentic.RoleAssistant},
+				FinishReason: agentic.FinishReasonStop,
+			},
+		}
+		agent := agentic.NewAgent("test", model)
 
-	_, err := agent.Run(context.Background(), "hello")
-	if err == nil {
-		t.Fatal("expected error for no choices")
-	}
-	if !strings.Contains(err.Error(), "no choices") {
-		t.Errorf("expected 'no choices' in error, got %q", err.Error())
-	}
+		_, err := agent.Run(context.Background(), "hello")
+		if err == nil {
+			t.Fatal("expected error for response with no content parts")
+		}
+		if !agentic.IsProviderError(err) {
+			t.Fatalf("expected *agentic.ProviderError, got %T: %v", err, err)
+		}
+		if !strings.Contains(err.Error(), "empty response from provider") {
+			t.Errorf("expected empty-response reason, got %q", err.Error())
+		}
+	})
+
+	// Content being present must not rescue the turn: an in-band failure means
+	// whatever text arrived is partial, not a complete answer.
+	t.Run("finish reason reports an in-band failure", func(t *testing.T) {
+		model := &testutil.StubModel{
+			NameValue: "failed-model",
+			Response: &agentic.ChatResponse{
+				Message:         agentic.NewTextMessage(agentic.RoleAssistant, "partial answ"),
+				FinishReason:    agentic.FinishReasonError,
+				RawFinishReason: "upstream_overloaded",
+			},
+		}
+		agent := agentic.NewAgent("test", model)
+
+		_, err := agent.Run(context.Background(), "hello")
+		if err == nil {
+			t.Fatal("expected error for FinishReasonError response")
+		}
+		if !agentic.IsProviderError(err) {
+			t.Fatalf("expected *agentic.ProviderError, got %T: %v", err, err)
+		}
+		// The provider's own stop reason is passed through so callers can act
+		// on provider-specific values.
+		if !strings.Contains(err.Error(), "upstream_overloaded") {
+			t.Errorf("expected raw finish reason in error, got %q", err.Error())
+		}
+	})
 }
 
 func TestAgentWithTemperatureAndTopP(t *testing.T) {

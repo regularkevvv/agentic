@@ -540,15 +540,18 @@ func TestConsumeAndForward(t *testing.T) {
 			StreamEvent{Type: StreamEventToolCallStart, ToolUse: &ToolUse{ID: "call_1", Name: "calc"}},
 			StreamEvent{Type: StreamEventToolCallDelta, ToolCallID: "call_1", Delta: `{"x":1}`},
 			StreamEvent{Type: StreamEventToolResult, Delta: "side-effect"},
-			StreamEvent{Type: StreamEventDone, Usage: &Usage{TotalTokens: 7}},
+			StreamEvent{Type: StreamEventDone, Usage: &Usage{TotalTokens: 7}, FinishReason: FinishReasonToolCalls},
 		)
 
-		msg, usage, err := (&agentCore{}).consumeAndForward(stream, out)
+		msg, usage, finishReason, err := (&agentCore{}).consumeAndForward(stream, out)
 		if err != nil {
 			t.Fatalf("consumeAndForward: %v", err)
 		}
 		if usage.TotalTokens != 7 {
 			t.Fatalf("expected usage to be preserved, got %#v", usage)
+		}
+		if finishReason != FinishReasonToolCalls {
+			t.Fatalf("expected finish reason %q, got %q", FinishReasonToolCalls, finishReason)
 		}
 		if msg.GetTextContent() != "hello" {
 			t.Fatalf("expected text content %q, got %q", "hello", msg.GetTextContent())
@@ -570,9 +573,56 @@ func TestConsumeAndForward(t *testing.T) {
 		out := make(chan StreamEvent, 1)
 		stream := testutil.NewScriptedStream(StreamEvent{Type: StreamEventError, Error: expected})
 
-		_, _, err := (&agentCore{}).consumeAndForward(stream, out)
+		_, _, _, err := (&agentCore{}).consumeAndForward(stream, out)
 		if !errors.Is(err, expected) {
 			t.Fatalf("expected %v, got %v", expected, err)
+		}
+	})
+
+	t.Run("carries reasoning metadata onto the reconstructed thinking block", func(t *testing.T) {
+		// A provider that issues a signature rejects a thinking block replayed
+		// without it, so losing this on the streaming path would make streaming
+		// and multi-turn reasoning mutually exclusive.
+		out := make(chan StreamEvent, 8)
+		stream := testutil.NewScriptedStream(
+			StreamEvent{Type: StreamEventThinkingDelta, Delta: "step one "},
+			StreamEvent{
+				Type:         StreamEventThinkingDelta,
+				Delta:        "step two",
+				Signature:    "sig-abc123",
+				ProviderName: "anthropic",
+				ThinkingID:   "rs_42",
+			},
+			StreamEvent{Type: StreamEventTextDelta, Delta: "answer"},
+			StreamEvent{Type: StreamEventDone, Usage: &Usage{TotalTokens: 3}},
+		)
+
+		msg, _, _, err := (&agentCore{}).consumeAndForward(stream, out)
+		if err != nil {
+			t.Fatalf("consumeAndForward: %v", err)
+		}
+
+		var thinking *ThinkingBlock
+		for _, part := range msg.Content {
+			if part.Type == ContentThinking {
+				thinking = part.Thinking
+				break
+			}
+		}
+		if thinking == nil {
+			t.Fatal("expected a thinking part in the reconstructed message")
+		}
+		if thinking.Text != "step one step two" {
+			t.Errorf("thinking text = %q, want %q", thinking.Text, "step one step two")
+		}
+		if thinking.Signature != "sig-abc123" {
+			t.Errorf("signature = %q, want %q — replaying this block would be rejected", thinking.Signature, "sig-abc123")
+		}
+		if thinking.ProviderName != "anthropic" {
+			t.Errorf("provider name = %q, want %q", thinking.ProviderName, "anthropic")
+		}
+		if thinking.ID != "rs_42" {
+			t.Errorf("thinking id = %q, want %q", thinking.ID, "rs_42")
 		}
 	})
 }

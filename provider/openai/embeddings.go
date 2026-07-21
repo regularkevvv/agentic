@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/regularkevvv/agentic/internal/core"
@@ -68,9 +69,18 @@ func MustNewEmbedder(model string, opts ...Option) *Embedder {
 
 // Embed implements core.Embedder. The request's InputType is ignored: the
 // OpenAI embeddings API has no input-type parameter.
+//
+// Truncate: the API has no truncation parameter and never truncates — an input
+// over the model's 8192-token limit is rejected with an error. Truncate=false
+// and Truncate=nil therefore both match the API's own behavior, while
+// Truncate=true cannot be honored and is refused here rather than silently
+// ignored, which would store a vector covering only part of the input.
 func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
+	}
+	if req.Truncate != nil && *req.Truncate {
+		return nil, errors.New("openai embeddings: truncation is not supported; the API rejects over-length input instead of truncating it")
 	}
 
 	params := openai.EmbeddingNewParams{
@@ -90,12 +100,27 @@ func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core
 	}
 
 	// Place vectors by the response's index field rather than list order.
-	vectors := make([][]float64, len(req.Input))
+	// The API transmits float64 JSON numbers but carries no more than float32
+	// of precision, so the vectors are narrowed on the way out.
+	vectors := make([][]float32, len(req.Input))
+	seen := make([]bool, len(req.Input))
 	for _, item := range resp.Data {
 		if item.Index < 0 || item.Index >= int64(len(vectors)) {
 			return nil, fmt.Errorf("openai embeddings: vector index %d out of range for %d inputs", item.Index, len(req.Input))
 		}
-		vectors[item.Index] = item.Embedding
+		// A duplicate index would otherwise pass the count check above while
+		// leaving another slot nil — a caller then joins a nil vector to its
+		// source text with no error. This surfaces most often behind a
+		// homegrown OpenAI-compatible proxy (TEI, vLLM, LocalAI).
+		if seen[item.Index] {
+			return nil, fmt.Errorf("openai embeddings: duplicate vector index %d in response", item.Index)
+		}
+		seen[item.Index] = true
+		vector := make([]float32, len(item.Embedding))
+		for i, v := range item.Embedding {
+			vector[i] = float32(v)
+		}
+		vectors[item.Index] = vector
 	}
 
 	return &core.EmbeddingResponse{

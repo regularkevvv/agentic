@@ -20,11 +20,11 @@ func TestNewTestModelDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(resp.Choices) != 1 {
-		t.Fatalf("expected 1 choice, got %d", len(resp.Choices))
+	if len(resp.Message.Content) != 1 {
+		t.Fatalf("expected 1 content part, got %d", len(resp.Message.Content))
 	}
-	if resp.Choices[0].Message.GetTextContent() != "test response" {
-		t.Errorf("expected default response, got %q", resp.Choices[0].Message.GetTextContent())
+	if resp.Message.GetTextContent() != "test response" {
+		t.Errorf("expected default response, got %q", resp.Message.GetTextContent())
 	}
 }
 
@@ -39,8 +39,8 @@ func TestNewTestModelWithResponses(t *testing.T) {
 		Model:    "test",
 		Messages: []core.Message{core.NewTextMessage(core.RoleUser, "1")},
 	})
-	if resp1.Choices[0].Message.GetTextContent() != "first" {
-		t.Errorf("expected 'first', got %q", resp1.Choices[0].Message.GetTextContent())
+	if resp1.Message.GetTextContent() != "first" {
+		t.Errorf("expected 'first', got %q", resp1.Message.GetTextContent())
 	}
 
 	// Second call
@@ -48,8 +48,8 @@ func TestNewTestModelWithResponses(t *testing.T) {
 		Model:    "test",
 		Messages: []core.Message{core.NewTextMessage(core.RoleUser, "2")},
 	})
-	if resp2.Choices[0].Message.GetTextContent() != "second" {
-		t.Errorf("expected 'second', got %q", resp2.Choices[0].Message.GetTextContent())
+	if resp2.Message.GetTextContent() != "second" {
+		t.Errorf("expected 'second', got %q", resp2.Message.GetTextContent())
 	}
 
 	// Third call — repeats last
@@ -57,8 +57,8 @@ func TestNewTestModelWithResponses(t *testing.T) {
 		Model:    "test",
 		Messages: []core.Message{core.NewTextMessage(core.RoleUser, "3")},
 	})
-	if resp3.Choices[0].Message.GetTextContent() != "second" {
-		t.Errorf("expected 'second' (repeated), got %q", resp3.Choices[0].Message.GetTextContent())
+	if resp3.Message.GetTextContent() != "second" {
+		t.Errorf("expected 'second' (repeated), got %q", resp3.Message.GetTextContent())
 	}
 }
 
@@ -74,11 +74,11 @@ func TestTestModelWithToolCalls(t *testing.T) {
 		Messages: []core.Message{core.NewTextMessage(core.RoleUser, "hi")},
 	})
 
-	if resp.Choices[0].FinishReason != core.FinishReasonToolCalls {
-		t.Errorf("expected finish reason %q, got %q", core.FinishReasonToolCalls, resp.Choices[0].FinishReason)
+	if resp.FinishReason != core.FinishReasonToolCalls {
+		t.Errorf("expected finish reason %q, got %q", core.FinishReasonToolCalls, resp.FinishReason)
 	}
 
-	uses := resp.Choices[0].Message.GetToolUses()
+	uses := resp.Message.GetToolUses()
 	if len(uses) != 1 {
 		t.Fatalf("expected 1 tool use, got %d", len(uses))
 	}
@@ -99,7 +99,7 @@ func TestTestModelToolCallAutoID(t *testing.T) {
 		Messages: []core.Message{core.NewTextMessage(core.RoleUser, "hi")},
 	})
 
-	uses := resp.Choices[0].Message.GetToolUses()
+	uses := resp.Message.GetToolUses()
 	if uses[0].ID == "" {
 		t.Error("expected auto-generated ID")
 	}
@@ -153,8 +153,8 @@ func TestTestModelReset(t *testing.T) {
 		Model:    "test",
 		Messages: []core.Message{core.NewTextMessage(core.RoleUser, "1")},
 	})
-	if resp.Choices[0].Message.GetTextContent() != "first" {
-		t.Errorf("expected 'first' after reset, got %q", resp.Choices[0].Message.GetTextContent())
+	if resp.Message.GetTextContent() != "first" {
+		t.Errorf("expected 'first' after reset, got %q", resp.Message.GetTextContent())
 	}
 }
 

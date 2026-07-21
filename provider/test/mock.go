@@ -74,16 +74,12 @@ func (m *TestModel) Request(ctx context.Context, req *core.ChatRequest) (*core.C
 	return &core.ChatResponse{
 		ID:    fmt.Sprintf("test-%d", m.callIndex),
 		Model: m.name,
-		Choices: []core.Choice{
-			{
-				Index: 0,
-				Message: core.Message{
-					Role:    core.RoleAssistant,
-					Content: parts,
-				},
-				FinishReason: finishReason,
-			},
+		Message: core.Message{
+			Role:    core.RoleAssistant,
+			Content: parts,
 		},
+		FinishReason:    finishReason,
+		RawFinishReason: string(finishReason),
 		Usage: func() core.Usage {
 			if resp.Usage != nil {
 				return *resp.Usage

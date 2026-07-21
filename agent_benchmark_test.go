@@ -13,12 +13,10 @@ func (benchmarkModel) Name() string { return "benchmark:model" }
 
 func (benchmarkModel) Request(context.Context, *agentic.ChatRequest) (*agentic.ChatResponse, error) {
 	return &agentic.ChatResponse{
-		ID:    "benchmark-response",
-		Model: "benchmark:model",
-		Choices: []agentic.Choice{{
-			Message:      agentic.NewTextMessage(agentic.RoleAssistant, "ok"),
-			FinishReason: agentic.FinishReasonStop,
-		}},
+		ID:           "benchmark-response",
+		Model:        "benchmark:model",
+		Message:      agentic.NewTextMessage(agentic.RoleAssistant, "ok"),
+		FinishReason: agentic.FinishReasonStop,
 	}, nil
 }
 

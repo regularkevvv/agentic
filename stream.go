@@ -52,7 +52,7 @@ func (c *agentCore) runStreamTrue(ctx context.Context, prompt string, deps depen
 				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("model request: %w", err)}
 				return
 			}
-			message, usage, err := c.consumeAndForward(stream, ch)
+			message, usage, finishReason, err := c.consumeAndForward(stream, ch)
 			if err != nil {
 				ch <- StreamEvent{Type: StreamEventError, Error: err}
 				return
@@ -75,7 +75,7 @@ func (c *agentCore) runStreamTrue(ctx context.Context, prompt string, deps depen
 					ls.messages = append(ls.messages, NewTextMessage(RoleUser, fmt.Sprintf("Output validation error: %s\nPlease try again.", validationErr)))
 					continue
 				}
-				ch <- StreamEvent{Type: StreamEventDone, Usage: &ls.totalUsage}
+				ch <- StreamEvent{Type: StreamEventDone, Usage: &ls.totalUsage, FinishReason: finishReason}
 				return
 			}
 			outcome, err := c.processToolUses(ls, toolUses)
@@ -87,7 +87,7 @@ func (c *agentCore) runStreamTrue(ctx context.Context, prompt string, deps depen
 				ch <- StreamEvent{Type: StreamEventToolResult, Delta: FormatToolResult(toolResult.Content), ToolCallID: toolResult.ToolUseID}
 			}
 			if outcome.hasOutput && !outcome.retryRequested {
-				ch <- StreamEvent{Type: StreamEventDone, Usage: &ls.totalUsage}
+				ch <- StreamEvent{Type: StreamEventDone, Usage: &ls.totalUsage, FinishReason: finishReason}
 				return
 			}
 		}
@@ -96,10 +96,20 @@ func (c *agentCore) runStreamTrue(ctx context.Context, prompt string, deps depen
 	return result, nil
 }
 
-func (c *agentCore) consumeAndForward(stream *StreamResult, out chan<- StreamEvent) (Message, Usage, error) {
+// consumeAndForward drains one model stream, forwarding every event onward and
+// accumulating the parts needed to reconstruct the assistant turn. It returns
+// the reconstructed message, the usage reported for the request, and the
+// provider's finish reason.
+func (c *agentCore) consumeAndForward(stream *StreamResult, out chan<- StreamEvent) (Message, Usage, FinishReason, error) {
 	var textContent string
 	var thinkingContent string
+	// Reasoning metadata arrives on the thinking events themselves. It must be
+	// carried onto the reconstructed block: providers that issue a signature
+	// reject a thinking block replayed without one, so dropping it here makes
+	// streaming and multi-turn reasoning mutually exclusive.
+	var thinkingSignature, thinkingProvider, thinkingID string
 	var usage Usage
+	var finishReason FinishReason
 	type toolCallAccumulator struct {
 		id   string
 		name string
@@ -114,6 +124,15 @@ func (c *agentCore) consumeAndForward(stream *StreamResult, out chan<- StreamEve
 			out <- event
 		case StreamEventThinkingDelta:
 			thinkingContent += event.Delta
+			if event.Signature != "" {
+				thinkingSignature = event.Signature
+			}
+			if event.ProviderName != "" {
+				thinkingProvider = event.ProviderName
+			}
+			if event.ThinkingID != "" {
+				thinkingID = event.ThinkingID
+			}
 			out <- event
 		case StreamEventToolCallStart:
 			if event.ToolUse != nil {
@@ -130,8 +149,11 @@ func (c *agentCore) consumeAndForward(stream *StreamResult, out chan<- StreamEve
 			if event.Usage != nil {
 				usage = *event.Usage
 			}
+			if event.FinishReason != "" {
+				finishReason = event.FinishReason
+			}
 		case StreamEventError:
-			return Message{}, Usage{}, event.Error
+			return Message{}, Usage{}, FinishReasonError, event.Error
 		default:
 			out <- event
 		}
@@ -139,7 +161,12 @@ func (c *agentCore) consumeAndForward(stream *StreamResult, out chan<- StreamEve
 
 	message := Message{Role: RoleAssistant, Content: make([]Part, 0)}
 	if thinkingContent != "" {
-		message.Content = append(message.Content, Part{Type: ContentThinking, Thinking: &ThinkingBlock{Text: thinkingContent}})
+		message.Content = append(message.Content, Part{Type: ContentThinking, Thinking: &ThinkingBlock{
+			Text:         thinkingContent,
+			ID:           thinkingID,
+			Signature:    thinkingSignature,
+			ProviderName: thinkingProvider,
+		}})
 	}
 	if textContent != "" {
 		message.Content = append(message.Content, Part{Type: ContentText, Text: textContent})
@@ -152,7 +179,7 @@ func (c *agentCore) consumeAndForward(stream *StreamResult, out chan<- StreamEve
 		}
 		message.Content = append(message.Content, Part{Type: ContentToolUse, ToolUse: &ToolUse{ID: toolCall.id, Name: toolCall.name, Input: input}})
 	}
-	return message, usage, nil
+	return message, usage, finishReason, nil
 }
 
 func (c *agentCore) runStreamFallback(ctx context.Context, prompt string, deps dependencyEnvelope, opts ...RunOption) (*StreamResult, error) {
@@ -173,7 +200,7 @@ func (c *agentCore) runStreamFallback(ctx context.Context, prompt string, deps d
 			ch <- StreamEvent{Type: StreamEventTextDelta, Delta: runResult.Output}
 		}
 		usage := runResult.Usage
-		ch <- StreamEvent{Type: StreamEventDone, Usage: &usage}
+		ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, FinishReason: runResult.FinishReason}
 	}()
 	return result, nil
 }

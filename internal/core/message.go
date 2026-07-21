@@ -53,6 +53,12 @@ type Part struct {
 type ImageURL struct {
 	URL    string `json:"url"`
 	Detail string `json:"detail,omitempty"` // "auto", "low", "high"
+
+	// MediaType is the IANA media type of the image, e.g. "image/png".
+	// Providers that must declare a type when referencing a URL (Gemini) use
+	// it; empty falls back to that provider's default, which will be wrong
+	// for any format that is not the default.
+	MediaType string `json:"media_type,omitempty"`
 }
 
 // ThinkingBlock represents a thinking/reasoning block from the model.
@@ -91,7 +97,14 @@ type AudioURL struct {
 
 // VideoURL represents a video file referenced by URL.
 type VideoURL struct {
-	URL            string                 `json:"url"`
+	URL string `json:"url"`
+
+	// MediaType is the IANA media type of the video, e.g. "video/webm".
+	// Providers that must declare a type when referencing a URL (Gemini) use
+	// it; empty falls back to that provider's default, which will be wrong
+	// for any format that is not the default.
+	MediaType string `json:"media_type,omitempty"`
+
 	VendorMetadata map[string]interface{} `json:"vendor_metadata,omitempty"` // Provider-specific metadata (e.g. Google video_metadata)
 }
 
@@ -108,7 +121,7 @@ type DocumentURL struct {
 // Supported by: Anthropic, Amazon Bedrock.
 type CachePoint struct {
 	// TTL is the cache time-to-live: "5m" (5 minutes) or "1h" (1 hour).
-	// Default is "5m". Bedrock does not support explicit TTL.
+	// Default is "5m". Honored by both Anthropic and Bedrock.
 	TTL string `json:"ttl,omitempty"` // "5m" or "1h"
 }
 
@@ -134,8 +147,14 @@ type ToolUse struct {
 // ToolResult represents the result of a tool call.
 type ToolResult struct {
 	ToolUseID string `json:"tool_use_id"`
-	Content   string `json:"content"`
-	IsError   bool   `json:"is_error,omitempty"`
+
+	// Name is the tool that produced this result. Required by providers that
+	// correlate a result to its call by name rather than by id (Gemini);
+	// ignored by id-keyed providers (OpenAI, Anthropic, Bedrock).
+	Name string `json:"name,omitempty"`
+
+	Content string `json:"content"`
+	IsError bool   `json:"is_error,omitempty"`
 }
 
 // NewTextMessage creates a simple text message.
@@ -168,7 +187,21 @@ func NewToolUseMessage(toolUses ...ToolUse) Message {
 }
 
 // NewToolResultMessage creates a message with a tool result.
+//
+// The result carries no tool name. Prefer [NewToolResultMessageFor] when the
+// name is known: providers that correlate results to calls by name rather than
+// by id (Gemini) cannot match a result built here to the call it answers.
 func NewToolResultMessage(toolUseID string, content string, isError bool) Message {
+	return NewToolResultMessageFor(toolUseID, "", content, isError)
+}
+
+// NewToolResultMessageFor creates a message with a tool result that records
+// which tool produced it.
+//
+// Prefer this over [NewToolResultMessage]. Name-keyed providers (Gemini) match
+// a function response to its call by name, so a result without one cannot be
+// correlated; id-keyed providers (OpenAI, Anthropic, Bedrock) ignore it.
+func NewToolResultMessageFor(toolUseID, toolName, content string, isError bool) Message {
 	return Message{
 		Role: RoleTool,
 		Content: []Part{
@@ -176,6 +209,7 @@ func NewToolResultMessage(toolUseID string, content string, isError bool) Messag
 				Type: ContentToolResult,
 				ToolResult: &ToolResult{
 					ToolUseID: toolUseID,
+					Name:      toolName,
 					Content:   content,
 					IsError:   isError,
 				},

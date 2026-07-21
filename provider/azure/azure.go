@@ -1,12 +1,20 @@
 // Package azure provides an Azure OpenAI Model implementation for Agentic.
-// It wraps the OpenAI provider with Azure-specific authentication and URL patterns.
+// It wraps the OpenAI provider with Azure-specific authentication and URLs.
 //
-// Azure OpenAI uses a different URL structure and authentication scheme than
-// the standard OpenAI API. This provider handles the mapping automatically.
+// This package speaks the Azure OpenAI v1 API, which is OpenAI-compatible: the
+// model is addressed by name and no api-version parameter is involved. The
+// older deployment-path API (/openai/deployments/{deployment}?api-version=...)
+// is not supported.
+//
+// That distinction is about the URL, not the resource. The v1 API is served by
+// the same Azure resource, so a caller previously using
+// "https://my-resource.openai.azure.com" needs no change — this package
+// resolves it to the v1 path automatically. See [New].
 package azure
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -15,9 +23,6 @@ import (
 
 	"github.com/openai/openai-go/option"
 )
-
-// DefaultAPIVersion is the default Azure OpenAI API version.
-const DefaultAPIVersion = "2025-01-01-preview"
 
 // Model wraps the OpenAI provider for Azure OpenAI.
 // It inherits all methods including Request and RequestStream.
@@ -29,24 +34,22 @@ type Model struct {
 type Option func(*config)
 
 type config struct {
-	endpoint   string
-	deployment string
-	apiKey     string
-	apiVersion string
+	endpoint  string
+	apiKey    string
+	extraOpts []option.RequestOption
 }
 
 // WithEndpoint sets the Azure OpenAI endpoint URL.
 // If not set, the AZURE_OPENAI_ENDPOINT env var is used.
 //
-// Example: "https://my-resource.openai.azure.com"
+// Any of these forms is accepted; all resolve to the same v1 API:
+//
+//	https://my-resource.openai.azure.com
+//	https://my-resource.openai.azure.com/openai/v1
+//	https://my-resource.services.ai.azure.com/openai/v1
+//	https://my-model.models.ai.azure.com          (AI Foundry serverless)
 func WithEndpoint(endpoint string) Option {
 	return func(c *config) { c.endpoint = endpoint }
-}
-
-// WithDeployment sets the Azure deployment name.
-// If not set, the model parameter passed to New is used as both model and deployment name.
-func WithDeployment(deployment string) Option {
-	return func(c *config) { c.deployment = deployment }
 }
 
 // WithAPIKey sets the Azure API key. If not set, the AZURE_OPENAI_API_KEY env var is used.
@@ -54,27 +57,35 @@ func WithAPIKey(apiKey string) Option {
 	return func(c *config) { c.apiKey = apiKey }
 }
 
-// WithAPIVersion sets the Azure OpenAI API version.
-// Defaults to DefaultAPIVersion if not set.
-func WithAPIVersion(version string) Option {
-	return func(c *config) { c.apiVersion = version }
-}
-
-// New creates a new Azure OpenAI Model.
+// WithRequestOptions adds raw SDK request options that are applied to every
+// request after the Azure defaults, so they can also override them.
 //
-// The model parameter specifies the model name (e.g., "gpt-4", "gpt-4o").
-// Use WithDeployment to override the deployment name if it differs from the model name.
-//
-// Examples:
+// This is the extension point for authentication schemes other than the
+// api-key header — for example an AAD/Entra bearer token obtained from
+// azidentity:
 //
 //	model, err := azure.New("gpt-4o",
 //	    azure.WithEndpoint("https://my-resource.openai.azure.com"),
 //	    azure.WithAPIKey("..."),
+//	    azure.WithRequestOptions(
+//	        option.WithHeader("Authorization", "Bearer "+token.Token),
+//	    ),
 //	)
+func WithRequestOptions(opts ...option.RequestOption) Option {
+	return func(c *config) { c.extraOpts = append(c.extraOpts, opts...) }
+}
+
+// New creates a new Azure OpenAI Model.
 //
-//	model, err := azure.New("gpt-4o",
+// The model parameter is the name the Azure resource serves the model under —
+// for Azure OpenAI that is the deployment name, which is frequently but not
+// always the same as the underlying model name.
+//
+// Example:
+//
+//	model, err := azure.New("my-gpt4o-deployment",
 //	    azure.WithEndpoint("https://my-resource.openai.azure.com"),
-//	    azure.WithDeployment("my-gpt4o-deployment"),
+//	    azure.WithAPIKey("..."),
 //	)
 func New(model string, opts ...Option) (*Model, error) {
 	cfg := &config{}
@@ -98,29 +109,24 @@ func New(model string, opts ...Option) (*Model, error) {
 		return nil, fmt.Errorf("azure: API key not set (use WithAPIKey or set AZURE_OPENAI_API_KEY)")
 	}
 
-	apiVersion := cfg.apiVersion
-	if apiVersion == "" {
-		apiVersion = os.Getenv("OPENAI_API_VERSION")
-	}
-	if apiVersion == "" {
-		apiVersion = DefaultAPIVersion
+	baseURL, err := v1BaseURL(endpoint)
+	if err != nil {
+		return nil, err
 	}
 
-	deployment := cfg.deployment
-	if deployment == "" {
-		deployment = model
+	reqOpts := []option.RequestOption{
+		// Azure authenticates with the api-key header. Delete any Authorization
+		// header the SDK may have defaulted in from OPENAI_API_KEY so we never
+		// send two competing credentials.
+		option.WithHeaderDel("Authorization"),
+		option.WithHeader("api-key", apiKey),
 	}
-
-	// Build the Azure-specific base URL:
-	// https://{endpoint}/openai/deployments/{deployment}
-	baseURL := buildBaseURL(endpoint, deployment, apiVersion)
+	// Caller options last so AAD/Entra credentials can override the defaults.
+	reqOpts = append(reqOpts, cfg.extraOpts...)
 
 	oaiModel, err := oaiProvider.New(model,
-		oaiProvider.WithAPIKey(apiKey),
 		oaiProvider.WithBaseURL(baseURL),
-		oaiProvider.WithRequestOptions(
-			option.WithHeader("api-key", apiKey),
-		),
+		oaiProvider.WithRequestOptions(reqOpts...),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("azure: %w", err)
@@ -138,11 +144,42 @@ func MustNew(model string, opts ...Option) *Model {
 	return m
 }
 
-// buildBaseURL constructs the Azure OpenAI base URL.
-// Azure format: {endpoint}/openai/deployments/{deployment}?api-version={version}
-func buildBaseURL(endpoint, deployment, apiVersion string) string {
-	endpoint = strings.TrimRight(endpoint, "/")
-	return fmt.Sprintf("%s/openai/deployments/%s?api-version=%s", endpoint, deployment, apiVersion)
+// v1BaseURL resolves any accepted endpoint form to the v1 API base URL.
+//
+// Three shapes are recognized:
+//
+//   - A path already ending in /v1 is used as given.
+//   - An AI Foundry serverless host (*.models.ai.azure.com) serves /v1 at the
+//     root, so /v1 is appended.
+//   - Anything else is treated as a bare Azure OpenAI resource, whose v1 API
+//     lives at /openai/v1.
+//
+// A deployment-path endpoint is rejected rather than rewritten: silently
+// redirecting it would send requests somewhere the caller did not name.
+func v1BaseURL(endpoint string) (string, error) {
+	stripped := strings.TrimRight(endpoint, "/")
+
+	parsed, err := url.Parse(stripped)
+	if err != nil {
+		return "", fmt.Errorf("azure: invalid endpoint %q: %w", endpoint, err)
+	}
+	if parsed.Scheme == "" || parsed.Host == "" {
+		return "", fmt.Errorf("azure: endpoint %q must be an absolute URL, e.g. https://my-resource.openai.azure.com", endpoint)
+	}
+
+	if strings.Contains(parsed.Path, "/deployments/") {
+		return "", fmt.Errorf("azure: endpoint %q targets the deployment-path API, which this package no longer supports; "+
+			"use the resource root instead, e.g. https://my-resource.openai.azure.com", endpoint)
+	}
+
+	switch {
+	case strings.HasSuffix(stripped, "/v1"):
+		return stripped, nil
+	case strings.HasSuffix(parsed.Hostname(), ".models.ai.azure.com"):
+		return stripped + "/v1", nil
+	default:
+		return stripped + "/openai/v1", nil
+	}
 }
 
 // Compile-time checks that Model implements both Model and StreamModel

@@ -24,10 +24,7 @@ func (m *historyStubModel) Request(ctx context.Context, req *ChatRequest) (*Chat
 	return &ChatResponse{
 		Model:   "history-stub",
 		Created: time.Unix(0, 0),
-		Choices: []Choice{{
-			Index:   0,
-			Message: NewTextMessage(RoleAssistant, "summary"),
-		}},
+		Message: NewTextMessage(RoleAssistant, "summary"),
 	}, nil
 }
 
@@ -192,10 +189,7 @@ func TestSummarizeHistory(t *testing.T) {
 			resp: &ChatResponse{
 				Model:   "history-stub",
 				Created: time.Unix(0, 0),
-				Choices: []Choice{{
-					Index:   0,
-					Message: NewTextMessage(RoleAssistant, "compact summary"),
-				}},
+				Message: NewTextMessage(RoleAssistant, "compact summary"),
 			},
 		}
 		messages := []Message{
@@ -241,11 +235,16 @@ func TestSummarizeHistory(t *testing.T) {
 		}
 	})
 
-	t.Run("errors when summary response has no choices", func(t *testing.T) {
+	// A summary response with no content cannot stand in for the messages it
+	// replaces: accepting it would drop the summarized history permanently and
+	// leave an empty "[Conversation summary]: " in its place. The exact error
+	// text is not pinned here — only that the empty response is rejected.
+	t.Run("errors when summary response has no content", func(t *testing.T) {
 		model := &historyStubModel{
 			resp: &ChatResponse{
 				Model:   "history-stub",
 				Created: time.Unix(0, 0),
+				Message: Message{Role: RoleAssistant},
 			},
 		}
 		messages := []Message{
@@ -255,8 +254,8 @@ func TestSummarizeHistory(t *testing.T) {
 		}
 
 		_, err := SummarizeHistory(model, 1).Process(context.Background(), messages)
-		if err == nil || err.Error() != "summarize history: no response choices" {
-			t.Fatalf("expected no choices error, got %v", err)
+		if err == nil {
+			t.Fatal("expected an error for a summary response with no content")
 		}
 	})
 }

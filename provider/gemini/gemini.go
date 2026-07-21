@@ -3,21 +3,42 @@
 // through the unified google.golang.org/genai SDK.
 //
 // Features: streaming, tool/function calling, multimodal inputs, thinking tokens,
-// structured output via response schema, and prompt caching.
+// thought-signature round-tripping, structured output via response schema, and
+// prompt caching.
 package gemini
 
 import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/regularkevvv/agentic/internal/core"
 
 	"google.golang.org/genai"
 )
+
+// ErrPromptBlocked is returned when Gemini rejects the prompt outright — the
+// response carries no candidate, only a block reason in promptFeedback.
+// Errors wrapping it can be matched with [errors.Is].
+var ErrPromptBlocked = errors.New("gemini: prompt blocked")
+
+// synthesizedIDPrefix marks a tool-call id this package invented because the
+// API supplied none (pre-Gemini-3 models omit FunctionCall.ID). Synthesized ids
+// are never echoed back to the API, which rejects ids it did not issue; they
+// exist only so callers have a stable local handle for the call.
+const synthesizedIDPrefix = "gemini_call_"
+
+// skipThoughtSignatureValidator is the documented placeholder that lets a
+// function call replay without a real thought signature. Gemini requires the
+// first function call of a turn to carry a signature; this value tells the
+// server to skip that validation on both the Gemini API and Vertex AI.
+// See https://ai.google.dev/gemini-api/docs/thought-signatures.
+const skipThoughtSignatureValidator = "skip_thought_signature_validator"
 
 // Model implements the core.Model and core.StreamModel interfaces
 // using the Google Gemini API.
@@ -34,6 +55,7 @@ type config struct {
 	project  string
 	location string
 	vertexAI bool
+	taskType string
 }
 
 // WithAPIKey sets the Gemini API key. If not set, the GEMINI_API_KEY
@@ -68,6 +90,24 @@ func New(model string, opts ...Option) (*Model, error) {
 		opt(cfg)
 	}
 
+	client, err := newGenAIClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Model{
+		client: client,
+		model:  model,
+	}, nil
+}
+
+// newGenAIClient builds the underlying SDK client from an already-applied
+// config, resolving the Vertex AI project and location or the Gemini API key
+// from the environment when the caller left them unset.
+//
+// Both New and NewEmbedder use it, so a client-construction fix reaches the
+// chat model and the embedder together.
+func newGenAIClient(cfg *config) (*genai.Client, error) {
 	clientCfg := &genai.ClientConfig{}
 
 	if cfg.vertexAI {
@@ -101,11 +141,7 @@ func New(model string, opts ...Option) (*Model, error) {
 	if err != nil {
 		return nil, fmt.Errorf("gemini: failed to create client: %w", err)
 	}
-
-	return &Model{
-		client: client,
-		model:  model,
-	}, nil
+	return client, nil
 }
 
 // MustNew is like New but panics on error.
@@ -130,7 +166,7 @@ func (m *Model) Request(ctx context.Context, req *core.ChatRequest) (*core.ChatR
 		return nil, fmt.Errorf("gemini: %w", err)
 	}
 
-	return m.convertResponse(resp), nil
+	return m.convertResponse(resp)
 }
 
 // RequestStream implements core.StreamModel.
@@ -148,6 +184,8 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 		defer close(ch)
 
 		var usage core.Usage
+		finishReason := core.FinishReasonUnknown
+		calls := 0
 
 		for chunk, err := range m.client.Models.GenerateContentStream(ctx, m.model, contents, genCfg) {
 			if err != nil {
@@ -163,11 +201,19 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 				usage = extractUsage(chunk.UsageMetadata)
 			}
 
+			if blockErr := promptBlockError(chunk.PromptFeedback); blockErr != nil {
+				ch <- core.StreamEvent{Type: core.StreamEventError, Error: blockErr}
+				return
+			}
+
 			if len(chunk.Candidates) == 0 {
 				continue
 			}
 
 			candidate := chunk.Candidates[0]
+			if candidate.FinishReason != "" {
+				finishReason = convertFinishReason(candidate.FinishReason)
+			}
 			if candidate.Content == nil {
 				continue
 			}
@@ -176,7 +222,8 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 				if part.FunctionCall != nil {
 					// Emit tool call as start + delta with full args
 					argsJSON, _ := json.Marshal(part.FunctionCall.Args)
-					toolUseID := fmt.Sprintf("call_%s_%d", part.FunctionCall.Name, time.Now().UnixNano())
+					toolUseID := toolCallID(part.FunctionCall, calls)
+					calls++
 
 					ch <- core.StreamEvent{
 						Type: core.StreamEventToolCallStart,
@@ -195,8 +242,10 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 
 				if part.Thought {
 					ch <- core.StreamEvent{
-						Type:  core.StreamEventThinkingDelta,
-						Delta: part.Text,
+						Type:         core.StreamEventThinkingDelta,
+						Delta:        part.Text,
+						Signature:    encodeSignature(part.ThoughtSignature),
+						ProviderName: providerName,
 					}
 					continue
 				}
@@ -210,7 +259,7 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 			}
 		}
 
-		ch <- core.StreamEvent{Type: core.StreamEventDone, Usage: &usage}
+		ch <- core.StreamEvent{Type: core.StreamEventDone, Usage: &usage, FinishReason: finishReason}
 	}()
 
 	return sr, nil
@@ -225,14 +274,21 @@ func (m *Model) Name() string {
 func (m *Model) buildRequest(req *core.ChatRequest) ([]*genai.Content, *genai.GenerateContentConfig) {
 	cfg := &genai.GenerateContentConfig{}
 
-	// Convert messages, extracting system prompt
+	// Convert messages, accumulating every system message into the single
+	// system instruction Gemini accepts.
 	var contents []*genai.Content
+	var system []string
 	for _, msg := range req.Messages {
 		if msg.Role == core.RoleSystem {
-			cfg.SystemInstruction = convertSystemMessage(msg)
+			if text := msg.GetTextContent(); text != "" {
+				system = append(system, text)
+			}
 			continue
 		}
 		contents = append(contents, convertMessage(msg))
+	}
+	if len(system) > 0 {
+		cfg.SystemInstruction = genai.NewContentFromText(strings.Join(system, "\n\n"), "user")
 	}
 
 	// Generation parameters
@@ -247,13 +303,18 @@ func (m *Model) buildRequest(req *core.ChatRequest) ([]*genai.Content, *genai.Ge
 		tp := float32(*req.TopP)
 		cfg.TopP = &tp
 	}
-	if req.FrequencyPenalty != nil {
-		fp := float32(*req.FrequencyPenalty)
-		cfg.FrequencyPenalty = &fp
+	if len(req.StopSequences) > 0 {
+		cfg.StopSequences = req.StopSequences
 	}
-	if req.PresencePenalty != nil {
-		pp := float32(*req.PresencePenalty)
-		cfg.PresencePenalty = &pp
+
+	opts := optionsFor(req)
+	if opts.TopK != nil {
+		tk := float32(*opts.TopK)
+		cfg.TopK = &tk
+	}
+	if opts.Seed != nil {
+		seed := int32(*opts.Seed)
+		cfg.Seed = &seed
 	}
 
 	// Tools
@@ -267,64 +328,118 @@ func (m *Model) buildRequest(req *core.ChatRequest) ([]*genai.Content, *genai.Ge
 	// Response format
 	if req.ResponseFormat != nil {
 		cfg.ResponseMIMEType = "application/json"
-		if req.ResponseFormat.JSONSchema != nil && req.ResponseFormat.JSONSchema.Schema != nil {
-			cfg.ResponseSchema = convertSchema(req.ResponseFormat.JSONSchema.Schema)
+		if req.ResponseFormat.JSONSchema != nil {
+			if schema, ok := jsonSchema(req.ResponseFormat.JSONSchema.Schema); ok {
+				cfg.ResponseJsonSchema = schema
+			}
 		}
 	}
 
-	// Thinking
-	if req.Thinking != nil && req.Thinking.Enabled {
-		cfg.ThinkingConfig = &genai.ThinkingConfig{
-			IncludeThoughts: true,
-		}
-		if req.Thinking.BudgetTokens > 0 {
-			budget := int32(req.Thinking.BudgetTokens)
-			cfg.ThinkingConfig.ThinkingBudget = &budget
+	// Thinking. An explicit disable has to be sent as a zero budget: omitting
+	// the config leaves the model's own default (thinking on) in place.
+	if req.Thinking != nil {
+		if req.Thinking.Enabled {
+			cfg.ThinkingConfig = &genai.ThinkingConfig{IncludeThoughts: true}
+			if req.Thinking.BudgetTokens > 0 {
+				budget := int32(req.Thinking.BudgetTokens)
+				cfg.ThinkingConfig.ThinkingBudget = &budget
+			}
+		} else {
+			var off int32
+			cfg.ThinkingConfig = &genai.ThinkingConfig{ThinkingBudget: &off}
 		}
 	}
 
 	return contents, cfg
 }
 
-// convertSystemMessage converts a system message to Gemini Content.
-func convertSystemMessage(msg core.Message) *genai.Content {
-	return genai.NewContentFromText(msg.GetTextContent(), "user")
-}
-
 // convertMessage converts core.Message to Gemini Content.
+//
+// Thought signatures travel with the part that follows the thinking block that
+// produced them, and the first function call of a turn must carry one, so parts
+// are built in order with a pending signature carried forward.
+// See https://ai.google.dev/gemini-api/docs/thought-signatures.
 func convertMessage(msg core.Message) *genai.Content {
 	var parts []*genai.Part
+	var pending []byte
+	needsCallSignature := true
+
+	// attach moves any pending thought signature onto this part.
+	attach := func(p *genai.Part) *genai.Part {
+		if pending != nil {
+			p.ThoughtSignature = pending
+			pending = nil
+		}
+		return p
+	}
 
 	for _, p := range msg.Content {
 		switch p.Type {
 		case core.ContentText:
-			parts = append(parts, genai.NewPartFromText(p.Text))
+			parts = append(parts, attach(&genai.Part{Text: p.Text}))
+
+		case core.ContentThinking:
+			if p.Thinking == nil {
+				continue
+			}
+			// A signature we issued attaches to the *next* part rather than
+			// being replayed as a thought part of its own.
+			if p.Thinking.ProviderName == providerName && p.Thinking.Signature != "" {
+				if sig, err := base64.StdEncoding.DecodeString(p.Thinking.Signature); err == nil {
+					pending = sig
+					continue
+				}
+			}
+			if p.Thinking.Text == "" {
+				continue
+			}
+			parts = append(parts, attach(&genai.Part{Text: p.Thinking.Text, Thought: true}))
 
 		case core.ContentToolUse:
-			if p.ToolUse != nil {
-				parts = append(parts, genai.NewPartFromFunctionCall(p.ToolUse.Name, p.ToolUse.Input))
+			if p.ToolUse == nil {
+				continue
 			}
+			part := attach(&genai.Part{FunctionCall: &genai.FunctionCall{
+				ID:   providerToolCallID(p.ToolUse.ID),
+				Name: p.ToolUse.Name,
+				Args: p.ToolUse.Input,
+			}})
+			if part.ThoughtSignature == nil && needsCallSignature {
+				part.ThoughtSignature = []byte(skipThoughtSignatureValidator)
+			}
+			needsCallSignature = false
+			parts = append(parts, part)
 
 		case core.ContentToolResult:
-			if p.ToolResult != nil {
-				var response map[string]any
-				_ = json.Unmarshal([]byte(p.ToolResult.Content), &response)
-				if response == nil {
-					response = map[string]any{"result": p.ToolResult.Content}
-				}
-				parts = append(parts, genai.NewPartFromFunctionResponse(p.ToolResult.ToolUseID, response))
+			if p.ToolResult == nil {
+				continue
 			}
+			// Gemini matches a response to its call by function name, not by
+			// id, so the name is the correlation key. The id is echoed only
+			// when the API issued it.
+			parts = append(parts, attach(&genai.Part{FunctionResponse: &genai.FunctionResponse{
+				ID:       providerToolCallID(p.ToolResult.ToolUseID),
+				Name:     toolResultName(p.ToolResult),
+				Response: toolResultResponse(p.ToolResult),
+			}}))
 
 		case core.ContentImageURL:
 			if p.ImageURL != nil {
-				parts = append(parts, genai.NewPartFromURI(p.ImageURL.URL, "image/jpeg"))
+				// Gemini requires a MIME type alongside a file URI and does
+				// not sniff it, so an unset MediaType falls back to JPEG.
+				// That default is wrong for a PNG or WebP, hence MediaType.
+				mimeType := p.ImageURL.MediaType
+				if mimeType == "" {
+					mimeType = "image/jpeg"
+				}
+				parts = append(parts, attach(genai.NewPartFromURI(p.ImageURL.URL, mimeType)))
 			}
 
 		case core.ContentImageData:
 			if p.ImageData != nil {
 				data, err := base64.StdEncoding.DecodeString(p.ImageData.Data)
 				if err == nil {
-					parts = append(parts, genai.NewPartFromBytes(data, p.ImageData.MediaType))
+					parts = append(parts, attach(genai.NewPartFromBytes(data, p.ImageData.MediaType)))
 				}
 			}
 
@@ -334,12 +449,18 @@ func convertMessage(msg core.Message) *genai.Content {
 				if p.AudioURL.Format != "" {
 					mimeType = "audio/" + p.AudioURL.Format
 				}
-				parts = append(parts, genai.NewPartFromURI(p.AudioURL.URL, mimeType))
+				parts = append(parts, attach(genai.NewPartFromURI(p.AudioURL.URL, mimeType)))
 			}
 
 		case core.ContentVideoURL:
 			if p.VideoURL != nil {
-				parts = append(parts, genai.NewPartFromURI(p.VideoURL.URL, "video/mp4"))
+				// As with images, the MIME type is declared rather than
+				// sniffed; MP4 remains the fallback for an unset MediaType.
+				mimeType := p.VideoURL.MediaType
+				if mimeType == "" {
+					mimeType = "video/mp4"
+				}
+				parts = append(parts, attach(genai.NewPartFromURI(p.VideoURL.URL, mimeType)))
 			}
 
 		case core.ContentDocumentURL:
@@ -348,7 +469,7 @@ func convertMessage(msg core.Message) *genai.Content {
 				if mimeType == "" {
 					mimeType = "application/pdf"
 				}
-				parts = append(parts, genai.NewPartFromURI(p.DocumentURL.URL, mimeType))
+				parts = append(parts, attach(genai.NewPartFromURI(p.DocumentURL.URL, mimeType)))
 			}
 
 		case core.ContentCachePoint, core.ContentUploadedFile:
@@ -363,6 +484,60 @@ func convertMessage(msg core.Message) *genai.Content {
 
 	role := genai.Role(convertRole(msg.Role))
 	return genai.NewContentFromParts(parts, role)
+}
+
+// toolResultName returns the function name a tool result answers, falling back
+// to the tool-use id for results built without one. A result whose name does
+// not match a declared function cannot be correlated by Gemini, so the fallback
+// is a best effort rather than a fix.
+func toolResultName(result *core.ToolResult) string {
+	if result.Name != "" {
+		return result.Name
+	}
+	return result.ToolUseID
+}
+
+// toolResultResponse shapes a tool result into the response object Gemini
+// expects: the "error" key for failures, "output" for anything that is not
+// already a JSON object.
+func toolResultResponse(result *core.ToolResult) map[string]any {
+	if result.IsError {
+		return map[string]any{"error": result.Content}
+	}
+	var response map[string]any
+	if err := json.Unmarshal([]byte(result.Content), &response); err == nil && response != nil {
+		return response
+	}
+	return map[string]any{"output": result.Content}
+}
+
+// toolCallID returns a stable identifier for a function call: the id the API
+// issued (Gemini 3 and later) or, failing that, one derived from the call's
+// position in the response so the same response always converts identically.
+func toolCallID(call *genai.FunctionCall, index int) string {
+	if call.ID != "" {
+		return call.ID
+	}
+	return fmt.Sprintf("%s%d_%s", synthesizedIDPrefix, index, call.Name)
+}
+
+// providerToolCallID returns id if the API issued it, or "" if this package
+// synthesized it. Gemini rejects ids it did not issue, so synthesized ones must
+// not be sent back.
+func providerToolCallID(id string) string {
+	if strings.HasPrefix(id, synthesizedIDPrefix) {
+		return ""
+	}
+	return id
+}
+
+// encodeSignature renders a raw thought signature as base64 for transport
+// through core.ThinkingBlock.Signature.
+func encodeSignature(sig []byte) string {
+	if len(sig) == 0 {
+		return ""
+	}
+	return base64.StdEncoding.EncodeToString(sig)
 }
 
 // convertRole maps agentic role to Gemini role string.
@@ -385,8 +560,8 @@ func convertTools(tools []core.Tool) []*genai.Tool {
 			Name:        tool.Function.Name,
 			Description: tool.Function.Description,
 		}
-		if tool.Function.Parameters != nil {
-			decl.Parameters = convertSchema(tool.Function.Parameters)
+		if schema, ok := jsonSchema(tool.Function.Parameters); ok {
+			decl.ParametersJsonSchema = schema
 		}
 		decls = append(decls, decl)
 	}
@@ -409,72 +584,71 @@ func convertToolConfig(choice core.ToolChoice) *genai.ToolConfig {
 	return tc
 }
 
-// convertSchema converts a JSON Schema map to a Gemini Schema.
-func convertSchema(schema map[string]interface{}) *genai.Schema {
-	s := &genai.Schema{}
-
-	if t, ok := schema["type"].(string); ok {
-		s.Type = genai.Type(t)
+// jsonSchema prepares a JSON Schema for the SDK's schema-passthrough fields
+// (FunctionDeclaration.ParametersJsonSchema, GenerateContentConfig.ResponseJsonSchema),
+// which forward the document as written and so preserve $ref, $defs, anyOf,
+// format and the numeric/string constraints a hand-rolled conversion drops.
+//
+// The second result is false when there is nothing usable to send: an empty
+// schema, or one holding values that do not survive JSON encoding (channels,
+// functions, cycles). Sending such a schema would fail the whole request, so it
+// is dropped and the request proceeds unconstrained.
+func jsonSchema(schema map[string]interface{}) (any, bool) {
+	if len(schema) == 0 {
+		return nil, false
 	}
-
-	if desc, ok := schema["description"].(string); ok {
-		s.Description = desc
+	if _, err := json.Marshal(schema); err != nil {
+		return nil, false
 	}
-
-	if props, ok := schema["properties"].(map[string]interface{}); ok {
-		s.Properties = make(map[string]*genai.Schema)
-		for name, prop := range props {
-			if propMap, ok := prop.(map[string]interface{}); ok {
-				s.Properties[name] = convertSchema(propMap)
-			}
-		}
-	}
-
-	if req, ok := schema["required"].([]interface{}); ok {
-		for _, r := range req {
-			if str, ok := r.(string); ok {
-				s.Required = append(s.Required, str)
-			}
-		}
-	}
-
-	if items, ok := schema["items"].(map[string]interface{}); ok {
-		s.Items = convertSchema(items)
-	}
-
-	if enum, ok := schema["enum"].([]interface{}); ok {
-		for _, e := range enum {
-			if str, ok := e.(string); ok {
-				s.Enum = append(s.Enum, str)
-			}
-		}
-	}
-
-	return s
+	return schema, true
 }
 
 // convertResponse converts a Gemini response to agentic types.
-func (m *Model) convertResponse(resp *genai.GenerateContentResponse) *core.ChatResponse {
-	choices := make([]core.Choice, 0, len(resp.Candidates))
-	for i, candidate := range resp.Candidates {
-		choices = append(choices, core.Choice{
-			Index:        i,
-			Message:      convertCandidateMessage(candidate),
-			FinishReason: convertFinishReason(candidate.FinishReason),
-		})
+func (m *Model) convertResponse(resp *genai.GenerateContentResponse) (*core.ChatResponse, error) {
+	if err := promptBlockError(resp.PromptFeedback); err != nil {
+		return nil, err
 	}
 
 	chatResp := &core.ChatResponse{
-		Model:   m.model,
-		Choices: choices,
-		Created: time.Now(),
+		ID:           resp.ResponseID,
+		Model:        m.model,
+		Created:      time.Now(),
+		FinishReason: core.FinishReasonUnknown,
+	}
+	// The server reports which model actually served the request, which may be
+	// a concrete version behind an alias such as "gemini-2.5-pro".
+	if resp.ModelVersion != "" {
+		chatResp.Model = resp.ModelVersion
+	}
+	if !resp.CreateTime.IsZero() {
+		chatResp.Created = resp.CreateTime
+	}
+
+	if len(resp.Candidates) > 0 {
+		candidate := resp.Candidates[0]
+		chatResp.Message = convertCandidateMessage(candidate)
+		chatResp.FinishReason = convertFinishReason(candidate.FinishReason)
+		chatResp.RawFinishReason = string(candidate.FinishReason)
 	}
 
 	if resp.UsageMetadata != nil {
 		chatResp.Usage = extractUsage(resp.UsageMetadata)
 	}
 
-	return chatResp
+	return chatResp, nil
+}
+
+// promptBlockError reports a prompt rejected before generation started. Gemini
+// answers such a request with HTTP 200 and no candidate, so without this check
+// the caller sees an empty, successful-looking response.
+func promptBlockError(feedback *genai.GenerateContentResponsePromptFeedback) error {
+	if feedback == nil || feedback.BlockReason == "" {
+		return nil
+	}
+	if feedback.BlockReasonMessage != "" {
+		return fmt.Errorf("%w: %s: %s", ErrPromptBlocked, feedback.BlockReason, feedback.BlockReasonMessage)
+	}
+	return fmt.Errorf("%w: %s", ErrPromptBlocked, feedback.BlockReason)
 }
 
 // convertCandidateMessage converts a Gemini candidate to agentic Message.
@@ -488,21 +662,22 @@ func convertCandidateMessage(candidate *genai.Candidate) core.Message {
 		return msg
 	}
 
+	calls := 0
 	for _, part := range candidate.Content.Parts {
 		if part.FunctionCall != nil {
 			inputJSON, _ := json.Marshal(part.FunctionCall.Args)
 			var input map[string]interface{}
 			_ = json.Unmarshal(inputJSON, &input)
 
-			toolUseID := fmt.Sprintf("call_%s_%d", part.FunctionCall.Name, time.Now().UnixNano())
 			msg.Content = append(msg.Content, core.Part{
 				Type: core.ContentToolUse,
 				ToolUse: &core.ToolUse{
-					ID:    toolUseID,
+					ID:    toolCallID(part.FunctionCall, calls),
 					Name:  part.FunctionCall.Name,
 					Input: input,
 				},
 			})
+			calls++
 			continue
 		}
 
@@ -511,7 +686,8 @@ func convertCandidateMessage(candidate *genai.Candidate) core.Message {
 				Type: core.ContentThinking,
 				Thinking: &core.ThinkingBlock{
 					Text:         part.Text,
-					ProviderName: "gemini",
+					Signature:    encodeSignature(part.ThoughtSignature),
+					ProviderName: providerName,
 				},
 			})
 			continue
@@ -528,26 +704,63 @@ func convertCandidateMessage(candidate *genai.Candidate) core.Message {
 	return msg
 }
 
-// convertFinishReason converts Gemini finish reason to agentic type.
+// convertFinishReason converts a Gemini finish reason to the agentic type.
+//
+// Values Gemini may report but this library does not recognize map to
+// core.FinishReasonUnknown; the caller reads ChatResponse.RawFinishReason for
+// the original string.
 func convertFinishReason(reason genai.FinishReason) core.FinishReason {
 	switch reason {
 	case genai.FinishReasonStop:
 		return core.FinishReasonStop
+
 	case genai.FinishReasonMaxTokens:
 		return core.FinishReasonLength
-	case genai.FinishReasonSafety, genai.FinishReasonBlocklist, genai.FinishReasonProhibitedContent, genai.FinishReasonSPII:
+
+	// Content the model was not allowed to return: safety categories, the
+	// terminology blocklist, recitation of training data, personal
+	// identifiers, and their image-generation equivalents.
+	case genai.FinishReasonSafety,
+		genai.FinishReasonBlocklist,
+		genai.FinishReasonProhibitedContent,
+		genai.FinishReasonSPII,
+		genai.FinishReasonRecitation,
+		genai.FinishReasonImageSafety,
+		genai.FinishReasonImageProhibitedContent,
+		genai.FinishReasonImageRecitation:
 		return core.FinishReasonContentFilter
+
+	// Generation aborted: the model emitted something unusable, or the request
+	// could not be served in the language or modality asked for.
+	case genai.FinishReasonMalformedFunctionCall,
+		genai.FinishReasonUnexpectedToolCall,
+		genai.FinishReasonLanguage,
+		genai.FinishReasonNoImage,
+		genai.FinishReasonImageOther:
+		return core.FinishReasonError
+
 	default:
-		return core.FinishReasonStop
+		// Includes FINISH_REASON_UNSPECIFIED, OTHER, and any value added to
+		// the API after this mapping was written.
+		return core.FinishReasonUnknown
 	}
 }
 
 // extractUsage converts Gemini usage metadata to agentic Usage.
+//
+// Thinking tokens are billed as output but reported separately from
+// CandidatesTokenCount, so they are added to the completion total rather than
+// silently dropped.
 func extractUsage(meta *genai.GenerateContentResponseUsageMetadata) core.Usage {
+	completion := int(meta.CandidatesTokenCount + meta.ThoughtsTokenCount)
 	usage := core.Usage{
 		PromptTokens:     int(meta.PromptTokenCount),
-		CompletionTokens: int(meta.CandidatesTokenCount),
-		TotalTokens:      int(meta.PromptTokenCount + meta.CandidatesTokenCount),
+		CompletionTokens: completion,
+		TotalTokens:      int(meta.PromptTokenCount) + completion,
+		ReasoningTokens:  int(meta.ThoughtsTokenCount),
+	}
+	if meta.TotalTokenCount > 0 {
+		usage.TotalTokens = int(meta.TotalTokenCount)
 	}
 	if meta.CachedContentTokenCount > 0 {
 		usage.CacheReadTokens = int(meta.CachedContentTokenCount)

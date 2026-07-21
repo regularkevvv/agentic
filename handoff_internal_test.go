@@ -215,16 +215,16 @@ func (m *concurrentHandoffModel) Request(_ context.Context, request *ChatRequest
 		m.mu.Lock()
 		m.seen[marker]++
 		m.mu.Unlock()
-		return &ChatResponse{Choices: []Choice{{Message: NewTextMessage(RoleAssistant, marker), FinishReason: FinishReasonStop}}}, nil
+		return &ChatResponse{Message: NewTextMessage(RoleAssistant, marker), FinishReason: FinishReasonStop}, nil
 	}
 	for _, message := range request.Messages {
 		if message.Role == RoleTool {
-			return &ChatResponse{Choices: []Choice{{Message: NewTextMessage(RoleAssistant, "done"), FinishReason: FinishReasonStop}}}, nil
+			return &ChatResponse{Message: NewTextMessage(RoleAssistant, "done"), FinishReason: FinishReasonStop}, nil
 		}
 	}
-	return &ChatResponse{Choices: []Choice{{Message: NewToolUseMessage(ToolUse{
+	return &ChatResponse{Message: NewToolUseMessage(ToolUse{
 		ID: "concurrent_handoff", Name: "delegate", Input: map[string]interface{}{"task": "work"},
-	}), FinishReason: FinishReasonToolCalls}}}, nil
+	}), FinishReason: FinishReasonToolCalls}, nil
 }
 
 func TestConcurrentMappedHandoffParentsKeepDependenciesIsolated(t *testing.T) {

@@ -129,6 +129,12 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 	}
 
 	params := m.buildParams(req)
+	// Ask for a final usage chunk. Without stream_options.include_usage the
+	// API sends no usage at all while streaming, and StreamEventDone would
+	// report zeros.
+	params.StreamOptions = openai.ChatCompletionStreamOptionsParam{
+		IncludeUsage: openai.Bool(true),
+	}
 	stream := m.client.Chat.Completions.NewStreaming(ctx, params)
 
 	ch := make(chan core.StreamEvent, 64)
@@ -145,6 +151,8 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 		}
 		seenToolCalls := make(map[int64]*toolCallInfo)
 		var usage core.Usage
+		finishReason := core.FinishReasonStop
+		refused := false
 
 		for stream.Next() {
 			chunk := stream.Current()
@@ -158,6 +166,10 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 				continue
 			}
 
+			if raw := chunk.Choices[0].FinishReason; raw != "" && !refused {
+				finishReason = convertFinishReason(raw)
+			}
+
 			delta := chunk.Choices[0].Delta
 
 			// Text content
@@ -165,6 +177,17 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 				ch <- core.StreamEvent{
 					Type:  core.StreamEventTextDelta,
 					Delta: delta.Content,
+				}
+			}
+
+			// A refusal arrives instead of content, and settles the finish
+			// reason regardless of what the final chunk reports.
+			if delta.Refusal != "" {
+				refused = true
+				finishReason = core.FinishReasonContentFilter
+				ch <- core.StreamEvent{
+					Type:  core.StreamEventTextDelta,
+					Delta: delta.Refusal,
 				}
 			}
 
@@ -207,7 +230,11 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 			return
 		}
 
-		ch <- core.StreamEvent{Type: core.StreamEventDone, Usage: &usage}
+		ch <- core.StreamEvent{
+			Type:         core.StreamEventDone,
+			Usage:        &usage,
+			FinishReason: finishReason,
+		}
 	}()
 
 	return sr, nil
@@ -222,7 +249,7 @@ func (m *Model) Name() string {
 func (m *Model) buildParams(req *core.ChatRequest) openai.ChatCompletionNewParams {
 	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages))
 	for _, msg := range req.Messages {
-		messages = append(messages, convertMessage(msg))
+		messages = append(messages, convertMessages(msg)...)
 	}
 
 	params := openai.ChatCompletionNewParams{
@@ -230,20 +257,35 @@ func (m *Model) buildParams(req *core.ChatRequest) openai.ChatCompletionNewParam
 		Model:    shared.ChatModel(m.model),
 	}
 
-	if req.Temperature != nil {
-		params.Temperature = openai.Float(*req.Temperature)
+	thinkingEnabled := req.Thinking != nil && req.Thinking.Enabled
+
+	// Reasoning models reject sampling parameters while reasoning is active.
+	if supportsSamplingParams(m.model, thinkingEnabled) {
+		if req.Temperature != nil {
+			params.Temperature = openai.Float(*req.Temperature)
+		}
+		if req.TopP != nil {
+			params.TopP = openai.Float(*req.TopP)
+		}
 	}
 	if req.MaxTokens != nil {
 		params.MaxCompletionTokens = openai.Int(int64(*req.MaxTokens))
 	}
-	if req.TopP != nil {
-		params.TopP = openai.Float(*req.TopP)
+	if len(req.StopSequences) > 0 {
+		params.Stop = openai.ChatCompletionNewParamsStopUnion{
+			OfStringArray: req.StopSequences,
+		}
 	}
-	if req.FrequencyPenalty != nil {
-		params.FrequencyPenalty = openai.Float(*req.FrequencyPenalty)
+
+	opts := optionsFrom(req.ProviderOptions)
+	if opts.Seed != nil {
+		params.Seed = openai.Int(*opts.Seed)
 	}
-	if req.PresencePenalty != nil {
-		params.PresencePenalty = openai.Float(*req.PresencePenalty)
+	if opts.ParallelToolCalls != nil {
+		params.ParallelToolCalls = openai.Bool(*opts.ParallelToolCalls)
+	}
+	if tier := opts.serviceTier(); tier != "" {
+		params.ServiceTier = openai.ChatCompletionNewParamsServiceTier(tier)
 	}
 
 	if len(req.Tools) > 0 {
@@ -257,7 +299,7 @@ func (m *Model) buildParams(req *core.ChatRequest) openai.ChatCompletionNewParam
 		params.ResponseFormat = convertResponseFormat(req.ResponseFormat)
 	}
 
-	if req.Thinking != nil && req.Thinking.Enabled {
+	if thinkingEnabled {
 		// OpenAI o1/o3 models use reasoning_effort
 		effort := shared.ReasoningEffortMedium
 		if req.Thinking.BudgetTokens > 20000 {
@@ -282,7 +324,7 @@ func convertResponseFormat(rf *core.ResponseFormat) openai.ChatCompletionNewPara
 		if rf.JSONSchema != nil {
 			schema := openai.ResponseFormatJSONSchemaJSONSchemaParam{
 				Name:   rf.JSONSchema.Name,
-				Schema: rf.JSONSchema.Schema,
+				Schema: normalizeStrictSchema(rf.JSONSchema.Schema, rf.JSONSchema.Strict),
 			}
 			if rf.JSONSchema.Description != "" {
 				schema.Description = openai.String(rf.JSONSchema.Description)
@@ -308,24 +350,40 @@ func convertResponseFormat(rf *core.ResponseFormat) openai.ChatCompletionNewPara
 }
 
 // convertResponse converts OpenAI response to agentic types.
+//
+// The API returns one choice per request in every configuration this library
+// issues, so only the first is converted; extra choices are dropped.
 func (m *Model) convertResponse(resp *openai.ChatCompletion) *core.ChatResponse {
-	choices := make([]core.Choice, len(resp.Choices))
-	for i, choice := range resp.Choices {
-		choices[i] = core.Choice{
-			Index:        int(choice.Index),
-			Message:      convertResponseMessage(choice.Message),
-			FinishReason: convertFinishReason(choice.FinishReason),
-		}
+	out := &core.ChatResponse{
+		ID:      resp.ID,
+		Model:   string(resp.Model),
+		Usage:   extractOpenAIUsage(resp.Usage),
+		Created: time.Unix(resp.Created, 0),
+	}
+	if len(resp.Choices) == 0 {
+		out.Message = core.Message{Role: core.RoleAssistant, Content: []core.Part{}}
+		out.FinishReason = core.FinishReasonError
+		return out
 	}
 
-	return &core.ChatResponse{
-		ID:                resp.ID,
-		Model:             string(resp.Model),
-		Choices:           choices,
-		Usage:             extractOpenAIUsage(resp.Usage),
-		Created:           time.Unix(resp.Created, 0),
-		SystemFingerprint: resp.SystemFingerprint,
+	choice := resp.Choices[0]
+	out.Message = convertResponseMessage(choice.Message)
+	out.RawFinishReason = choice.FinishReason
+	out.FinishReason = convertFinishReason(choice.FinishReason)
+
+	// A refusal is returned instead of content, with finish_reason "stop".
+	// Reporting a clean stop with an empty message hides the safety filter,
+	// so surface the refusal text and the content-filter reason while
+	// leaving RawFinishReason as the provider reported it.
+	if choice.Message.Refusal != "" {
+		out.Message.Content = append(out.Message.Content, core.Part{
+			Type: core.ContentText,
+			Text: choice.Message.Refusal,
+		})
+		out.FinishReason = core.FinishReasonContentFilter
 	}
+
+	return out
 }
 
 // extractOpenAIUsage extracts usage from an OpenAI response, including provider-specific fields.
@@ -346,27 +404,36 @@ func extractOpenAIUsage(u openai.CompletionUsage) core.Usage {
 	return usage
 }
 
-// convertMessage converts core.Message to OpenAI message format.
-func convertMessage(msg core.Message) openai.ChatCompletionMessageParamUnion {
+// convertMessages converts a core.Message into OpenAI messages.
+//
+// A tool message carrying several results becomes one OpenAI tool message per
+// result: the API keys a result to its call by tool_call_id and accepts only
+// one id per message, so the results cannot be merged. Every other role
+// produces exactly one message.
+func convertMessages(msg core.Message) []openai.ChatCompletionMessageParamUnion {
 	switch msg.Role {
 	case core.RoleSystem:
-		return openai.SystemMessage(msg.GetTextContent())
+		return []openai.ChatCompletionMessageParamUnion{openai.SystemMessage(msg.GetTextContent())}
 
 	case core.RoleUser:
 		if len(msg.Content) == 1 && msg.Content[0].Type == core.ContentText {
-			return openai.UserMessage(msg.Content[0].Text)
+			return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(msg.Content[0].Text)}
 		}
 		parts := make([]openai.ChatCompletionContentPartUnionParam, 0, len(msg.Content))
 		for _, part := range msg.Content {
-			parts = append(parts, convertContentPart(part))
+			converted, ok := convertContentPart(part)
+			if !ok {
+				continue
+			}
+			parts = append(parts, converted)
 		}
-		return openai.ChatCompletionMessageParamUnion{
+		return []openai.ChatCompletionMessageParamUnion{{
 			OfUser: &openai.ChatCompletionUserMessageParam{
 				Content: openai.ChatCompletionUserMessageParamContentUnion{
 					OfArrayOfContentParts: parts,
 				},
 			},
-		}
+		}}
 
 	case core.RoleAssistant:
 		toolUses := msg.GetToolUses()
@@ -382,35 +449,43 @@ func convertMessage(msg core.Message) openai.ChatCompletionMessageParamUnion {
 					},
 				}
 			}
-			return openai.ChatCompletionMessageParamUnion{
+			return []openai.ChatCompletionMessageParamUnion{{
 				OfAssistant: &openai.ChatCompletionAssistantMessageParam{
 					Content: openai.ChatCompletionAssistantMessageParamContentUnion{
 						OfString: openai.String(msg.GetTextContent()),
 					},
 					ToolCalls: toolCalls,
 				},
-			}
+			}}
 		}
-		return openai.AssistantMessage(msg.GetTextContent())
+		return []openai.ChatCompletionMessageParamUnion{openai.AssistantMessage(msg.GetTextContent())}
 
 	case core.RoleTool:
 		results := msg.GetToolResults()
-		if len(results) > 0 {
-			return openai.ToolMessage(results[0].Content, results[0].ToolUseID)
+		if len(results) == 0 {
+			return []openai.ChatCompletionMessageParamUnion{openai.ToolMessage(msg.GetTextContent(), "unknown")}
 		}
-		return openai.ToolMessage(msg.GetTextContent(), "unknown")
+		out := make([]openai.ChatCompletionMessageParamUnion, len(results))
+		for i, tr := range results {
+			out[i] = openai.ToolMessage(tr.Content, tr.ToolUseID)
+		}
+		return out
 
 	default:
-		return openai.UserMessage(msg.GetTextContent())
+		return []openai.ChatCompletionMessageParamUnion{openai.UserMessage(msg.GetTextContent())}
 	}
 }
 
-// convertContentPart converts core.Part to OpenAI content part.
-// Returns nil for parts that should be skipped (e.g. CachePoint).
-func convertContentPart(part core.Part) openai.ChatCompletionContentPartUnionParam {
+// convertContentPart converts core.Part to an OpenAI content part.
+//
+// The second return value is false for parts OpenAI has no representation for
+// (cache points, thinking blocks, unrecognized types); the caller must skip
+// them. Emitting an empty text part in their place would send a blank content
+// entry the model then has to account for.
+func convertContentPart(part core.Part) (openai.ChatCompletionContentPartUnionParam, bool) {
 	switch part.Type {
 	case core.ContentText:
-		return openai.TextContentPart(part.Text)
+		return openai.TextContentPart(part.Text), true
 	case core.ContentImageURL:
 		if part.ImageURL != nil {
 			imageURL := openai.ChatCompletionContentPartImageImageURLParam{
@@ -419,7 +494,7 @@ func convertContentPart(part core.Part) openai.ChatCompletionContentPartUnionPar
 			if part.ImageURL.Detail != "" {
 				imageURL.Detail = part.ImageURL.Detail
 			}
-			return openai.ImageContentPart(imageURL)
+			return openai.ImageContentPart(imageURL), true
 		}
 	case core.ContentImageData:
 		if part.ImageData != nil {
@@ -433,26 +508,31 @@ func convertContentPart(part core.Part) openai.ChatCompletionContentPartUnionPar
 					imageURL.Detail = detail
 				}
 			}
-			return openai.ImageContentPart(imageURL)
+			return openai.ImageContentPart(imageURL), true
 		}
 	case core.ContentAudioURL:
 		if part.AudioURL != nil {
 			return openai.InputAudioContentPart(openai.ChatCompletionContentPartInputAudioInputAudioParam{
 				Data:   part.AudioURL.URL,
 				Format: part.AudioURL.Format,
-			})
+			}), true
 		}
 	case core.ContentUploadedFile:
 		if part.UploadedFile != nil {
 			return openai.FileContentPart(openai.ChatCompletionContentPartFileFileParam{
 				FileID: openai.String(part.UploadedFile.FileID),
-			})
+			}), true
 		}
-	case core.ContentCachePoint:
-		// OpenAI doesn't support prompt caching via CachePoint — skip
-		return openai.TextContentPart("")
+	case core.ContentCachePoint, core.ContentThinking:
+		// OpenAI Chat Completions has no representation for either — skip.
+		return openai.ChatCompletionContentPartUnionParam{}, false
 	}
-	return openai.TextContentPart(part.Text)
+	// A part whose payload is missing still carries text often enough to be
+	// worth sending; a part with neither is dropped.
+	if part.Text != "" {
+		return openai.TextContentPart(part.Text), true
+	}
+	return openai.ChatCompletionContentPartUnionParam{}, false
 }
 
 // convertTools converts core.Tool to OpenAI format.
@@ -522,19 +602,29 @@ func convertResponseMessage(msg openai.ChatCompletionMessage) core.Message {
 	return domainMsg
 }
 
-// convertFinishReason converts OpenAI finish reason to agentic type.
+// convertFinishReason converts an OpenAI finish reason to the agentic type.
+//
+// The Chat Completions API emits "stop", "length", "tool_calls",
+// "content_filter", and the deprecated "function_call". An empty reason means
+// the provider reported none, which is treated as a clean stop, matching
+// pydantic-ai (pydantic_ai/models/openai.py: `if choice.finish_reason is None:
+// choice.finish_reason = 'stop'`). Anything else is a value this library does
+// not know and must not be reported as a success. "error" is not an OpenAI
+// value but is emitted by OpenAI-compatible gateways this package also backs.
 func convertFinishReason(reason string) core.FinishReason {
 	switch reason {
-	case "stop":
+	case "stop", "":
 		return core.FinishReasonStop
 	case "length":
 		return core.FinishReasonLength
-	case "tool_calls":
+	case "tool_calls", "function_call":
 		return core.FinishReasonToolCalls
 	case "content_filter":
 		return core.FinishReasonContentFilter
+	case "error":
+		return core.FinishReasonError
 	default:
-		return core.FinishReasonStop
+		return core.FinishReasonUnknown
 	}
 }
 

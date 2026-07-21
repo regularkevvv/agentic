@@ -397,10 +397,10 @@ Codemode = the model writes one program that calls tools as functions in a sandb
 
 ### 11.5 Embeddings & rerankers landscape (mid-2026)
 
-- **Gemini** (`google.golang.org/genai` already in go.mod): `EmbedContent`, 8-value taskType, MRL 128–3072 — truncated `gemini-embedding-001` vectors are **not normalized**; the provider must renormalize.
+- **Gemini** (`google.golang.org/genai` already in go.mod): `EmbedContent`, 8-value taskType, MRL 128–3072. ~~Truncated `gemini-embedding-001` vectors are **not normalized**; the provider must renormalize.~~ **Corrected 2026-07-20:** this claim did not survive checking. pydantic-ai's `embeddings/google.py:280` returns `emb.values` verbatim, never renormalizes, and their recorded 768-dim response is already unit-norm. Silent renormalization would be behavior no other embedder in this tree has — implemented as opt-in only, if at all.
 - **Ollama** (official `ollama/api`): native `/api/embed` with batch input, dimensions, usage. Covers the local/self-hosted story; the OpenAI-compat route already works via `openai.NewEmbedder` + base URL.
 - **Cohere** (official `cohere-go/v2`): embed-v4.0, `input_type` **required** (needs a documented default for `EmbeddingInputNone`), MRL enum dims. Same package later hosts Rerank.
-- **Bedrock** (SDK in go.mod): Titan V2 is one-text-per-call → provider must fan out internally to keep the batch contract; Cohere-on-Bedrock caps at 96.
+- **Bedrock** (SDK in go.mod): Titan V2 is one-text-per-call → provider must fan out internally to keep the batch contract. ~~Cohere-on-Bedrock caps at 96.~~ **Corrected 2026-07-20:** the "96" figure could not be sourced — it appears nowhere in pydantic-ai, and neither of their Cohere paths chunks. Shipped without a hard-coded cap; a limit violation surfaces as the provider's own 400, whose body is included in our error and is therefore self-diagnosing.
 - **Skip for now:** Jina, Mistral (easy voyage-style clones on demand); Anthropic has no embedding models (docs point to Voyage — already supported).
 - **Rerankers** converge on one shape — `(query, documents, topN) → sorted [{index, score}]` — across Cohere, Voyage, Jina, ZeroEntropy, Bedrock, TEI. Only Cohere/ZeroEntropy document 0–1 calibration; scores are ordinal, not comparable across providers.
 
@@ -734,7 +734,7 @@ Design rules from the survey: fill `Document` from the input slice (never send `
 
 **Work items, effort-ordered:**
 
-1. `provider/gemini.NewEmbedder` — SDK present; map InputType→`RETRIEVAL_*`; chunk at ~100; **renormalize truncated dims**.
+1. `provider/gemini.NewEmbedder` — SDK present; map InputType→`RETRIEVAL_*`; chunk at ~100. (The "renormalize truncated dims" step originally listed here was withdrawn — see §11.5.)
 2. `provider/ollama.NewEmbedder` — official client, native `/api/embed`; document the existing OpenAI-compat base-URL route for TEI/Together.
 3. `core.Reranker` + `provider/voyageai` Rerank — reuses its existing retry/backoff plumbing.
 4. New `provider/cohere` — embedder (`input_type` required; default `search_document`, option to override) + Rerank v4. Official SDK vs hand-rolled decided at implementation; fewer deps favors hand-rolled.

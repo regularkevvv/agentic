@@ -2,8 +2,10 @@ package anthropic
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -152,6 +154,10 @@ func TestConvertToolsStringRequired(t *testing.T) {
 	}
 }
 
+// TestConvertToolsNoProperties pins the schema emitted for a zero-argument
+// tool. Rebuilding the schema from the raw parameter map used to fall back to
+// "properties = params", turning the declared {"type":"object"} into a phantom
+// argument named "type".
 func TestConvertToolsNoProperties(t *testing.T) {
 	tools := []core.Tool{
 		{
@@ -170,25 +176,99 @@ func TestConvertToolsNoProperties(t *testing.T) {
 	if len(result) != 1 {
 		t.Fatalf("expected 1 tool, got %d", len(result))
 	}
+
+	schema := result[0].OfTool.InputSchema
+	props, ok := schema.Properties.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map properties, got %#v", schema.Properties)
+	}
+	if len(props) != 0 {
+		t.Errorf("expected empty properties for a zero-argument tool, got %#v", props)
+	}
+	if len(schema.Required) != 0 {
+		t.Errorf("expected no required fields, got %#v", schema.Required)
+	}
+	if _, injected := schema.ExtraFields["additionalProperties"]; injected {
+		t.Errorf("additionalProperties must not be injected, got %#v", schema.ExtraFields)
+	}
+}
+
+func TestConvertToolsPreservesDefsAndCallerConstraints(t *testing.T) {
+	defs := map[string]interface{}{
+		"Address": map[string]interface{}{"type": "object"},
+	}
+	tools := []core.Tool{
+		{
+			Type: core.ToolTypeFunction,
+			Function: core.Function{
+				Name: "ship",
+				Parameters: map[string]interface{}{
+					"type": "object",
+					"properties": map[string]interface{}{
+						"to": map[string]interface{}{"$ref": "#/$defs/Address"},
+					},
+					"required":             []interface{}{"to"},
+					"$defs":                defs,
+					"additionalProperties": true,
+					"description":          "shipping request",
+				},
+			},
+		},
+	}
+
+	schema := convertTools(tools)[0].OfTool.InputSchema
+
+	if got := schema.ExtraFields["$defs"]; !reflect.DeepEqual(got, defs) {
+		t.Errorf("$defs must be forwarded so $ref resolves, got %#v", got)
+	}
+	if got := schema.ExtraFields["additionalProperties"]; got != true {
+		t.Errorf("caller's additionalProperties must stand, got %#v", got)
+	}
+	if got := schema.ExtraFields["description"]; got != "shipping request" {
+		t.Errorf("unknown schema keys must be forwarded, got %#v", got)
+	}
+	if _, dup := schema.ExtraFields["type"]; dup {
+		t.Error(`"type" must not be duplicated into ExtraFields`)
+	}
+	if !reflect.DeepEqual(schema.Required, []string{"to"}) {
+		t.Errorf("unexpected required %#v", schema.Required)
+	}
 }
 
 func TestConvertToolChoice(t *testing.T) {
-	// Required
-	choice := convertToolChoice(core.ToolChoiceRequired)
-	if choice.OfAny == nil {
-		t.Error("expected OfAny for required tool choice")
+	tests := []struct {
+		name     string
+		choice   core.ToolChoice
+		thinking bool
+		want     string
+	}{
+		{"required", core.ToolChoiceRequired, false, "any"},
+		{"auto", core.ToolChoiceAuto, false, "auto"},
+		// "none" used to fall through to auto, silently letting the model
+		// call tools the caller had disabled.
+		{"none", core.ToolChoiceNone, false, "none"},
+		{"none with thinking", core.ToolChoiceNone, true, "none"},
+		// Anthropic rejects a forced tool choice while thinking is on.
+		{"required downgrades under thinking", core.ToolChoiceRequired, true, "auto"},
+		{"auto with thinking", core.ToolChoiceAuto, true, "auto"},
 	}
 
-	// Auto (default)
-	choice2 := convertToolChoice(core.ToolChoiceAuto)
-	if choice2.OfAuto == nil {
-		t.Error("expected OfAuto for auto tool choice")
-	}
-
-	// None (falls to default)
-	choice3 := convertToolChoice(core.ToolChoiceNone)
-	if choice3.OfAuto == nil {
-		t.Error("expected OfAuto for none tool choice (default)")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := convertToolChoice(tt.choice, tt.thinking)
+			var kind string
+			switch {
+			case got.OfAny != nil:
+				kind = "any"
+			case got.OfNone != nil:
+				kind = "none"
+			case got.OfAuto != nil:
+				kind = "auto"
+			}
+			if kind != tt.want {
+				t.Errorf("convertToolChoice(%q, %v) = %q, want %q", tt.choice, tt.thinking, kind, tt.want)
+			}
+		})
 	}
 }
 
@@ -201,7 +281,11 @@ func TestConvertFinishReason(t *testing.T) {
 		{anthropic.StopReasonStopSequence, core.FinishReasonStop},
 		{anthropic.StopReasonMaxTokens, core.FinishReasonLength},
 		{anthropic.StopReasonToolUse, core.FinishReasonToolCalls},
-		{anthropic.StopReason("unknown"), core.FinishReasonStop},
+		{anthropic.StopReasonRefusal, core.FinishReasonContentFilter},
+		{anthropic.StopReasonPauseTurn, core.FinishReasonError},
+		// An unrecognized reason must not be reported as a clean stop.
+		{anthropic.StopReason("some_future_reason"), core.FinishReasonUnknown},
+		{anthropic.StopReason(""), core.FinishReason("")},
 	}
 
 	for _, tt := range tests {
@@ -330,7 +414,185 @@ func TestBuildParamsThinkingAndResponseFormat(t *testing.T) {
 	if got := params.Temperature.Value; got != 1 {
 		t.Fatalf("expected thinking to force temperature=1, got %#v", got)
 	}
+	// The 1024 default ceiling sits below the 10000 budget, which Anthropic
+	// rejects outright. The floor must clear the budget.
+	if params.MaxTokens <= params.Thinking.OfEnabled.BudgetTokens {
+		t.Fatalf("max tokens %d must exceed thinking budget %d",
+			params.MaxTokens, params.Thinking.OfEnabled.BudgetTokens)
+	}
 }
+
+func TestBuildParamsThinkingMaxTokensFloor(t *testing.T) {
+	tests := []struct {
+		name      string
+		budget    int
+		maxTokens *int
+		want      int64
+	}{
+		{"default budget lifts default max", 0, nil, 10000 + thinkingAnswerHeadroom},
+		{"explicit budget lifts default max", 4000, nil, 4000 + thinkingAnswerHeadroom},
+		{"caller max below budget is lifted", 4000, intPtr(500), 4000 + thinkingAnswerHeadroom},
+		{"caller max equal to budget is lifted", 4000, intPtr(4000), 4000 + thinkingAnswerHeadroom},
+		{"caller max above budget is respected", 4000, intPtr(9000), 9000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model, _ := New("claude-sonnet-4-20250514", WithAPIKey("test-key"))
+			params := model.buildParams(&core.ChatRequest{
+				Model:     "claude-sonnet-4-20250514",
+				Messages:  []core.Message{core.NewTextMessage(core.RoleUser, "hello")},
+				MaxTokens: tt.maxTokens,
+				Thinking:  &core.ThinkingConfig{Enabled: true, BudgetTokens: tt.budget},
+			})
+			if params.MaxTokens != tt.want {
+				t.Errorf("max tokens = %d, want %d", params.MaxTokens, tt.want)
+			}
+			if params.MaxTokens <= params.Thinking.OfEnabled.BudgetTokens {
+				t.Errorf("max tokens %d does not exceed budget %d",
+					params.MaxTokens, params.Thinking.OfEnabled.BudgetTokens)
+			}
+		})
+	}
+}
+
+func TestBuildParamsAdaptiveThinkingModels(t *testing.T) {
+	temp := 0.3
+	topP := 0.8
+	topK := 40
+
+	for _, name := range []string{
+		"claude-opus-4-7",
+		"claude-opus-4-8",
+		"claude-sonnet-5-20260101",
+		"claude-fable-5",
+		"claude-mythos-5",
+	} {
+		t.Run(name, func(t *testing.T) {
+			model, _ := New(name, WithAPIKey("test-key"))
+			params := model.buildParams(&core.ChatRequest{
+				Model:       name,
+				Messages:    []core.Message{core.NewTextMessage(core.RoleUser, "hello")},
+				Temperature: &temp,
+				TopP:        &topP,
+				Thinking:    &core.ThinkingConfig{Enabled: true, BudgetTokens: 5000},
+				ProviderOptions: map[string]any{
+					ProviderKey: Options{TopK: &topK},
+				},
+			})
+
+			if params.Thinking.OfAdaptive == nil {
+				t.Fatalf("expected adaptive thinking, got %#v", params.Thinking)
+			}
+			if params.Thinking.OfEnabled != nil {
+				t.Error("adaptive models must not receive a budget thinking config")
+			}
+			if params.Temperature.Valid() {
+				t.Errorf("temperature must be omitted, got %#v", params.Temperature)
+			}
+			if params.TopP.Valid() {
+				t.Errorf("top_p must be omitted, got %#v", params.TopP)
+			}
+			if params.TopK.Valid() {
+				t.Errorf("top_k must be omitted, got %#v", params.TopK)
+			}
+		})
+	}
+}
+
+func TestBuildParamsBudgetThinkingModelUnaffected(t *testing.T) {
+	// A model outside the adaptive families keeps the budget form.
+	model, _ := New("claude-sonnet-4-6", WithAPIKey("test-key"))
+	params := model.buildParams(&core.ChatRequest{
+		Model:    "claude-sonnet-4-6",
+		Messages: []core.Message{core.NewTextMessage(core.RoleUser, "hello")},
+		Thinking: &core.ThinkingConfig{Enabled: true, BudgetTokens: 2000},
+	})
+	if params.Thinking.OfEnabled == nil || params.Thinking.OfAdaptive != nil {
+		t.Fatalf("expected budget thinking, got %#v", params.Thinking)
+	}
+}
+
+func TestBuildParamsStopSequencesAndProviderOptions(t *testing.T) {
+	model, _ := New("claude-sonnet-4-20250514", WithAPIKey("test-key"))
+	topK := 25
+
+	base := func(opts map[string]any) *core.ChatRequest {
+		return &core.ChatRequest{
+			Model:         "claude-sonnet-4-20250514",
+			Messages:      []core.Message{core.NewTextMessage(core.RoleUser, "hello")},
+			StopSequences: []string{"STOP", "END"},
+			Tools: []core.Tool{
+				{Type: core.ToolTypeFunction, Function: core.Function{Name: "a"}},
+				{Type: core.ToolTypeFunction, Function: core.Function{Name: "b"}},
+			},
+			ProviderOptions: opts,
+		}
+	}
+
+	params := model.buildParams(base(map[string]any{
+		ProviderKey: Options{TopK: &topK, CacheToolDefs: "1h"},
+	}))
+	if len(params.StopSequences) != 2 || params.StopSequences[0] != "STOP" {
+		t.Errorf("unexpected stop sequences %#v", params.StopSequences)
+	}
+	if params.TopK.Value != 25 {
+		t.Errorf("expected top_k 25, got %#v", params.TopK)
+	}
+	if cc := params.Tools[1].OfTool.CacheControl; cc.TTL != anthropic.CacheControlEphemeralTTLTTL1h {
+		t.Errorf("expected 1h cache breakpoint on the last tool, got %#v", cc)
+	}
+	if cc := params.Tools[0].OfTool.CacheControl; cc.TTL != "" {
+		t.Errorf("only the last tool carries the breakpoint, got %#v", cc)
+	}
+
+	// A pointer value is accepted too.
+	ptrParams := model.buildParams(base(map[string]any{
+		ProviderKey: &Options{CacheToolDefs: "5m"},
+	}))
+	if cc := ptrParams.Tools[1].OfTool.CacheControl; cc.TTL != anthropic.CacheControlEphemeralTTLTTL5m {
+		t.Errorf("expected 5m cache breakpoint, got %#v", cc)
+	}
+}
+
+func TestBuildParamsIgnoresForeignAndMistypedOptions(t *testing.T) {
+	model, _ := New("claude-sonnet-4-20250514", WithAPIKey("test-key"))
+
+	for _, opts := range []map[string]any{
+		{"openai": struct{ TopK int }{5}},
+		{ProviderKey: "not-an-options-struct"},
+		{ProviderKey: nil},
+		{ProviderKey: (*Options)(nil)},
+	} {
+		params := model.buildParams(&core.ChatRequest{
+			Model:    "claude-sonnet-4-20250514",
+			Messages: []core.Message{core.NewTextMessage(core.RoleUser, "hello")},
+			Tools: []core.Tool{
+				{Type: core.ToolTypeFunction, Function: core.Function{Name: "a"}},
+			},
+			ProviderOptions: opts,
+		})
+		if params.TopK.Valid() {
+			t.Errorf("top_k must stay unset for %#v, got %#v", opts, params.TopK)
+		}
+		if cc := params.Tools[0].OfTool.CacheControl; cc.TTL != "" {
+			t.Errorf("no cache breakpoint expected for %#v, got %#v", opts, cc)
+		}
+	}
+}
+
+func TestApplyToolCacheControlIgnoresUnknownTTL(t *testing.T) {
+	tools := convertTools([]core.Tool{
+		{Type: core.ToolTypeFunction, Function: core.Function{Name: "a"}},
+	})
+	applyToolCacheControl(tools, "7d")
+	if cc := tools[0].OfTool.CacheControl; cc.TTL != "" {
+		t.Errorf("unknown ttl must be ignored, got %#v", cc)
+	}
+	applyToolCacheControl(nil, "5m") // must not panic
+}
+
+func intPtr(v int) *int { return &v }
 
 func TestConvertResponseMessageEmpty(t *testing.T) {
 	// Test with empty content
@@ -358,12 +620,17 @@ func TestConvertResponseMessageUnknownType(t *testing.T) {
 func TestConvertResponseFull(t *testing.T) {
 	model, _ := New("claude-sonnet-4-20250514", WithAPIKey("test-key"))
 
+	// Built from JSON: ContentBlockUnion.AsText reads the raw payload, so a
+	// struct literal would produce an empty text block.
+	var textBlock anthropic.ContentBlockUnion
+	if err := json.Unmarshal([]byte(`{"type":"text","text":"hello"}`), &textBlock); err != nil {
+		t.Fatalf("unmarshal content block: %v", err)
+	}
+
 	resp := &anthropic.Message{
-		ID:    "msg_test",
-		Model: "claude-sonnet-4-20250514",
-		Content: []anthropic.ContentBlockUnion{
-			{Type: "text", Text: "hello"},
-		},
+		ID:         "msg_test",
+		Model:      "claude-sonnet-4-20250514",
+		Content:    []anthropic.ContentBlockUnion{textBlock},
 		StopReason: anthropic.StopReasonEndTurn,
 		Usage: anthropic.Usage{
 			InputTokens:  10,
@@ -376,11 +643,14 @@ func TestConvertResponseFull(t *testing.T) {
 	if result.ID != "msg_test" {
 		t.Errorf("expected ID %q, got %q", "msg_test", result.ID)
 	}
-	if len(result.Choices) != 1 {
-		t.Fatalf("expected 1 choice, got %d", len(result.Choices))
+	if result.Message.GetTextContent() != "hello" {
+		t.Errorf("expected message text %q, got %q", "hello", result.Message.GetTextContent())
 	}
-	if result.Choices[0].FinishReason != core.FinishReasonStop {
-		t.Errorf("expected stop, got %q", result.Choices[0].FinishReason)
+	if result.FinishReason != core.FinishReasonStop {
+		t.Errorf("expected stop, got %q", result.FinishReason)
+	}
+	if result.RawFinishReason != "end_turn" {
+		t.Errorf("expected raw finish reason %q, got %q", "end_turn", result.RawFinishReason)
 	}
 	if result.Usage.PromptTokens != 10 {
 		t.Errorf("expected 10 prompt tokens, got %d", result.Usage.PromptTokens)

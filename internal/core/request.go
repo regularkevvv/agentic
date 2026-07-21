@@ -74,18 +74,38 @@ type ThinkingConfig struct {
 
 // ChatRequest represents a standardized chat completion request.
 type ChatRequest struct {
-	Model            string
-	Messages         []Message
-	Temperature      *float64
-	MaxTokens        *int
-	TopP             *float64
-	FrequencyPenalty *float64
-	PresencePenalty  *float64
-	Tools            []Tool
-	ToolChoice       *ToolChoice
-	Stream           bool
-	ResponseFormat   *ResponseFormat
-	Thinking         *ThinkingConfig
+	Model          string
+	Messages       []Message
+	Temperature    *float64
+	MaxTokens      *int
+	TopP           *float64
+	Tools          []Tool
+	ToolChoice     *ToolChoice
+	Stream         bool
+	ResponseFormat *ResponseFormat
+	Thinking       *ThinkingConfig
+
+	// StopSequences halts generation when any of these strings is produced.
+	// Supported by every provider in this library. The generated text does
+	// not include the matched sequence.
+	StopSequences []string
+
+	// ProviderOptions carries provider-specific settings keyed by provider
+	// name ("anthropic", "openai", "gemini", "bedrock", "openrouter").
+	//
+	// Each provider reads only its own key and ignores every other, so one
+	// request may carry settings for several providers at once — useful when
+	// the same request is retried against a fallback. Values are the typed
+	// Options struct exported by that provider's package, so the producing
+	// side keeps compile-time checking:
+	//
+	//	req.ProviderOptions = map[string]any{
+	//		"anthropic": anthropic.Options{TopK: agentic.Int(40)},
+	//	}
+	//
+	// A provider that receives a value of an unexpected type ignores it
+	// rather than failing the request.
+	ProviderOptions map[string]any
 }
 
 // Validate ensures the ChatRequest is valid.
@@ -107,19 +127,21 @@ func (r *ChatRequest) Validate() error {
 
 // ChatResponse represents a standardized chat completion response.
 type ChatResponse struct {
-	ID                string
-	Model             string
-	Choices           []Choice
-	Usage             Usage
-	Created           time.Time
-	SystemFingerprint string
-}
+	ID      string
+	Model   string
+	Message Message
+	Usage   Usage
+	Created time.Time
 
-// Choice represents a response choice.
-type Choice struct {
-	Index        int
-	Message      Message
+	// FinishReason is why generation ended, normalized across providers.
+	// Values a provider reports that this library does not recognize map to
+	// FinishReasonUnknown rather than being reported as a clean stop.
 	FinishReason FinishReason
+
+	// RawFinishReason is the provider's original stop reason, passed through
+	// losslessly so callers can act on provider-specific values without this
+	// library having to enumerate them. Empty when the provider reported none.
+	RawFinishReason string
 }
 
 // FinishReason represents why the response ended.
@@ -130,6 +152,17 @@ const (
 	FinishReasonLength        FinishReason = "length"
 	FinishReasonToolCalls     FinishReason = "tool_calls"
 	FinishReasonContentFilter FinishReason = "content_filter"
+
+	// FinishReasonError indicates generation aborted before producing a
+	// complete answer — malformed model output, or an upstream failure
+	// reported in-band with a success status. Partial content may be
+	// present in the message but must not be treated as a whole answer.
+	FinishReasonError FinishReason = "error"
+
+	// FinishReasonUnknown indicates the provider reported a stop reason this
+	// library does not recognize. Inspect ChatResponse.RawFinishReason for
+	// the original value.
+	FinishReasonUnknown FinishReason = "unknown"
 )
 
 // Usage represents token usage statistics for an entire agent run.
