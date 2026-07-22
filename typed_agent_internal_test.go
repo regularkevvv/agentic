@@ -127,22 +127,6 @@ func TestTypedAgentHelpersAndTextProcessorError(t *testing.T) {
 		t.Fatal("expected replacement registry to contain only re-registered output tools")
 	}
 
-	last := lastAssistantMessage([]Message{
-		NewTextMessage(RoleUser, "question"),
-		NewTextMessage(RoleAssistant, "answer"),
-		NewTextMessage(RoleUser, "follow-up"),
-	})
-	if last == nil || last.GetTextContent() != "answer" {
-		t.Fatalf("unexpected last assistant message %#v", last)
-	}
-	if lastAssistantMessage([]Message{NewTextMessage(RoleUser, "only user")}) != nil {
-		t.Fatal("expected nil when there is no assistant message")
-	}
-
-	if _, err := ta.runtime.parseResult(context.Background(), dependencyEnvelope{}, &RunResult{Messages: []Message{NewTextMessage(RoleUser, "question")}}); err == nil || err.Error() != "no assistant message found in result" {
-		t.Fatalf("expected missing assistant message error, got %v", err)
-	}
-
 	model := &testutil.StubModel{
 		NameValue: "typed-model",
 		Response: &ChatResponse{
@@ -205,8 +189,8 @@ func TestTypedAgentRunAdditionalErrorPaths(t *testing.T) {
 		}, failingOutputSpec{err: errors.New("bad parse")}, WithMaxValidationRetries(0))
 
 		_, err := ta.Run(context.Background(), "prompt")
-		if err == nil || err.Error() != "parse structured output after 0 retries: bad parse" {
-			t.Fatalf("expected wrapped parse error, got %v", err)
+		if err == nil || err.Error() != "output validation failed after 0 retries: bad parse" {
+			t.Fatalf("expected validation error from shared fold, got %v", err)
 		}
 	})
 
@@ -220,8 +204,8 @@ func TestTypedAgentRunAdditionalErrorPaths(t *testing.T) {
 		}, failingResponseFormatSpec{err: errors.New("bad parse")}, WithMaxValidationRetries(0))
 
 		_, err := ta.Run(context.Background(), "prompt")
-		if err == nil || err.Error() != "parse structured output after 0 retries: bad parse" {
-			t.Fatalf("expected wrapped parse error, got %v", err)
+		if err == nil || err.Error() != "output validation failed after 0 retries: bad parse" {
+			t.Fatalf("expected validation error from shared fold, got %v", err)
 		}
 	})
 

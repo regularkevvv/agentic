@@ -110,19 +110,51 @@ func NewAgentWithDepsDynamic[D any](promptFn DynamicPromptWithDeps[D], model Mod
 }
 
 func (a *Agent) Run(ctx context.Context, prompt string, opts ...RunOption) (*Result[string], error) {
-	return a.core.run(ctx, prompt, dependencyEnvelope{}, opts...)
+	message := NewTextMessage(RoleUser, prompt)
+	execution, err := a.Drive(ctx, DriveInput{Mode: DriveStart, Prompt: &message}, opts...)
+	if execution == nil {
+		return nil, err
+	}
+	return execution.Result, executionError(execution, err)
 }
 
 func (a *AgentWithDeps[D]) Run(ctx context.Context, prompt string, deps D, opts ...RunOption) (*Result[string], error) {
-	return a.core.run(ctx, prompt, core.NewDependencyEnvelope(deps), opts...)
+	message := NewTextMessage(RoleUser, prompt)
+	execution, err := a.Drive(ctx, DriveInput{Mode: DriveStart, Prompt: &message}, deps, opts...)
+	if execution == nil {
+		return nil, err
+	}
+	return execution.Result, executionError(execution, err)
+}
+
+// Drive starts or continues a dependency-free text execution.
+func (a *Agent) Drive(ctx context.Context, input DriveInput, opts ...RunOption) (*Execution[string], error) {
+	return driveWithEvaluator(a.core, ctx, input, dependencyEnvelope{}, textCompletionEvaluator(a.core), opts...)
+}
+
+// Resume completes a suspended dependency-free text execution.
+func (a *Agent) Resume(ctx context.Context, input ResumeInput, opts ...RunOption) (*Execution[string], error) {
+	return resumeWithEvaluator(a.core, ctx, input, dependencyEnvelope{}, textCompletionEvaluator(a.core), opts...)
+}
+
+// Drive starts or continues a dependency-aware text execution with its exact
+// dependency value.
+func (a *AgentWithDeps[D]) Drive(ctx context.Context, input DriveInput, deps D, opts ...RunOption) (*Execution[string], error) {
+	return driveWithEvaluator(a.core, ctx, input, core.NewDependencyEnvelope(deps), textCompletionEvaluator(a.core), opts...)
+}
+
+// Resume completes a suspended dependency-aware text execution with its exact
+// dependency value.
+func (a *AgentWithDeps[D]) Resume(ctx context.Context, input ResumeInput, deps D, opts ...RunOption) (*Execution[string], error) {
+	return resumeWithEvaluator(a.core, ctx, input, core.NewDependencyEnvelope(deps), textCompletionEvaluator(a.core), opts...)
 }
 
 func (a *AgentWithDeps[D]) Bind(deps D) Runner[string] {
-	return newBoundRunner(a.Run, a.RunStream, func(context.Context) (D, error) { return deps, nil })
+	return newBoundRunner(a.RunStream, a.Drive, a.Resume, func(context.Context) (D, error) { return deps, nil })
 }
 
 func (a *AgentWithDeps[D]) BindProvider(provider DepsProvider[D]) Runner[string] {
-	return newBoundRunner(a.Run, a.RunStream, provider)
+	return newBoundRunner(a.RunStream, a.Drive, a.Resume, provider)
 }
 
 func (a *AgentWithDeps[D]) SetDynamicPrompt(fn DynamicPromptWithDeps[D]) *AgentWithDeps[D] {
@@ -231,15 +263,6 @@ func (c *agentCore) validateOutput(ctx context.Context, deps dependencyEnvelope,
 	return nil
 }
 
-func (c *agentCore) resolveMaxRetries(handler ToolHandler, globalDefault int) int {
-	if configurable, ok := handler.(interface{ ToolConfig() *ToolConfig }); ok {
-		if cfg := configurable.ToolConfig(); cfg != nil && cfg.MaxRetries != nil {
-			return *cfg.MaxRetries
-		}
-	}
-	return globalDefault
-}
-
 func (c *agentCore) addTool(tool Tool, handler ToolHandler) {
 	if c.registry == nil {
 		c.registry = NewRegistry()
@@ -328,25 +351,44 @@ func firstNonNil[T any](values ...*T) *T {
 }
 
 type boundRunner[O, D any] struct {
-	run      func(context.Context, string, D, ...RunOption) (*Result[O], error)
 	stream   func(context.Context, string, D, ...RunOption) (*StreamResult, error)
+	drive    func(context.Context, DriveInput, D, ...RunOption) (*Execution[O], error)
+	resume   func(context.Context, ResumeInput, D, ...RunOption) (*Execution[O], error)
 	provider DepsProvider[D]
 }
 
 func newBoundRunner[O, D any](
-	run func(context.Context, string, D, ...RunOption) (*Result[O], error),
 	stream func(context.Context, string, D, ...RunOption) (*StreamResult, error),
+	drive func(context.Context, DriveInput, D, ...RunOption) (*Execution[O], error),
+	resume func(context.Context, ResumeInput, D, ...RunOption) (*Execution[O], error),
 	provider DepsProvider[D],
 ) *boundRunner[O, D] {
-	return &boundRunner[O, D]{run: run, stream: stream, provider: provider}
+	return &boundRunner[O, D]{stream: stream, drive: drive, resume: resume, provider: provider}
 }
 
 func (b *boundRunner[O, D]) Run(ctx context.Context, prompt string, opts ...RunOption) (*Result[O], error) {
+	message := NewTextMessage(RoleUser, prompt)
+	execution, err := b.Drive(ctx, DriveInput{Mode: DriveStart, Prompt: &message}, opts...)
+	if execution == nil {
+		return nil, err
+	}
+	return execution.Result, executionError(execution, err)
+}
+
+func (b *boundRunner[O, D]) Drive(ctx context.Context, input DriveInput, opts ...RunOption) (*Execution[O], error) {
 	deps, err := b.provider(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("dependency provider: %w", err)
 	}
-	return b.run(ctx, prompt, deps, opts...)
+	return b.drive(ctx, input, deps, opts...)
+}
+
+func (b *boundRunner[O, D]) Resume(ctx context.Context, input ResumeInput, opts ...RunOption) (*Execution[O], error) {
+	deps, err := b.provider(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("dependency provider: %w", err)
+	}
+	return b.resume(ctx, input, deps, opts...)
 }
 
 func (b *boundRunner[O, D]) RunStream(ctx context.Context, prompt string, opts ...RunOption) (*StreamResult, error) {
@@ -358,4 +400,6 @@ func (b *boundRunner[O, D]) RunStream(ctx context.Context, prompt string, opts .
 }
 
 var _ StreamingRunner[string] = (*Agent)(nil)
+var _ Driver[string] = (*Agent)(nil)
 var _ StreamingRunner[string] = (*boundRunner[string, struct{}])(nil)
+var _ Driver[string] = (*boundRunner[string, struct{}])(nil)

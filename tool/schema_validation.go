@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+
+	"github.com/regularkevvv/agentic/internal/core"
 )
 
 // validateToolInput validates model-produced arguments against the same JSON
@@ -13,6 +15,13 @@ import (
 // so handlers must not assume the wire schema was enforced for them.
 func validateToolInput(input map[string]interface{}, schema map[string]interface{}) error {
 	return validateSchemaValue(input, schema, schema, "input")
+}
+
+// ValidateInput checks arguments against a tool's JSON Schema before a handler
+// starts. It is used by resumable execution to reject invalid override inputs
+// for a whole suspended batch before any side effect occurs.
+func ValidateInput(input map[string]interface{}, tool core.Tool) error {
+	return validateToolInput(input, tool.Function.Parameters)
 }
 
 func validateSchemaValue(value interface{}, schema, root map[string]interface{}, path string) error {

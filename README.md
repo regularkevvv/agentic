@@ -6,7 +6,7 @@
 
 A lightweight, type-safe Go framework for building AI agents with tool use, structured output, and multi-agent orchestration.
 
-Current release: **v0.2.0**.
+Current release: **v0.3.0**. The next release is **v0.4.0**.
 
 ## Features
 
@@ -14,6 +14,8 @@ Current release: **v0.2.0**.
 - **Type-safe tools** -- generic tool builders with automatic JSON Schema generation from Go structs
 - **Structured output** -- `TypedAgent[OutputT]` returns validated typed results
 - **Streaming** -- first-class streaming with channel-based event delivery
+- **Resumable execution** -- explicit `Driver` control for start, continue, suspend, and resume
+- **Execution events** -- canonical lifecycle, transcript, tool, and preview events for one run
 - **Dependency injection** -- opt-in, exact dependency types shared by runs, prompts, tools, validators, and handoffs
 - **Multi-agent** -- delegate tasks between agents with `Handoff`
 - **Context-aware tools** -- cancellation, deadlines, tracing, and request-scoped values
@@ -234,6 +236,40 @@ for event := range stream.Events {
 }
 ```
 
+## Controlled and Resumable Runs
+
+`Run` remains the concise API for ordinary one-shot requests. When an
+orchestrator needs to continue a transcript, install per-run controls, or resume
+a deferred tool batch, opt into the explicit `Driver` capability:
+
+```go
+driver, err := agentic.RequireDriver[string](agent)
+if err != nil {
+    log.Fatal(err)
+}
+
+events := agentic.EventSinkFunc(func(context.Context, agentic.Event) error {
+    return nil // persist or observe canonical execution events here
+})
+prompt := agentic.NewTextMessage(agentic.RoleUser, "Prepare the report.")
+execution, err := driver.Drive(ctx, agentic.DriveInput{
+    Mode:   agentic.DriveStart,
+    Prompt: &prompt,
+}, agentic.WithRunEventSink(events))
+if err != nil {
+    log.Fatal(err)
+}
+fmt.Println(execution.Status)
+```
+
+`DriveContinue` accepts an already paired transcript without appending a
+synthetic user prompt. A `ToolGate` may suspend an admitted batch before any
+handler runs; persist the returned `Execution.Result.Messages` and
+`Execution.Suspension`, then call `Resume` with exactly one
+`ToolResumeDecision` for each suspended executable call. `Bind` and
+`BindProvider` still return `Runner`, while their concrete values also implement
+`Driver` and can be checked with `RequireDriver`.
+
 ## History Processors
 
 Manage context window with built-in processors:
@@ -279,6 +315,9 @@ perRun := agent.BindProvider(func(ctx context.Context) (*MyDeps, error) {
 agentic/
   agent.go            # Core agent orchestration
   agent_options.go    # Configuration options
+  driver.go           # Start/continue/resume execution capability
+  execution_loop.go   # Shared blocking and streaming execution fold
+  events.go           # Canonical execution events
   stream.go           # Streaming support
   typed_agent.go      # TypedAgent for structured output
   handoff.go          # Agent-to-agent delegation

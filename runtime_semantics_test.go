@@ -51,7 +51,7 @@ func TestTypedAgentExhaustiveExecutesOrdinaryToolsAlongsideOutput(t *testing.T) 
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("expected both ordinary tools to execute, got %d calls", got)
 	}
-	if len(result.ToolCalls) != 3 || len(result.ToolResults) != 2 {
+	if len(result.ToolCalls) != 3 || len(result.ToolResults) != 3 {
 		t.Fatalf("unexpected calls/results: %d/%d", len(result.ToolCalls), len(result.ToolResults))
 	}
 }

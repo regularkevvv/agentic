@@ -49,6 +49,9 @@ type UploadedFile = core.UploadedFile
 type StreamResult = core.StreamResult
 type StreamEvent = core.StreamEvent
 type StreamEventType = core.StreamEventType
+type ExecutionStatus = core.ExecutionStatus
+type Suspension = core.Suspension
+type ExecutionSnapshot = core.ExecutionSnapshot
 type OutputMode = core.OutputMode
 type Embedder = core.Embedder
 type EmbeddingRequest = core.EmbeddingRequest
@@ -106,6 +109,11 @@ const (
 	StreamEventDone          = core.StreamEventDone
 	StreamEventError         = core.StreamEventError
 	StreamEventThinkingDelta = core.StreamEventThinkingDelta
+	ExecutionCompleted       = core.ExecutionCompleted
+	ExecutionSuspended       = core.ExecutionSuspended
+	ExecutionStopped         = core.ExecutionStopped
+	ExecutionInterrupted     = core.ExecutionInterrupted
+	ExecutionFailed          = core.ExecutionFailed
 )
 
 // ---------------------------------------------------------------------------
