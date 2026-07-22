@@ -3,7 +3,7 @@ package agentic
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"sync"
 
 	"github.com/regularkevvv/agentic/internal/core"
 )
@@ -17,96 +17,180 @@ func (a *AgentWithDeps[D]) RunStream(ctx context.Context, prompt string, deps D,
 }
 
 func (c *agentCore) runStream(ctx context.Context, prompt string, deps dependencyEnvelope, opts ...RunOption) (*StreamResult, error) {
+	return runStreamWithEvaluator(c, ctx, prompt, deps, textCompletionEvaluator(c), opts...)
+}
+
+// runStreamWithEvaluator is the backwards-compatible StreamResult projection
+// of the canonical Driver fold. The channel remains intentionally lossless and
+// backpressured; harness subscribers use EventSink instead.
+func runStreamWithEvaluator[O any](
+	c *agentCore,
+	ctx context.Context,
+	prompt string,
+	deps dependencyEnvelope,
+	evaluator completionEvaluator[O],
+	opts ...RunOption,
+) (*StreamResult, error) {
 	if err := c.preflight(ctx, deps); err != nil {
 		return nil, err
 	}
-	streamModel, ok := c.model.(StreamModel)
-	if !ok {
-		return c.runStreamFallback(ctx, prompt, deps, opts...)
-	}
-	return c.runStreamTrue(ctx, prompt, deps, streamModel, opts...)
-}
-
-func (c *agentCore) runStreamTrue(ctx context.Context, prompt string, deps dependencyEnvelope, model StreamModel, opts ...RunOption) (*StreamResult, error) {
-	ls, err := c.prepareLoopAfterPreflight(ctx, prompt, deps, opts...)
+	message := NewTextMessage(RoleUser, prompt)
+	ch := make(chan StreamEvent, 64)
+	stream := NewStreamResult(ch)
+	legacy := newLegacyStreamSink(ch)
+	existing := applyRunOptions(opts).eventSink
+	combined := fanoutEventSink{first: existing, second: legacy}
+	preparedOpts := append(append([]RunOption(nil), opts...), WithRunModelStreaming(true), WithRunEventSink(combined))
+	ls, err := c.prepareLoopForDrive(ctx, DriveInput{Mode: DriveStart, Prompt: &message}, deps, preparedOpts...)
 	if err != nil {
 		return nil, err
 	}
-	ch := make(chan StreamEvent, 64)
-	result := NewStreamResult(ch)
 
 	go func() {
 		defer close(ch)
-		for iteration := 0; iteration < ls.maxIterations; iteration++ {
-			if err := ls.checkPreRequestLimits(); err != nil {
-				ch <- StreamEvent{Type: StreamEventError, Error: err}
-				return
-			}
-			request, err := c.buildRequest(ls, true)
-			if err != nil {
-				ch <- StreamEvent{Type: StreamEventError, Error: err}
-				return
-			}
-			stream, err := model.RequestStream(ctx, request)
-			if err != nil {
-				ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("model request: %w", err)}
-				return
-			}
-			message, usage, finishReason, err := c.consumeAndForward(stream, ch)
-			if err != nil {
-				ch <- StreamEvent{Type: StreamEventError, Error: err}
-				return
-			}
-			ls.totalUsage.Add(usage)
-			if err := ls.checkPostResponseLimits(); err != nil {
-				ch <- StreamEvent{Type: StreamEventError, Error: err}
-				return
-			}
-			ls.messages = append(ls.messages, message)
-			toolUses := message.GetToolUses()
-			if len(toolUses) == 0 {
-				output := message.GetTextContent()
-				if validationErr := c.validateOutput(ctx, deps, output); validationErr != nil {
-					ls.validationRetries++
-					if ls.validationRetries > c.config.maxValidationRetries {
-						ch <- StreamEvent{Type: StreamEventError, Error: fmt.Errorf("output validation failed after %d retries: %w", c.config.maxValidationRetries, validationErr)}
-						return
-					}
-					ls.messages = append(ls.messages, NewTextMessage(RoleUser, fmt.Sprintf("Output validation error: %s\nPlease try again.", validationErr)))
-					continue
-				}
-				ch <- StreamEvent{Type: StreamEventDone, Usage: &ls.totalUsage, FinishReason: finishReason}
-				return
-			}
-			outcome, err := c.processToolUses(ls, toolUses)
-			if err != nil {
-				ch <- StreamEvent{Type: StreamEventError, Error: err}
-				return
-			}
-			for _, toolResult := range outcome.results {
-				ch <- StreamEvent{Type: StreamEventToolResult, Delta: FormatToolResult(toolResult.Content), ToolCallID: toolResult.ToolUseID}
-			}
-			if outcome.hasOutput && !outcome.retryRequested {
-				ch <- StreamEvent{Type: StreamEventDone, Usage: &ls.totalUsage, FinishReason: finishReason}
-				return
+		execution, runErr := driveLoop(c, ls, evaluator, nil, nil)
+		if execution != nil {
+			stream.SetSnapshot(executionSnapshot(execution))
+		}
+		if runErr != nil {
+			legacy.sendErrorIfNeeded(runErr)
+			return
+		}
+		if execution != nil {
+			switch execution.Status {
+			case ExecutionSuspended:
+				legacy.sendErrorIfNeeded(ErrExecutionSuspended)
+			case ExecutionStopped:
+				legacy.sendErrorIfNeeded(ErrExecutionStopped)
+			case ExecutionInterrupted:
+				legacy.sendErrorIfNeeded(ErrExecutionInterrupted)
+			case ExecutionFailed:
+				legacy.sendErrorIfNeeded(ErrExecutionFailed)
 			}
 		}
-		ch <- StreamEvent{Type: StreamEventError, Error: &MaxIterationsError{MaxIterations: ls.maxIterations}}
 	}()
-	return result, nil
+	return stream, nil
 }
 
-// consumeAndForward drains one model stream, forwarding every event onward and
-// accumulating the parts needed to reconstruct the assistant turn. It returns
-// the reconstructed message, the usage reported for the request, and the
-// provider's finish reason.
+type fanoutEventSink struct {
+	first  EventSink
+	second EventSink
+}
+
+func (s fanoutEventSink) Emit(ctx context.Context, event Event) error {
+	if s.first != nil {
+		if err := s.first.Emit(ctx, event); err != nil {
+			return err
+		}
+	}
+	if s.second != nil {
+		return s.second.Emit(ctx, event)
+	}
+	return nil
+}
+
+type legacyStreamSink struct {
+	ch chan<- StreamEvent
+
+	mu           sync.Mutex
+	textSeen     map[int]bool
+	callSeen     map[string]bool
+	terminalSent bool
+}
+
+func newLegacyStreamSink(ch chan<- StreamEvent) *legacyStreamSink {
+	return &legacyStreamSink{
+		ch:       ch,
+		textSeen: make(map[int]bool),
+		callSeen: make(map[string]bool),
+	}
+}
+
+func (s *legacyStreamSink) Emit(_ context.Context, event Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	switch value := event.(type) {
+	case *TextPreviewEvent:
+		s.textSeen[value.TurnIndex()] = true
+		s.ch <- StreamEvent{Type: StreamEventTextDelta, Delta: value.Delta}
+	case *ThinkingPreviewEvent:
+		s.ch <- StreamEvent{
+			Type:         StreamEventThinkingDelta,
+			Delta:        value.Delta,
+			Signature:    value.Signature,
+			ProviderName: value.ProviderName,
+			ThinkingID:   value.ThinkingID,
+		}
+	case *ToolCallPreviewEvent:
+		s.sendToolCallStart(value.Call)
+	case *ToolArgumentPreviewEvent:
+		s.ch <- StreamEvent{Type: StreamEventToolCallDelta, ToolCallID: value.ToolCallID, Delta: value.Delta}
+	case *AssistantCommittedEvent:
+		if !s.textSeen[value.TurnIndex()] {
+			if text := value.Message.GetTextContent(); text != "" {
+				s.ch <- StreamEvent{Type: StreamEventTextDelta, Delta: text}
+			}
+		}
+		for _, call := range value.Message.GetToolUses() {
+			s.sendToolCallStart(call)
+		}
+	case *ToolStartedEvent:
+		s.sendToolCallStart(value.Call)
+	case *ToolResultCommittedEvent:
+		s.ch <- StreamEvent{
+			Type:       StreamEventToolResult,
+			ToolCallID: value.Result.ToolUseID,
+			Delta:      FormatToolResult(value.Result.Content),
+		}
+	case *RunCompletedEvent:
+		if !s.terminalSent {
+			usage := value.Usage
+			s.ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, FinishReason: value.FinishReason}
+			s.terminalSent = true
+		}
+	case *RunErrorEvent:
+		s.sendErrorLocked(value.Error)
+	case *RunInterruptedEvent:
+		s.sendErrorLocked(ErrExecutionInterrupted)
+	case *RunSuspendedEvent:
+		s.sendErrorLocked(ErrExecutionSuspended)
+	case *RunEndedEvent:
+		if value.Status == ExecutionStopped {
+			s.sendErrorLocked(ErrExecutionStopped)
+		}
+	}
+	return nil
+}
+
+func (s *legacyStreamSink) sendToolCallStart(call ToolUse) {
+	if s.callSeen[call.ID] {
+		return
+	}
+	s.callSeen[call.ID] = true
+	copy := call
+	s.ch <- StreamEvent{Type: StreamEventToolCallStart, ToolUse: &copy}
+}
+
+func (s *legacyStreamSink) sendErrorIfNeeded(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sendErrorLocked(err)
+}
+
+func (s *legacyStreamSink) sendErrorLocked(err error) {
+	if s.terminalSent {
+		return
+	}
+	s.ch <- StreamEvent{Type: StreamEventError, Error: err}
+	s.terminalSent = true
+}
+
+// consumeAndForward remains a private compatibility helper for provider and
+// regression tests. Agent runs no longer use it: previews now flow through the
+// canonical EventSink before being projected by legacyStreamSink.
 func (c *agentCore) consumeAndForward(stream *StreamResult, out chan<- StreamEvent) (Message, Usage, FinishReason, error) {
 	var textContent string
 	var thinkingContent string
-	// Reasoning metadata arrives on the thinking events themselves. It must be
-	// carried onto the reconstructed block: providers that issue a signature
-	// reject a thinking block replayed without one, so dropping it here makes
-	// streaming and multi-turn reasoning mutually exclusive.
 	var thinkingSignature, thinkingProvider, thinkingID string
 	var usage Usage
 	var finishReason FinishReason
@@ -173,34 +257,11 @@ func (c *agentCore) consumeAndForward(stream *StreamResult, out chan<- StreamEve
 	}
 	for _, id := range toolCallOrder {
 		toolCall := toolCalls[id]
-		var input map[string]interface{}
+		var input map[string]any
 		if toolCall.args != "" {
 			_ = json.Unmarshal([]byte(toolCall.args), &input)
 		}
 		message.Content = append(message.Content, Part{Type: ContentToolUse, ToolUse: &ToolUse{ID: toolCall.id, Name: toolCall.name, Input: input}})
 	}
 	return message, usage, finishReason, nil
-}
-
-func (c *agentCore) runStreamFallback(ctx context.Context, prompt string, deps dependencyEnvelope, opts ...RunOption) (*StreamResult, error) {
-	ch := make(chan StreamEvent, 32)
-	result := NewStreamResult(ch)
-	go func() {
-		defer close(ch)
-		runResult, err := c.runAfterPreflight(ctx, prompt, deps, opts...)
-		if err != nil {
-			ch <- StreamEvent{Type: StreamEventError, Error: err}
-			return
-		}
-		for _, call := range runResult.ToolCalls {
-			call := call
-			ch <- StreamEvent{Type: StreamEventToolCallStart, ToolUse: &call}
-		}
-		if runResult.Output != "" {
-			ch <- StreamEvent{Type: StreamEventTextDelta, Delta: runResult.Output}
-		}
-		usage := runResult.Usage
-		ch <- StreamEvent{Type: StreamEventDone, Usage: &usage, FinishReason: runResult.FinishReason}
-	}()
-	return result, nil
 }

@@ -11,6 +11,25 @@ import (
 // run receives a nil or typed-nil dependency value.
 var ErrNilDeps = errors.New("agent dependencies must not be nil")
 
+// ErrDriverRequired is returned when a Runner does not expose the explicit
+// Driver capability required for session-controlled execution.
+var ErrDriverRequired = errors.New("runner must implement agentic.Driver")
+
+// Input and transcript errors are returned before any model request or tool
+// handler starts.
+var (
+	ErrDriveInput           = errors.New("invalid driver input")
+	ErrTranscriptInvalid    = errors.New("invalid transcript")
+	ErrSuspensionVersion    = errors.New("unsupported suspension version")
+	ErrSuspensionMismatch   = errors.New("suspension does not match execution")
+	ErrResumeDecision       = errors.New("invalid tool resume decision")
+	ErrTurnDecision         = errors.New("invalid turn decision")
+	ErrExecutionSuspended   = errors.New("agent execution suspended")
+	ErrExecutionStopped     = errors.New("agent execution stopped")
+	ErrExecutionInterrupted = errors.New("agent execution interrupted")
+	ErrExecutionFailed      = errors.New("agent execution failed")
+)
+
 // ModelRetry is a sentinel error that tools can return to request a retry.
 // When a tool returns this error, the error message is sent back to the LLM
 // as a tool error, and the agent re-enters the loop (up to MaxRetries).

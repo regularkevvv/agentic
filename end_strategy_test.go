@@ -129,9 +129,14 @@ func TestEndStrategyEarly_StopsAtOutputTool(t *testing.T) {
 		t.Error("expected side_effect tool NOT to be called with EndStrategyEarly")
 	}
 
-	// Should have returned with the output tool call recorded
-	if len(result.ToolCalls) != 1 {
-		t.Errorf("expected 1 tool call (only the output tool), got %d", len(result.ToolCalls))
+	// The transcript must pair every model-emitted call, even calls skipped by
+	// early output. The skipped side effect remains visible as a deterministic
+	// error result instead of leaving an invalid tool frontier behind.
+	if len(result.ToolCalls) != 2 || len(result.ToolResults) != 2 {
+		t.Errorf("expected paired results for both calls, got calls/results %d/%d", len(result.ToolCalls), len(result.ToolResults))
+	}
+	if !result.ToolResults[1].IsError {
+		t.Errorf("expected skipped side effect to have an error result, got %#v", result.ToolResults[1])
 	}
 }
 

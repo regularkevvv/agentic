@@ -1,6 +1,9 @@
 package core
 
-import "sync"
+import (
+	"encoding/json"
+	"sync"
+)
 
 // StreamEventType represents the type of streaming event.
 type StreamEventType int
@@ -65,6 +68,9 @@ type StreamResult struct {
 	text string
 	err  error
 	done chan struct{}
+
+	snapshotMu sync.RWMutex
+	snapshot   *ExecutionSnapshot
 }
 
 // NewStreamResult creates a StreamResult backed by the given channel.
@@ -104,4 +110,55 @@ func (sr *StreamResult) Text() (string, error) {
 func (sr *StreamResult) Wait() error {
 	sr.consume()
 	return sr.err
+}
+
+// SetSnapshot records the final or partial execution state for an
+// agent-owned stream. It is exported so the root agent package can attach the
+// result of its execution fold without making provider streams depend on that
+// package. Provider implementations normally do not call it.
+func (sr *StreamResult) SetSnapshot(snapshot ExecutionSnapshot) {
+	sr.snapshotMu.Lock()
+	defer sr.snapshotMu.Unlock()
+	copy := cloneExecutionSnapshot(snapshot)
+	sr.snapshot = &copy
+}
+
+// Snapshot returns the final or partial execution state when this stream was
+// produced by an Agentic agent run. It never consumes Events and is therefore
+// safe to call after ranging over the event channel. Provider-level streams
+// return false because they do not own an agent execution.
+func (sr *StreamResult) Snapshot() (ExecutionSnapshot, bool) {
+	sr.snapshotMu.RLock()
+	defer sr.snapshotMu.RUnlock()
+	if sr.snapshot == nil {
+		return ExecutionSnapshot{}, false
+	}
+	return cloneExecutionSnapshot(*sr.snapshot), true
+}
+
+func cloneExecutionSnapshot(snapshot ExecutionSnapshot) ExecutionSnapshot {
+	copy := snapshot
+	copy.Messages = cloneSnapshotJSON(snapshot.Messages)
+	copy.ToolCalls = cloneSnapshotJSON(snapshot.ToolCalls)
+	copy.ToolResults = append([]ToolExecutionResult(nil), snapshot.ToolResults...)
+	if snapshot.Suspension != nil {
+		suspension := *snapshot.Suspension
+		suspension.Payload = append([]byte(nil), snapshot.Suspension.Payload...)
+		copy.Suspension = &suspension
+	}
+	return copy
+}
+
+func cloneSnapshotJSON[T any](value []T) []T {
+	if len(value) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err == nil {
+		var copy []T
+		if json.Unmarshal(encoded, &copy) == nil {
+			return copy
+		}
+	}
+	return append([]T(nil), value...)
 }

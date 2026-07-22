@@ -5,7 +5,46 @@ All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the major version is 0, breaking changes may appear in minor releases.
 
-## [0.3.0] — Unreleased
+## [0.4.0] — Unreleased
+
+This release makes an agent execution an explicit, resumable capability. It is
+an observable transcript change for consumers that relied on unmatched tool
+calls under early output handling: every completed assistant tool call now has
+one paired result.
+
+### Added
+
+- **`Driver[O]`** — `Drive` starts or continues an explicit transcript and
+  `Resume` completes a suspended tool frontier. `RequireDriver` lets an
+  orchestrator opt into the capability without widening the existing
+  `Runner[O]` interface.
+- **Durable suspension metadata** — suspension state carries its frontier hash,
+  identity, usage/retry state, and execution configuration fingerprint. Resume
+  validates all decisions and override inputs before handlers run.
+- **Per-run controls** — turn hooks, canonical event sinks, immutable toolset
+  overlays, batch gates, result processors, streaming transport selection, and
+  tool-cancellation grace are available as `RunOption`s.
+- **Canonical execution events** — typed preview, authoritative, and lifecycle
+  events report commits from one execution fold.
+- **`StreamResult.Snapshot`** — agent-owned streams expose a defensive final or
+  partial execution snapshot after completion; provider-owned streams remain
+  snapshot-free.
+- **`CurrentToolCall`** — handlers can retrieve the admitted call ID, name, and
+  retry attempt from their context.
+
+### Changed
+
+- Blocking, streaming, text, and typed runs share one fold for limits, tool
+  pairing, retries, validation, hooks, and terminal arbitration.
+- Typed output is parsed and validated before a turn hook observes a completion
+  candidate. Invalid output retries within the same fold.
+- Early output and failed result projection now emit deterministic paired tool
+  results for every skipped or failed call instead of leaving an invalid
+  transcript frontier.
+- Truncated model turns fail before their partial assistant message or tool
+  calls can enter the transcript or execute.
+
+## [0.3.0] — 2026-07-20
 
 This is a **breaking release**. It corrects a set of wire-protocol defects that
 could not be fixed without changing public types, and it takes the opportunity

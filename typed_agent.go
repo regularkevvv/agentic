@@ -2,7 +2,6 @@ package agentic
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/regularkevvv/agentic/internal/core"
 )
@@ -84,27 +83,59 @@ func configureAgentOutput[O any](c *agentCore, output OutputSpec[O]) {
 }
 
 func (a *TypedAgent[O]) Run(ctx context.Context, prompt string, opts ...RunOption) (*Result[O], error) {
-	return a.runtime.run(ctx, prompt, dependencyEnvelope{}, opts...)
+	message := NewTextMessage(RoleUser, prompt)
+	execution, err := a.Drive(ctx, DriveInput{Mode: DriveStart, Prompt: &message}, opts...)
+	if execution == nil {
+		return nil, err
+	}
+	return execution.Result, executionError(execution, err)
 }
 
 func (a *TypedAgentWithDeps[O, D]) Run(ctx context.Context, prompt string, deps D, opts ...RunOption) (*Result[O], error) {
-	return a.runtime.run(ctx, prompt, core.NewDependencyEnvelope(deps), opts...)
+	message := NewTextMessage(RoleUser, prompt)
+	execution, err := a.Drive(ctx, DriveInput{Mode: DriveStart, Prompt: &message}, deps, opts...)
+	if execution == nil {
+		return nil, err
+	}
+	return execution.Result, executionError(execution, err)
 }
 
 func (a *TypedAgent[O]) RunStream(ctx context.Context, prompt string, opts ...RunOption) (*StreamResult, error) {
-	return a.runtime.core.runStream(ctx, prompt, dependencyEnvelope{}, opts...)
+	return a.runtime.runStream(ctx, prompt, dependencyEnvelope{}, opts...)
 }
 
 func (a *TypedAgentWithDeps[O, D]) RunStream(ctx context.Context, prompt string, deps D, opts ...RunOption) (*StreamResult, error) {
-	return a.runtime.core.runStream(ctx, prompt, core.NewDependencyEnvelope(deps), opts...)
+	return a.runtime.runStream(ctx, prompt, core.NewDependencyEnvelope(deps), opts...)
+}
+
+// Drive starts or continues a dependency-free typed execution.
+func (a *TypedAgent[O]) Drive(ctx context.Context, input DriveInput, opts ...RunOption) (*Execution[O], error) {
+	return a.runtime.drive(ctx, input, dependencyEnvelope{}, opts...)
+}
+
+// Resume completes a suspended dependency-free typed execution.
+func (a *TypedAgent[O]) Resume(ctx context.Context, input ResumeInput, opts ...RunOption) (*Execution[O], error) {
+	return a.runtime.resume(ctx, input, dependencyEnvelope{}, opts...)
+}
+
+// Drive starts or continues a dependency-aware typed execution with its exact
+// dependency value.
+func (a *TypedAgentWithDeps[O, D]) Drive(ctx context.Context, input DriveInput, deps D, opts ...RunOption) (*Execution[O], error) {
+	return a.runtime.drive(ctx, input, core.NewDependencyEnvelope(deps), opts...)
+}
+
+// Resume completes a suspended dependency-aware typed execution with its exact
+// dependency value.
+func (a *TypedAgentWithDeps[O, D]) Resume(ctx context.Context, input ResumeInput, deps D, opts ...RunOption) (*Execution[O], error) {
+	return a.runtime.resume(ctx, input, core.NewDependencyEnvelope(deps), opts...)
 }
 
 func (a *TypedAgentWithDeps[O, D]) Bind(deps D) Runner[O] {
-	return newBoundRunner(a.Run, a.RunStream, func(context.Context) (D, error) { return deps, nil })
+	return newBoundRunner(a.RunStream, a.Drive, a.Resume, func(context.Context) (D, error) { return deps, nil })
 }
 
 func (a *TypedAgentWithDeps[O, D]) BindProvider(provider DepsProvider[D]) Runner[O] {
-	return newBoundRunner(a.Run, a.RunStream, provider)
+	return newBoundRunner(a.RunStream, a.Drive, a.Resume, provider)
 }
 
 func (a *TypedAgent[O]) AddOutputValidator(v TypedOutputValidator[O]) *TypedAgent[O] {
@@ -156,81 +187,47 @@ func (a *TypedAgentWithDeps[O, D]) SetToolPrepare(fn ToolPrepareFuncWithDeps[D])
 	return a
 }
 
-func (r *typedRuntime[O]) run(ctx context.Context, prompt string, deps dependencyEnvelope, opts ...RunOption) (*Result[O], error) {
-	if err := r.core.preflight(ctx, deps); err != nil {
-		return nil, err
-	}
+func (r *typedRuntime[O]) drive(ctx context.Context, input DriveInput, deps dependencyEnvelope, opts ...RunOption) (*Execution[O], error) {
+	runOpts := r.driverOptions(opts)
+	return driveWithEvaluator(r.core, ctx, input, deps, r.completionEvaluator(), runOpts...)
+}
+
+func (r *typedRuntime[O]) resume(ctx context.Context, input ResumeInput, deps dependencyEnvelope, opts ...RunOption) (*Execution[O], error) {
+	runOpts := r.driverOptions(opts)
+	return resumeWithEvaluator(r.core, ctx, input, deps, r.completionEvaluator(), runOpts...)
+}
+
+func (r *typedRuntime[O]) runStream(ctx context.Context, prompt string, deps dependencyEnvelope, opts ...RunOption) (*StreamResult, error) {
+	runOpts := r.driverOptions(opts)
+	return runStreamWithEvaluator(r.core, ctx, prompt, deps, r.completionEvaluator(), runOpts...)
+}
+
+func (r *typedRuntime[O]) driverOptions(opts []RunOption) []RunOption {
 	runOpts := append([]RunOption(nil), opts...)
 	if r.outputMode() == OutputModeTool {
 		runOpts = append(runOpts, WithRunToolChoice(ToolChoiceRequired))
 	}
-	maxRetries := r.core.config.maxValidationRetries
-	var messages []Message
-	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		attemptOpts := append([]RunOption(nil), runOpts...)
-		if len(messages) > 0 {
-			attemptOpts = append(attemptOpts, WithMessages(messages...))
-		}
-		attemptPrompt := prompt
-		if attempt > 0 {
-			attemptPrompt = "Your previous response failed output validation. Please fix the errors and try again."
-		}
-		result, err := r.core.runAfterPreflight(ctx, attemptPrompt, deps, attemptOpts...)
-		if err != nil {
-			return nil, err
-		}
-		typedResult, err := r.parseResult(ctx, deps, result)
-		if err == nil {
-			return typedResult, nil
-		}
-		lastErr = err
-		if attempt == maxRetries {
-			break
-		}
-		messages = append([]Message(nil), result.Messages...)
-		if r.outputMode() == OutputModeTool {
-			if last := lastAssistantMessage(result.Messages); last != nil {
-				for _, toolUse := range last.GetToolUses() {
-					if r.runtimeOutputTool(toolUse.Name) {
-						messages = append(messages, NewToolResultMessage(toolUse.ID, fmt.Sprintf("Validation error: %s", err), true))
-					}
-				}
-			}
-		} else {
-			messages = append(messages, NewTextMessage(RoleUser, fmt.Sprintf("Output validation error: %s", err)))
-		}
-	}
-	return nil, fmt.Errorf("parse structured output after %d retries: %w", maxRetries, lastErr)
+	return runOpts
 }
 
-func (r *typedRuntime[O]) parseResult(ctx context.Context, deps dependencyEnvelope, result *Result[string]) (*Result[O], error) {
-	last := lastAssistantMessage(result.Messages)
-	if last == nil {
-		return nil, fmt.Errorf("no assistant message found in result")
-	}
-	output, err := r.output.Parse(*last)
-	if err != nil {
-		return nil, err
-	}
-	for _, validator := range r.validators {
-		if err := validator(ctx, deps, output); err != nil {
-			if IsValidationError(err) {
-				return nil, err
-			}
-			return nil, NewValidationError(err.Error())
+func (r *typedRuntime[O]) completionEvaluator() completionEvaluator[O] {
+	return func(ctx context.Context, deps dependencyEnvelope, message Message) (O, error) {
+		output, err := r.output.Parse(message)
+		if err != nil {
+			var zero O
+			return zero, err
 		}
+		for _, validator := range r.validators {
+			if err := validator(ctx, deps, output); err != nil {
+				var zero O
+				if IsValidationError(err) {
+					return zero, err
+				}
+				return zero, NewValidationError(err.Error())
+			}
+		}
+		return output, nil
 	}
-	return &Result[O]{
-		Output:       output,
-		Messages:     result.Messages,
-		ToolCalls:    result.ToolCalls,
-		ToolResults:  result.ToolResults,
-		FinishReason: result.FinishReason,
-		Usage:        result.Usage,
-		Retries:      result.Retries,
-		historyLen:   result.historyLen,
-	}, nil
 }
 
 func (r *typedRuntime[O]) outputMode() OutputMode {
@@ -238,19 +235,6 @@ func (r *typedRuntime[O]) outputMode() OutputMode {
 		return spec.Mode()
 	}
 	return OutputModeTool
-}
-
-func (r *typedRuntime[O]) runtimeOutputTool(name string) bool {
-	return r.core.outputToolNames[name]
-}
-
-func lastAssistantMessage(messages []Message) *Message {
-	for i := len(messages) - 1; i >= 0; i-- {
-		if messages[i].Role == RoleAssistant {
-			return &messages[i]
-		}
-	}
-	return nil
 }
 
 func (a *TypedAgent[O]) AddTool(tool Tool, handler ToolHandler) *TypedAgent[O] {
@@ -311,3 +295,4 @@ func (a *TypedAgentWithDeps[O, D]) registerTool(tool Tool, handler ToolHandler) 
 func (a *TypedAgentWithDeps[O, D]) dependencyType(D) {}
 
 var _ StreamingRunner[struct{}] = (*TypedAgent[struct{}])(nil)
+var _ Driver[struct{}] = (*TypedAgent[struct{}])(nil)

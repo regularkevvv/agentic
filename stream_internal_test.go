@@ -262,8 +262,11 @@ func TestRunStreamTrueValidationRetryAndOutputTool(t *testing.T) {
 		if len(model.Requests) != 1 {
 			t.Fatalf("expected a single request, got %d", len(model.Requests))
 		}
-		if len(events) != 3 {
-			t.Fatalf("expected streamed tool call events plus done, got %#v", events)
+		if len(events) != 4 {
+			t.Fatalf("expected tool call, arguments, paired output result, and done, got %#v", events)
+		}
+		if events[2].Type != StreamEventToolResult || events[2].ToolCallID != "out_1" {
+			t.Fatalf("expected paired output result, got %#v", events[2])
 		}
 		if events[len(events)-1].Type != StreamEventDone {
 			t.Fatalf("expected done event, got %#v", events[len(events)-1])

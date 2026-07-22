@@ -1,6 +1,9 @@
 package agentic
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // AgentOption configures static agent behavior. Options that consume a
 // dependency or typed output attach through the corresponding typed facade.
@@ -124,15 +127,22 @@ func WithHistoryProcessor(p HistoryProcessor) AgentOption {
 type RunOption func(*runOptions)
 
 type runOptions struct {
-	messages         []Message
-	temperature      *float64
-	maxTokens        *int
-	topP             *float64
-	maxIterations    *int
-	toolChoice       *ToolChoice
-	usageLimits      *UsageLimits
-	endStrategy      *EndStrategy
-	historyProcessor HistoryProcessor
+	messages              []Message
+	temperature           *float64
+	maxTokens             *int
+	topP                  *float64
+	maxIterations         *int
+	toolChoice            *ToolChoice
+	usageLimits           *UsageLimits
+	endStrategy           *EndStrategy
+	historyProcessor      HistoryProcessor
+	turnHook              TurnHook
+	eventSink             EventSink
+	toolsets              []Toolset
+	toolGate              ToolGate
+	toolResultProcessor   ToolResultProcessor
+	modelStreaming        *bool
+	toolCancellationGrace *time.Duration
 }
 
 func WithMessages(messages ...Message) RunOption {
@@ -165,6 +175,46 @@ func WithRunEndStrategy(strategy EndStrategy) RunOption {
 
 func WithRunHistoryProcessor(p HistoryProcessor) RunOption {
 	return func(o *runOptions) { o.historyProcessor = p }
+}
+
+// WithRunTurnHook installs a control hook for this execution only. It is a
+// RunOption so bound runners can be controlled after dependencies are bound.
+func WithRunTurnHook(hook TurnHook) RunOption {
+	return func(o *runOptions) { o.turnHook = hook }
+}
+
+// WithRunEventSink installs a synchronous canonical event sink for this
+// execution only.
+func WithRunEventSink(sink EventSink) RunOption {
+	return func(o *runOptions) { o.eventSink = sink }
+}
+
+// WithRunToolsets overlays immutable toolsets for this execution. The shared
+// agent registry is never mutated.
+func WithRunToolsets(toolsets ...Toolset) RunOption {
+	return func(o *runOptions) { o.toolsets = append(o.toolsets, toolsets...) }
+}
+
+// WithRunToolGate preflights regular tool batches for this execution.
+func WithRunToolGate(gate ToolGate) RunOption {
+	return func(o *runOptions) { o.toolGate = gate }
+}
+
+// WithRunToolResultProcessor projects handler results before commit.
+func WithRunToolResultProcessor(processor ToolResultProcessor) RunOption {
+	return func(o *runOptions) { o.toolResultProcessor = processor }
+}
+
+// WithRunModelStreaming asks Driver to use the model streaming transport when
+// it is available. The driver still returns one ordinary Execution.
+func WithRunModelStreaming(enabled bool) RunOption {
+	return func(o *runOptions) { o.modelStreaming = &enabled }
+}
+
+// WithRunToolCancellationGrace bounds how long the scheduler waits for
+// already-admitted handlers after execution context cancellation.
+func WithRunToolCancellationGrace(grace time.Duration) RunOption {
+	return func(o *runOptions) { o.toolCancellationGrace = &grace }
 }
 
 func applyRunOptions(opts []RunOption) *runOptions {
