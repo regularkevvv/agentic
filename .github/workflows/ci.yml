@@ -38,9 +38,57 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Run tests
-        run: go test -race -count=1 -timeout 60s $(go list ./... | grep -v /e2e)
+        run: GOWORK=off go test -race -count=1 -timeout 60s $(GOWORK=off go list ./... | grep -v /e2e)
       - name: Check build
-        run: go build ./...
+        run: GOWORK=off go build ./...
+
+  harness:
+    name: Harness release view
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: harness
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: harness/go.mod
+      - name: Test against released Agentic
+        run: GOWORK=off go test -race -count=1 -timeout 60s ./...
+      - name: Vet
+        run: GOWORK=off go vet ./...
+      - name: Check build
+        run: GOWORK=off go build ./...
+
+  harness-lint:
+    name: Harness lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: harness/go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+          working-directory: harness
+
+  workspace:
+    name: Workspace integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Test both modules
+        run: go test -race -count=1 -timeout 60s ./... ./harness/...
 
   coverage:
     name: Coverage
