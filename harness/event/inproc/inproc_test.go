@@ -1,6 +1,7 @@
 package inproc
 
 import (
+	"context"
 	"errors"
 	"sync"
 	"testing"
@@ -123,4 +124,69 @@ func TestBusConcurrentPublishSubscribeAndClose(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
+}
+
+func TestFactoryHistoryFilteringClosedHubAndDuplicateCursors(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := NewFactory().Open(ctx, nil); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Open = %v", err)
+	}
+	payload := []byte("original")
+	bus := New([]event.Record{
+		preview("ignored"),
+		{Nature: agentic.EventAuthoritative, Source: "zero"},
+		{Cursor: 2, Nature: agentic.EventAuthoritative, Source: "history", Payload: payload},
+		{Cursor: 1, Nature: agentic.EventAuthoritative, Source: "history"},
+	})
+	payload[0] = 'X'
+	if bus.Cursor() != 2 {
+		t.Fatalf("history cursor = %d", bus.Cursor())
+	}
+	noPreview := bus.Subscribe(event.SubscribeOptions{})
+	if got := <-noPreview.Events; got.Cursor != 2 || string(got.Payload) != "original" {
+		t.Fatalf("history clone = %#v", got)
+	}
+	bus.PublishPreview(preview("hidden"))
+	select {
+	case got := <-noPreview.Events:
+		t.Fatalf("preview reached disabled subscriber: %#v", got)
+	default:
+	}
+	bus.PublishDurable(durable(2))
+	select {
+	case got := <-noPreview.Events:
+		t.Fatalf("duplicate cursor reached subscriber: %#v", got)
+	default:
+	}
+	noPreview.Close()
+	noPreview.Close()
+
+	assertPanics := func(record event.Record) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Fatal("invalid durable publish did not panic")
+			}
+		}()
+		bus.PublishDurable(record)
+	}
+	assertPanics(preview("bad"))
+	assertPanics(event.Record{Nature: agentic.EventAuthoritative})
+
+	bus.Close()
+	bus.Close()
+	bus.PublishPreview(preview("closed"))
+	bus.PublishDurable(durable(3))
+	closed := bus.Subscribe(event.SubscribeOptions{})
+	if _, ok := <-closed.Events; ok {
+		t.Fatal("closed subscription events remained open")
+	}
+	if err, ok := <-closed.Err; !ok || err != nil {
+		t.Fatalf("closed subscription terminal = %v, %t", err, ok)
+	}
+	if _, ok := <-closed.Err; ok {
+		t.Fatal("closed subscription error channel remained open")
+	}
 }

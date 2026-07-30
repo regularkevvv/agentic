@@ -97,4 +97,7 @@ func TestSubscriptionCloseDeliversNilTerminal(t *testing.T) {
 	}
 	// Close is idempotent even after channel termination.
 	sub.Close()
+	var nilSubscription *Subscription
+	nilSubscription.Close()
+	NewSubscription(nil, nil, nil).Close()
 }

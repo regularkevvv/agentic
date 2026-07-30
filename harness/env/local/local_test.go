@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,5 +139,137 @@ func TestFactoryProvisionsDistinctLeases(t *testing.T) {
 	defer func() { _ = second.Close(context.Background()) }()
 	if first == second {
 		t.Fatal("factory reused one environment lease")
+	}
+}
+
+func TestLocalConstructionFilesystemAndShellFailures(t *testing.T) {
+	t.Parallel()
+	if _, err := New(Config{Root: "relative"}); !env.HasCode(err, env.CodeInvalid) {
+		t.Fatalf("relative root = %v", err)
+	}
+	if _, err := New(Config{Root: filepath.Join(t.TempDir(), "missing")}); !env.HasCode(err, env.CodeNotFound) {
+		t.Fatalf("missing root = %v", err)
+	}
+	root := t.TempDir()
+	fileRoot := filepath.Join(root, "file-root")
+	if err := os.WriteFile(fileRoot, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := New(Config{Root: fileRoot}); !env.HasCode(err, env.CodeNotDirectory) {
+		t.Fatalf("file root = %v", err)
+	}
+	if _, err := New(Config{Root: root, Cwd: "missing"}); !env.HasCode(err, env.CodeNotFound) {
+		t.Fatalf("missing cwd = %v", err)
+	}
+	if _, err := New(Config{Root: root, Cwd: "file-root"}); !env.HasCode(err, env.CodeIO) {
+		t.Fatalf("file cwd = %v", err)
+	}
+
+	local, err := New(Config{Root: root, Symlinks: SymlinkDeny})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if local.Root() == "" {
+		t.Fatal("canonical Root is empty")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := local.CanonicalPath(ctx, "."); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled canonicalization = %v", err)
+	}
+	if err := local.Close(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled close = %v", err)
+	}
+	if _, err := local.ReadFile(context.Background(), "missing"); !env.HasCode(err, env.CodeNotFound) {
+		t.Fatalf("read missing = %v", err)
+	}
+	if err := local.WriteFile(context.Background(), "missing/file", nil, 0o600); !env.HasCode(err, env.CodeNotFound) {
+		t.Fatalf("write missing parent = %v", err)
+	}
+	if err := local.WriteFile(context.Background(), ".", nil, 0o600); err == nil {
+		t.Fatal("write directory succeeded")
+	}
+	if err := local.MkdirAll(context.Background(), "file-root/child", 0o755); err == nil {
+		t.Fatal("mkdir through file succeeded")
+	}
+	if _, err := local.ReadDir(context.Background(), "missing"); !env.HasCode(err, env.CodeNotFound) {
+		t.Fatalf("readdir missing = %v", err)
+	}
+	if _, err := local.ReadDir(context.Background(), "file-root"); err == nil {
+		t.Fatal("readdir file succeeded")
+	}
+	if _, err := local.Stat(context.Background(), "missing"); !env.HasCode(err, env.CodeNotFound) {
+		t.Fatalf("stat missing = %v", err)
+	}
+	if err := local.Remove(context.Background(), "missing"); !env.HasCode(err, env.CodeNotFound) {
+		t.Fatalf("remove missing = %v", err)
+	}
+	if _, err := local.Exec(context.Background(), env.Command{}); !env.HasCode(err, env.CodeInvalid) {
+		t.Fatalf("empty command = %v", err)
+	}
+	if _, err := local.Exec(context.Background(), env.Command{Name: "echo", Dir: "../escape"}); !env.HasCode(err, env.CodeEscaped) {
+		t.Fatalf("escaped command dir = %v", err)
+	}
+	if _, err := local.Exec(context.Background(), env.Command{Name: "definitely-not-an-agentic-command"}); err == nil {
+		t.Fatal("missing command succeeded")
+	}
+	result, err := local.Exec(context.Background(), env.Command{
+		Name:  "/bin/sh",
+		Args:  []string{"-c", "read value; printf '%s:%s' \"$value\" \"$TEST_VALUE\""},
+		Env:   []string{"TEST_VALUE=env"},
+		Stdin: []byte("stdin\n"),
+	})
+	if err != nil || string(result.Stdout) != "stdin:env" {
+		t.Fatalf("stdin/env command = %#v, %v", result, err)
+	}
+	if err := local.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := local.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for name, operation := range map[string]func() error{
+		"canonical": func() error { _, err := local.CanonicalPath(context.Background(), "."); return err },
+		"read":      func() error { _, err := local.ReadFile(context.Background(), "."); return err },
+		"write":     func() error { return local.WriteFile(context.Background(), "file", nil, 0o600) },
+		"mkdir":     func() error { return local.MkdirAll(context.Background(), "dir", 0o755) },
+		"readdir":   func() error { _, err := local.ReadDir(context.Background(), "."); return err },
+		"stat":      func() error { _, err := local.Stat(context.Background(), "."); return err },
+		"remove":    func() error { return local.Remove(context.Background(), "file") },
+	} {
+		if err := operation(); !env.HasCode(err, env.CodeClosed) {
+			t.Fatalf("closed %s = %v", name, err)
+		}
+	}
+}
+
+func TestLocalFactoryCancellationAndAbsolutePaths(t *testing.T) {
+	t.Parallel()
+	if _, err := NewFactory(Config{Root: "relative"}); !env.HasCode(err, env.CodeInvalid) {
+		t.Fatalf("relative factory = %v", err)
+	}
+	root := t.TempDir()
+	factory, err := NewFactory(Config{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := factory.Open(ctx, "session"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled factory = %v", err)
+	}
+	local, err := New(Config{Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = local.Close(context.Background()) }()
+	canonicalRoot, _ := filepath.EvalSymlinks(root)
+	future := filepath.Join(canonicalRoot, "future", "file")
+	resource, err := local.CanonicalPath(context.Background(), future)
+	if err != nil || resource.ID != future {
+		t.Fatalf("future absolute = %#v, %v", resource, err)
+	}
+	if _, err := local.CanonicalPath(context.Background(), filepath.Dir(canonicalRoot)); !env.HasCode(err, env.CodeEscaped) {
+		t.Fatalf("outside absolute = %v", err)
 	}
 }

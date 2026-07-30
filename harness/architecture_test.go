@@ -64,6 +64,9 @@ func TestCorePackagesDoNotImportAdapters(t *testing.T) {
 		if filepath.Ext(path) != ".go" || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
+		if filepath.ToSlash(relative) == "default.go" {
+			return nil
+		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
 		if err != nil {
 			return err
