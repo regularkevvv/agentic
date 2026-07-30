@@ -189,3 +189,181 @@ func TestMemoryFactoryCancellationAndPathHelpers(t *testing.T) {
 		t.Fatalf("empty memory path = %q, %v", path, err)
 	}
 }
+
+func TestNarrowedEnvironmentConfinesPathsAndDoesNotOwnParent(t *testing.T) {
+	t.Parallel()
+	var commandDir string
+	parent, err := New("/", func(_ context.Context, command env.Command) (env.CommandResult, error) {
+		commandDir = command.Dir
+		return env.CommandResult{Stdout: []byte("ok")}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = parent.Close(context.Background()) }()
+	ctx := context.Background()
+	if err := parent.MkdirAll(ctx, "/children/one", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.MkdirAll(ctx, "/outside", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.WriteFile(ctx, "/children/one/input", []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := parent.WriteFile(ctx, "/outside/secret", []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	narrow, err := parent.Narrow(ctx, env.NarrowRequest{Root: "/children/one"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := narrow.Shell(); ok {
+		t.Fatal("narrowed shell was enabled implicitly")
+	}
+	if _, err := narrow.(*narrowLease).Exec(ctx, env.Command{Name: "disabled"}); !env.HasCode(err, env.CodeUnsupported) {
+		t.Fatalf("disabled narrow shell = %v", err)
+	}
+	if data, err := narrow.Files().ReadFile(ctx, "/input"); err != nil || string(data) != "inside" {
+		t.Fatalf("narrow read = %q, %v", data, err)
+	}
+	if err := narrow.Files().MkdirAll(ctx, "dir", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := narrow.Files().WriteFile(ctx, "dir/output", []byte("value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := narrow.Files().Stat(ctx, "dir/output"); err != nil || info.Size != 5 {
+		t.Fatalf("narrow stat = %#v, %v", info, err)
+	}
+	if entries, err := narrow.Files().ReadDir(ctx, "dir"); err != nil || len(entries) != 1 {
+		t.Fatalf("narrow readdir = %#v, %v", entries, err)
+	}
+	resource, err := narrow.Files().CanonicalPath(ctx, "../outside/secret")
+	if err != nil || resource.ID != "/children/one/outside/secret" {
+		t.Fatalf("narrow canonical path = %#v, %v", resource, err)
+	}
+	if _, err := narrow.Files().ReadFile(ctx, "../outside/secret"); !env.HasCode(err, env.CodeNotFound) {
+		t.Fatalf("narrow traversal reached parent outside path: %v", err)
+	}
+	if err := narrow.Files().Remove(ctx, "dir/output"); err != nil {
+		t.Fatal(err)
+	}
+	nestedNarrower, ok := narrow.(env.Narrower)
+	if !ok {
+		t.Fatal("narrowed memory environment lost nested narrowing")
+	}
+	nested, err := nestedNarrower.Narrow(ctx, env.NarrowRequest{Root: ".", Shell: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := nested.Shell(); ok {
+		t.Fatal("nested memory narrowing broadened disabled shell access")
+	}
+	if data, err := nested.Files().ReadFile(ctx, "input"); err != nil || string(data) != "inside" {
+		t.Fatalf("nested narrow read = %q, %v", data, err)
+	}
+	if err := nested.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := narrow.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	closedOperations := map[string]func() error{
+		"canonical": func() error {
+			_, err := narrow.Files().CanonicalPath(ctx, "input")
+			return err
+		},
+		"read": func() error {
+			_, err := narrow.Files().ReadFile(ctx, "input")
+			return err
+		},
+		"write": func() error {
+			return narrow.Files().WriteFile(ctx, "output", nil, 0o600)
+		},
+		"mkdir": func() error {
+			return narrow.Files().MkdirAll(ctx, "dir", 0o755)
+		},
+		"readdir": func() error {
+			_, err := narrow.Files().ReadDir(ctx, ".")
+			return err
+		},
+		"stat": func() error {
+			_, err := narrow.Files().Stat(ctx, "input")
+			return err
+		},
+		"remove": func() error {
+			return narrow.Files().Remove(ctx, "input")
+		},
+	}
+	for name, operation := range closedOperations {
+		if err := operation(); !env.HasCode(err, env.CodeClosed) {
+			t.Fatalf("closed narrow %s = %v", name, err)
+		}
+	}
+	if data, err := parent.ReadFile(ctx, "/children/one/input"); err != nil || string(data) != "inside" {
+		t.Fatalf("closing view closed parent: %q, %v", data, err)
+	}
+
+	withShell, err := parent.Narrow(ctx, env.NarrowRequest{Root: "/children/one", Shell: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = withShell.Close(context.Background()) }()
+	shell, ok := withShell.Shell()
+	if !ok {
+		t.Fatal("explicit narrowed shell unavailable")
+	}
+	if result, err := shell.Exec(ctx, env.Command{Name: "mock"}); err != nil || string(result.Stdout) != "ok" {
+		t.Fatalf("narrow shell = %#v, %v", result, err)
+	}
+	if commandDir != "/children/one" {
+		t.Fatalf("narrow shell dir = %q", commandDir)
+	}
+	shellNarrower, ok := withShell.(env.Narrower)
+	if !ok {
+		t.Fatal("shell-enabled memory environment lost nested narrowing")
+	}
+	nestedShell, err := shellNarrower.Narrow(ctx, env.NarrowRequest{Root: ".", Shell: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := nestedShell.Shell(); !ok {
+		t.Fatal("nested memory narrowing discarded explicitly retained shell access")
+	}
+	if err := nestedShell.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := withShell.Close(canceled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled narrow close = %v", err)
+	}
+	if err := withShell.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := shell.Exec(ctx, env.Command{Name: "mock"}); !env.HasCode(err, env.CodeClosed) {
+		t.Fatalf("closed narrow shell = %v", err)
+	}
+}
+
+func TestNarrowValidation(t *testing.T) {
+	t.Parallel()
+	parent, err := New("/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = parent.Close(context.Background()) }()
+	if _, err := parent.Narrow(context.Background(), env.NarrowRequest{}); !env.HasCode(err, env.CodeInvalid) {
+		t.Fatalf("empty narrow root = %v", err)
+	}
+	if _, err := parent.Narrow(context.Background(), env.NarrowRequest{Root: "/missing"}); !env.HasCode(err, env.CodeNotFound) {
+		t.Fatalf("missing narrow root = %v", err)
+	}
+	if err := parent.WriteFile(context.Background(), "/file", nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := parent.Narrow(context.Background(), env.NarrowRequest{Root: "/file"}); !env.HasCode(err, env.CodeNotDirectory) {
+		t.Fatalf("file narrow root = %v", err)
+	}
+}
