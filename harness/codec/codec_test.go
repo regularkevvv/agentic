@@ -9,6 +9,13 @@ type aliasingCodec struct {
 	buffer []byte
 }
 
+type failingCodec struct {
+	err error
+}
+
+func (c failingCodec) Encode(any) ([]byte, error) { return nil, c.err }
+func (c failingCodec) Decode([]byte, any) error   { return c.err }
+
 func (c *aliasingCodec) Encode(any) ([]byte, error) {
 	return c.buffer, nil
 }
@@ -52,5 +59,16 @@ func TestHelpersRequireCodec(t *testing.T) {
 	}
 	if _, err := Decode[struct{}](nil, nil); err == nil {
 		t.Fatal("Decode accepted a nil codec")
+	}
+}
+
+func TestHelpersPropagateCodecFailures(t *testing.T) {
+	t.Parallel()
+	boom := errors.New("boom")
+	if _, err := Encode(failingCodec{err: boom}, struct{}{}); !errors.Is(err, boom) {
+		t.Fatalf("Encode error = %v", err)
+	}
+	if _, err := Decode[struct{}](failingCodec{err: boom}, nil); !errors.Is(err, boom) {
+		t.Fatalf("Decode error = %v", err)
 	}
 }

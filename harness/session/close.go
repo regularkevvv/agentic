@@ -3,6 +3,8 @@ package session
 import (
 	"context"
 	"errors"
+
+	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 )
 
 // Close releases the session's journal lease, event hub, and environment.
@@ -17,11 +19,22 @@ func (s *Session[O]) Close(ctx context.Context) error {
 		s.mu.Unlock()
 		return ErrSessionBusy
 	}
+	runClosingHook := !s.closingHookDone
 	if s.state != Closed {
 		s.transitionLocked(Closed)
 	}
 	s.mu.Unlock()
 
+	var closingHookErr error
+	if runClosingHook {
+		closingHookErr = harnessruntime.RunLifecycleHooks(ctx, s.lifecycle, harnessruntime.LifecycleEvent{
+			Phase:     harnessruntime.LifecycleSessionClosing,
+			SessionID: s.id,
+		})
+		if closingHookErr == nil {
+			s.closingHookDone = true
+		}
+	}
 	if !s.busClosed && s.bus != nil {
 		s.bus.Close()
 		s.busClosed = true
@@ -39,5 +52,15 @@ func (s *Session[O]) Close(ctx context.Context) error {
 			s.environmentClosed = true
 		}
 	}
-	return errors.Join(journalErr, environmentErr)
+	cleanupErr := errors.Join(closingHookErr, journalErr, environmentErr)
+	if cleanupErr == nil && !s.closedHookDone {
+		if err := harnessruntime.RunLifecycleHooks(ctx, s.lifecycle, harnessruntime.LifecycleEvent{
+			Phase:     harnessruntime.LifecycleSessionClosed,
+			SessionID: s.id,
+		}); err != nil {
+			return err
+		}
+		s.closedHookDone = true
+	}
+	return cleanupErr
 }

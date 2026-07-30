@@ -38,17 +38,79 @@ func (s *Session[O]) finishExecution(execution *agentic.Execution[O], runErr err
 		s.mu.Unlock()
 		return execution, errors.New("driver returned without an active session run")
 	}
+	if s.run.resumeInProgress && !s.run.resumeEventSeen && isResumeValidationError(runErr) {
+		s.run.resumeInProgress = false
+		s.transitionLocked(Suspended)
+		s.mu.Unlock()
+		return execution, runErr
+	}
 	status := agentic.ExecutionFailed
 	if execution != nil {
 		status = execution.Status
 	}
 	if status == agentic.ExecutionSuspended {
-		if execution.Suspension != nil {
-			s.suspension = cloneSuspension(execution.Suspension)
+		if execution == nil || execution.Result == nil || execution.Suspension == nil {
+			fault := s.persistFaultLocked(fmt.Errorf("%w: suspended execution is incomplete", ErrCommitProjectionMismatch))
+			s.mu.Unlock()
+			return execution, fault
 		}
+		system, projectionErr := s.validateProjectionLocked(execution)
+		if projectionErr != nil {
+			fault := s.persistFaultLocked(projectionErr)
+			s.mu.Unlock()
+			return execution, fault
+		}
+		batch := newEntryBatch(s.codec, 2)
+		delta, deltaErr := usageDelta(execution.Result.Usage, s.run.lastUsage)
+		if deltaErr != nil {
+			fault := s.persistFaultLocked(deltaErr)
+			s.mu.Unlock()
+			return execution, fault
+		}
+		nextUsage := s.usage
+		usageChanged := !usageEmpty(delta)
+		if usageChanged {
+			nextUsage = addUsage(s.usage, delta)
+			batch.Add(kindUsageCommitted, usagePayload{Run: execution.Result.Usage, Session: nextUsage})
+		}
+		if system != nil {
+			batch.Add(kindSystemMessage, messagePayload{Message: *system, Source: "driver_system"})
+		}
+		pendingEntries, encodeErr := batch.Result()
+		if encodeErr != nil {
+			fault := s.persistFaultLocked(encodeErr)
+			s.mu.Unlock()
+			return execution, fault
+		}
+		var committed []store.Entry
+		if len(pendingEntries) > 0 {
+			commit, appendErr := s.journal.Append(context.Background(), s.cursor, pendingEntries...)
+			if appendErr != nil {
+				cancel := s.faultLocked(appendErr)
+				s.mu.Unlock()
+				if cancel != nil {
+					cancel()
+				}
+				return execution, &FaultError{SessionID: s.id, Cause: appendErr}
+			}
+			s.cursor = commit.Cursor
+			committed = commit.Entries
+		}
+		if usageChanged {
+			s.usage = nextUsage
+		}
+		s.run.lastUsage = cloneUsage(execution.Result.Usage)
+		if system != nil {
+			shiftContextMarkers(s.contextMarkers, 1)
+			s.messages = append([]agentic.Message{*system}, s.messages...)
+			s.run.history = append([]agentic.Message{*system}, s.run.history...)
+		}
+		s.suspension = cloneSuspension(execution.Suspension)
+		s.run.resumeInProgress = false
 		s.transitionLocked(Suspended)
 		s.runCancel = nil
 		s.mu.Unlock()
+		s.publishOwnByKind(committed)
 		return execution, runErr
 	}
 	if s.state == Running {
@@ -132,6 +194,14 @@ func (s *Session[O]) finishExecution(execution *agentic.Execution[O], runErr err
 	return execution, runErr
 }
 
+func isResumeValidationError(err error) bool {
+	return errors.Is(err, agentic.ErrDriveInput) ||
+		errors.Is(err, agentic.ErrTranscriptInvalid) ||
+		errors.Is(err, agentic.ErrSuspensionVersion) ||
+		errors.Is(err, agentic.ErrSuspensionMismatch) ||
+		errors.Is(err, agentic.ErrResumeDecision)
+}
+
 func (s *Session[O]) validateProjectionLocked(execution *agentic.Execution[O]) (*agentic.Message, error) {
 	if execution == nil || execution.Result == nil {
 		return nil, nil
@@ -157,7 +227,9 @@ func (s *Session[O]) validateProjectionLocked(execution *agentic.Execution[O]) (
 	// NewMessages. The full-prefix comparison above remains authoritative; this
 	// suffix check still exercises the public API required by the contract.
 	publicNew := execution.Result.NewMessages()
-	if len(publicNew) < len(s.run.expected) || !messagesEqual(publicNew[len(publicNew)-len(s.run.expected):], s.run.expected) {
+	publicExpected := s.run.expected[s.run.publicNewStart:]
+	if len(publicNew) < len(publicExpected) ||
+		!messagesEqual(publicNew[len(publicNew)-len(publicExpected):], publicExpected) {
 		return nil, fmt.Errorf("%w: Result.NewMessages is not the committed suffix", ErrCommitProjectionMismatch)
 	}
 	return system, nil

@@ -11,8 +11,10 @@ import (
 
 	agentic "github.com/regularkevvv/agentic"
 	"github.com/regularkevvv/agentic/harness/codec"
+	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/event"
 	"github.com/regularkevvv/agentic/harness/repair"
+	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 	"github.com/regularkevvv/agentic/harness/store"
 )
 
@@ -67,6 +69,10 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 	if grace == 0 {
 		grace = time.Second
 	}
+	contextProjector := config.Context
+	if contextProjector == nil {
+		contextProjector = contextpolicy.Passthrough()
+	}
 	bus, err := config.Events.Open(ctx, history)
 	if err != nil {
 		return nil, err
@@ -91,6 +97,11 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 		ids:            config.IDs,
 		grace:          grace,
 		bus:            bus,
+		toolsets:       append([]agentic.Toolset(nil), config.Toolsets...),
+		toolGate:       config.ToolGate,
+		context:        contextProjector,
+		lifecycle:      append([]harnessruntime.LifecycleHook(nil), config.LifecycleHooks...),
+		compaction:     folded.compaction,
 		state:          folded.state,
 		stateChange:    make(chan struct{}),
 		cursor:         folded.cursor,
@@ -103,6 +114,17 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 		suspension:     folded.suspension,
 		run:            folded.run,
 		recoveryInputs: folded.unapplied,
+	}
+	sink, err := event.Chain(session, config.EventMiddleware...)
+	if err != nil {
+		return nil, err
+	}
+	session.eventSink = sink
+	if err := harnessruntime.RunLifecycleHooks(ctx, session.lifecycle, harnessruntime.LifecycleEvent{
+		Phase:     harnessruntime.LifecycleSessionRecovered,
+		SessionID: session.id,
+	}); err != nil {
+		return nil, fmt.Errorf("session recovered lifecycle: %w", err)
 	}
 	if session.state == Faulted {
 		session.state = Running
@@ -149,6 +171,7 @@ type foldedState struct {
 	budget         *agentic.UsageLimits
 	drainAll       bool
 	suspension     *agentic.Suspension
+	compaction     *contextpolicy.Compaction
 	run            *activeRun
 	system         *agentic.Message
 	unapplied      []QueueEntry
@@ -206,7 +229,13 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 			if payload.Mode == "continue" {
 				mode = agentic.DriveContinue
 			}
-			state.run = &activeRun{id: payload.ID, mode: mode, history: providerHistory(state.messages, state.contextMarkers)}
+			state.run = &activeRun{
+				id:                 payload.ID,
+				mode:               mode,
+				history:            providerHistory(state.messages, state.contextMarkers),
+				contextMarkerCount: len(state.contextMarkers),
+				limits:             cloneLimitsPointer(payload.Limits),
+			}
 			state.state = Running
 			state.suspension = nil
 		case kindRunClosed:
@@ -240,6 +269,9 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 			if len(state.messages) == 0 || state.messages[0].Role != agentic.RoleSystem {
 				shiftContextMarkers(state.contextMarkers, 1)
 				state.messages = append([]agentic.Message{message}, state.messages...)
+			}
+			if state.run != nil && (len(state.run.history) == 0 || state.run.history[0].Role != agentic.RoleSystem) {
+				state.run.history = append([]agentic.Message{message}, state.run.history...)
 			}
 		case kindRepair:
 			payload, err := decodePayload[messagePayload](payloadCodec, entry)
@@ -283,6 +315,9 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 				return foldedState{}, nil, err
 			}
 			state.usage = cloneUsage(payload.Session)
+			if state.run != nil {
+				state.run.lastUsage = cloneUsage(payload.Run)
+			}
 		case kindRecoverySuspension:
 			payload, err := decodePayload[event.SuspensionPayload](payloadCodec, entry)
 			if err != nil {
@@ -301,9 +336,26 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 				after:   len(state.messages),
 				message: interruptionContextMessage(payload.Message),
 			})
-		case kindCompaction, kindBranchMoved, kindRecovered:
-			// Preserved in the log and event history; these entries do not replace
-			// the active transcript in Phase 2.
+		case kindContextMessage:
+			payload, err := decodePayload[contextMessagePayload](payloadCodec, entry)
+			if err != nil {
+				return foldedState{}, nil, err
+			}
+			if payload.After < 0 || payload.After > len(state.messages) {
+				return foldedState{}, nil, fmt.Errorf("%w: invalid context marker position", store.ErrCorruptLog)
+			}
+			state.contextMarkers = append(state.contextMarkers, contextMarker{
+				after:   payload.After,
+				message: cloneMessages([]agentic.Message{payload.Message})[0],
+			})
+		case kindCompaction:
+			payload, err := decodePayload[compactionPayload](payloadCodec, entry)
+			if err != nil {
+				return foldedState{}, nil, err
+			}
+			state.compaction = cloneContextCompaction(&payload.Compaction)
+		case kindBranchMoved, kindRecovered:
+			// Preserved in the log and event history.
 		}
 	}
 	if !created {
@@ -390,6 +442,11 @@ func applyRecoveredEvent(payloadCodec codec.Codec, state *foldedState, record ev
 		}
 		if state.run != nil {
 			state.run.lastUsage = cloneUsage(payload.RunUsage)
+		}
+	case agentic.EventTypeRunStarted:
+		if state.run != nil && state.state == Suspended {
+			state.state = Running
+			state.run.resumeEventSeen = true
 		}
 	case agentic.EventTypeRunSuspended:
 		payload, err := event.Decode[event.SuspensionPayload](payloadCodec, record)
@@ -516,13 +573,27 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 		s.mu.Unlock()
 		return idErr
 	}
+	var limits *agentic.UsageLimits
+	if s.budget != nil {
+		remaining, remainingErr := remainingLimits(*s.budget, s.usage)
+		if remainingErr != nil {
+			s.mu.Unlock()
+			return remainingErr
+		}
+		limits = &remaining
+	}
 	batch := newEntryBatch(s.codec, len(added)+3)
 	batch.Add(kindRecovered, struct{ State string }{State: "continue"})
 	batch.Add(kindRunClosed, runClosedPayload{ID: oldRunID, Status: agentic.ExecutionInterrupted, Error: "process stopped before run termination"})
 	for _, message := range added {
 		batch.Add(kindRepair, messagePayload{Message: message, Source: "recovery_repair"})
 	}
-	batch.Add(kindRunOpened, runOpenedPayload{ID: newRunID, Mode: "continue", Recovery: true})
+	batch.Add(kindRunOpened, runOpenedPayload{
+		ID:       newRunID,
+		Mode:     "continue",
+		Recovery: true,
+		Limits:   cloneLimitsPointer(limits),
+	})
 	pendingEntries, encodeErr := batch.Result()
 	if encodeErr != nil {
 		s.mu.Unlock()
@@ -535,7 +606,13 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 	}
 	s.messages = repaired
 	s.cursor = commit.Cursor
-	s.run = &activeRun{id: newRunID, mode: agentic.DriveContinue, history: providerHistory(repaired, s.contextMarkers)}
+	s.run = &activeRun{
+		id:                 newRunID,
+		mode:               agentic.DriveContinue,
+		history:            providerHistory(repaired, s.contextMarkers),
+		contextMarkerCount: len(s.contextMarkers),
+		limits:             cloneLimitsPointer(limits),
+	}
 	s.suspension = nil
 	s.transitionLocked(Running)
 	s.mu.Unlock()
@@ -550,8 +627,8 @@ func (s *Session[O]) continueRecovered() {
 		s.mu.Unlock()
 		return
 	}
-	var limits *agentic.UsageLimits
-	if s.budget != nil {
+	limits := cloneLimitsPointer(s.run.limits)
+	if limits == nil && s.budget != nil {
 		remaining, err := remainingLimits(*s.budget, s.usage)
 		if err != nil {
 			s.mu.Unlock()
@@ -559,6 +636,7 @@ func (s *Session[O]) continueRecovered() {
 			return
 		}
 		limits = &remaining
+		s.run.limits = cloneLimitsPointer(limits)
 	}
 	history := cloneMessages(s.run.history)
 	runCtx, cancel := context.WithCancel(context.Background())

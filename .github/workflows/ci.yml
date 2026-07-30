@@ -60,6 +60,8 @@ jobs:
         run: GOWORK=off go vet ./...
       - name: Check build
         run: GOWORK=off go build ./...
+      - name: Enforce coverage threshold
+        run: GOWORK=off make coverage-check
 
   harness-lint:
     name: Harness lint

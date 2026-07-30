@@ -8,6 +8,7 @@ import (
 
 	agentic "github.com/regularkevvv/agentic"
 	"github.com/regularkevvv/agentic/harness/event"
+	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 	"github.com/regularkevvv/agentic/harness/store"
 )
 
@@ -99,6 +100,16 @@ func WithDrainAll(enabled bool) Option {
 type SubscribeOptions = event.SubscribeOptions
 type Subscription = event.Subscription
 type Event = event.Record
+type ResumeRequest = harnessruntime.ResumeRequest
+type ToolResolution = harnessruntime.ToolResolution
+type ResolutionAction = harnessruntime.ResolutionAction
+
+const (
+	ResolutionInvalid        = harnessruntime.ResolutionInvalid
+	ResolutionApprove        = harnessruntime.ResolutionApprove
+	ResolutionDeny           = harnessruntime.ResolutionDeny
+	ResolutionExternalResult = harnessruntime.ResolutionExternalResult
+)
 
 var (
 	ErrSessionBusy              = errors.New("session is not idle")
@@ -110,6 +121,8 @@ var (
 	ErrCommitProjectionMismatch = errors.New("agentic commit projection mismatch")
 	ErrBudgetExceeded           = errors.New("session budget exceeded")
 	ErrInvalidMessage           = errors.New("session input must be a user message")
+	ErrInvalidResumeRequest     = harnessruntime.ErrInvalidResumeRequest
+	ErrIndeterminateTool        = errors.New("indeterminate tool cannot be executed automatically")
 	ErrSessionOpen              = store.ErrSessionOpen
 	ErrSessionClosed            = errors.New("session is closed")
 )

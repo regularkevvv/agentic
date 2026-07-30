@@ -273,16 +273,19 @@ handler runs; persist the returned `Execution.Result.Messages` and
 ## Experimental Durable Harness
 
 The repository also contains the nested experimental module
-`github.com/regularkevvv/agentic/harness`. Its Phase 2 runtime adds durable
+`github.com/regularkevvv/agentic/harness`. Its Phase 3 surface adds durable
 single-process sessions, steering/follow-up/next-turn queues, interruption and
 recovery, bounded cursor subscriptions, transcript repair, Local and Memory
-environments, and session-scoped artifact spill.
+environments, session-scoped artifact spill, an immutable capability DAG,
+context compaction, default-deny permissions, and exact deferred resume.
 
 The low-level constructor is `harness.NewRuntime`; it depends on generic
 journal, codec, event, environment, clock/ID, and result-processing ports.
 Concrete memory, JSONL, local, file, and in-process adapters are selected only
-at the application composition root. Capability assembly, permissions,
-policy-driven deferred resume, and `Default` remain later-phase work. See
+at the application composition root. `harness.New(...).Build()` composes public
+capabilities without changing those dependency directions, while
+`harness.Default` is an explicit local convenience assembly. Subagents,
+codemode, long-term memory, skills, and evals remain later-phase work. See
 [`harness/README.md`](harness/README.md) for the exact experimental boundary.
 
 ## History Processors

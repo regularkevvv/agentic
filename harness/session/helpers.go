@@ -48,6 +48,14 @@ func cloneLimits(limits agentic.UsageLimits) agentic.UsageLimits {
 	}
 }
 
+func cloneLimitsPointer(limits *agentic.UsageLimits) *agentic.UsageLimits {
+	if limits == nil {
+		return nil
+	}
+	copy := cloneLimits(*limits)
+	return &copy
+}
+
 func cloneInt(value *int) *int {
 	if value == nil {
 		return nil

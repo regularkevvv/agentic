@@ -1,6 +1,6 @@
 // Package artifact defines ports for complete tool-result storage and
-// session-scoped result processing. The model-facing read capability is
-// intentionally deferred.
+// session-scoped result processing. Model-facing access is contributed
+// separately through the gated artifacts capability.
 package artifact
 
 import (
