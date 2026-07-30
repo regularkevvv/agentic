@@ -1,4 +1,4 @@
-# Agentic Harness (experimental Phase 3)
+# Agentic Harness (experimental Phase 4)
 
 This nested module contains the experimental `v0.1` harness surface for
 Agentic `v0.4.0`. It currently provides:
@@ -16,8 +16,14 @@ Agentic `v0.4.0`. It currently provides:
   compactors;
 - most-specific, default-deny permission policy with `ReadOnly` and
   `WorkspaceWrite` presets;
-- exact, write-ahead deferred resume through the released root `Driver`; and
-- an explicit local `Default` assembly.
+- exact, write-ahead deferred resume through the released root `Driver`;
+- an explicit local `Default` assembly;
+- capture-restricted, in-process child agents with separate durable sessions
+  and addressed inbox routing;
+- shared or narrowed history, environment, tools, permissions, dependencies,
+  and cumulative budget policies; and
+- tagged descendant events, explicit recursion limits, parent cancellation,
+  and bounded UTF-8 child summaries.
 
 The runtime and session core import only ports. `harness.NewRuntime` remains
 the policy-neutral constructor; `harness.New(...).Build()` layers an immutable
@@ -72,8 +78,56 @@ assembles the same public capabilities over Local, JSONL, file-artifact, and
 in-process adapters. Local permission policy is governance around ordinary host
 execution; it does not create an OS sandbox.
 
-Subagents, codemode, long-term memory, skills, and evals are not part of Phase
-3. They remain planned for later phases in
+Subagents are ordinary optional capabilities and are not installed by
+`harness.Default`:
+
+```go
+import "github.com/regularkevvv/agentic/harness/subagent"
+
+worker := agentic.NewAgent("You are a focused researcher.", workerModel)
+researcher, err := subagent.New(worker, subagent.Config{
+    Name:        "researcher",
+    Description: "Research one bounded task.",
+    Runtime:     runtimeConfig,
+    Capture: subagent.Capture{
+        Environment: subagent.ModeNarrow,
+        Tools:       subagent.ModeNarrow,
+    },
+    EnvironmentRoot: "research",
+    ToolFilter: func(name string) bool {
+        return name == "read_file"
+    },
+})
+
+runtime, err = harness.New(
+    parentRunner,
+    harness.WithRuntime(runtimeConfig),
+    harness.WithCapabilities(researcher),
+).Build()
+```
+
+The zero-value capture policy isolates history and tools, shares dependencies,
+environment, and budget, and imports parent permissions as a non-broadening
+gate. Every field can instead select `ModeIsolate`, `ModeShare`, or
+`ModeNarrow`; narrowing requires the corresponding projector, environment
+root, tool filter, or usage limit. `NewWithDeps` gives its binder the resolved
+dependency mode so application code can derive the exact bound child runner
+without reflection or a harness-owned dependency container.
+
+Capture governs resources contributed by the parent harness. The child
+runner's own system prompt, dependencies, and intrinsic tools are
+child-native, so callers should construct that runner with only the resources
+the child is meant to own. `Config.Capabilities` adds the child's explicit
+harness-native tools and policies.
+
+Child sessions use distinct durable journals, inboxes, environment leases, and
+artifact scopes. Their parent ID, agent name, and depth are persisted with
+session creation and remain authoritative after reopen. The process-local
+address router is available while a delegation call is executing. Completed
+children remain recoverable by their opaque session IDs. In-process synchronous
+delegation is the Phase 4 boundary: out-of-process workers, topology presets,
+automatic suspended-child orchestration, codemode, long-term memory, skills,
+and evals remain deferred to the later work described in
 [`../docs/spike-harness-framework.md`](../docs/spike-harness-framework.md).
 
 The module requires the released root module:

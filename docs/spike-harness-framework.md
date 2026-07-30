@@ -1,7 +1,7 @@
 # Harness Framework: Production Design and Delivery Plan
 
-**Status:** Final production design; Phases 1-2 implemented, Phase 3 in review
-**Date:** 2026-07-29
+**Status:** Final production design; Phases 1-3 implemented, Phase 4 in review
+**Date:** 2026-07-30
 **Repository baseline:** `9c33333` (`v0.4.0`)
 **Decision owner:** `agentic` maintainers
 
@@ -1310,6 +1310,30 @@ child inbox unless addressed to that child. Delegation tools are removed from
 inherited toolsets unless recursion is explicitly enabled with a depth limit.
 Child events are tagged and projected onto the parent bus; the bounded child
 summary is the tool result.
+
+The Phase 4 implementation remains port-driven. A dependency-aware child
+binder receives the resolved dependency capture mode and returns an exactly
+typed, already-bound runner; the harness does not inspect or rewrite dependency
+values. Shared or narrowed tools are immutable filtered wrappers over parent
+toolsets. Parent permission decisions are imported ahead of child gates, so a
+child can narrow but never broaden them. Shared budgets use a serialized,
+write-ahead usage lease and restore cumulative descendant usage from the parent
+journal.
+
+Capture applies to resources contributed by the parent harness. The explicitly
+supplied child runner retains its child-native system prompt, bound
+dependencies, and intrinsic tools; constructing that runner is therefore part
+of the capture boundary rather than an opaque runtime mutation.
+
+Child sessions are ordinary durable sessions with distinct IDs, journals,
+inboxes, environments, and artifact scopes. The addressed router contains only
+currently executing in-process children; completed children remain recoverable
+from their session IDs but are not retained as live routes. Each creation record
+persists the child's parent ID, agent name, and depth, so recovery cannot
+silently re-parent the transcript. Initial child events are not exposed on the
+parent bus until the route exists. Out-of-process workers, topology presets,
+automatic orchestration of a suspended child, and public transcript fork/move
+APIs remain outside Phase 4.
 
 Codemode is Phase 5 behind an `Executor` interface. It must use the same tool
 gate, suspension, event, and recovery contracts; it does not introduce another
