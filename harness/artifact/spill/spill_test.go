@@ -74,4 +74,83 @@ func TestFactoryAndValidation(t *testing.T) {
 	if _, err := NewFactory(storage, Config{Threshold: 3, Head: 2, Tail: 2}); err == nil {
 		t.Fatal("invalid spill limits succeeded")
 	}
+	if err := (Config{Disabled: true, Threshold: 1}).Validate(); err == nil {
+		t.Fatal("disabled spill with limits succeeded")
+	}
+	disabled, err := NewProcessor(storage, "session", Config{Disabled: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := strings.Repeat("unbounded", 100)
+	result, err := disabled.Process(context.Background(), agentic.ToolUse{ID: "disabled", Name: "tool"}, agentic.ToolExecutionResult{Content: content})
+	if err != nil || result.Content != content || storage.Count("session") != 0 {
+		t.Fatalf("disabled result=%#v count=%d err=%v", result.Content, storage.Count("session"), err)
+	}
+}
+
+type failingStore struct {
+	err error
+}
+
+func (s failingStore) Put(context.Context, string, string, []byte) (artifact.Handle, error) {
+	return "", s.err
+}
+
+func (s failingStore) Get(context.Context, string, artifact.Handle) ([]byte, error) {
+	return nil, s.err
+}
+
+func TestFactoryProcessorCancellationDefaultsAndStoreFailure(t *testing.T) {
+	t.Parallel()
+	if _, err := NewFactory(nil, Config{}); err == nil {
+		t.Fatal("nil factory store succeeded")
+	}
+	if _, err := NewProcessor(nil, "session", Config{}); err == nil {
+		t.Fatal("nil processor store succeeded")
+	}
+	if _, err := NewProcessor(artifactmemory.New(), "bad/session", Config{}); err == nil {
+		t.Fatal("invalid processor session succeeded")
+	}
+	if _, err := NewProcessor(artifactmemory.New(), "session", Config{
+		Threshold: 3,
+		Head:      2,
+		Tail:      2,
+	}); err == nil {
+		t.Fatal("invalid processor spill limits succeeded")
+	}
+	if err := (Config{}).Validate(); err != nil {
+		t.Fatalf("default config = %v", err)
+	}
+	factory, err := NewFactory(artifactmemory.New(), Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := factory.Open(ctx, "session"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled Open = %v", err)
+	}
+
+	wantErr := errors.New("storage")
+	processor, err := NewProcessor(failingStore{err: wantErr}, "session", Config{Threshold: 4, Head: 1, Tail: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := processor.Process(context.Background(), agentic.ToolUse{ID: "call"}, agentic.ToolExecutionResult{
+		Content: "oversized",
+	}); !errors.Is(err, wantErr) {
+		t.Fatalf("spill failure = %v", err)
+	}
+	if got := utf8Head([]byte("ok"), 10); got != "ok" {
+		t.Fatalf("full head = %q", got)
+	}
+	if got := utf8Tail([]byte("ok"), 10); got != "ok" {
+		t.Fatalf("full tail = %q", got)
+	}
+	if got := utf8Head([]byte("éx"), 1); got != "" {
+		t.Fatalf("split head = %q", got)
+	}
+	if got := utf8Tail([]byte("xé"), 1); got != "" {
+		t.Fatalf("split tail = %q", got)
+	}
 }

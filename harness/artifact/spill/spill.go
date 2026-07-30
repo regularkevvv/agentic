@@ -21,9 +21,24 @@ type Config struct {
 	Threshold int
 	Head      int
 	Tail      int
+	// Disabled is the explicit opt-out from result bounding. Zero-valued
+	// configuration keeps the safe default enabled.
+	Disabled bool
+}
+
+// Validate checks a spill configuration without opening storage.
+func (c Config) Validate() error {
+	_, err := c.normalized()
+	return err
 }
 
 func (c Config) normalized() (Config, error) {
+	if c.Disabled {
+		if c.Threshold != 0 || c.Head != 0 || c.Tail != 0 {
+			return Config{}, errors.New("disabled artifact spill cannot set limits")
+		}
+		return c, nil
+	}
 	if c.Threshold == 0 {
 		c.Threshold = DefaultThreshold
 	}
@@ -88,6 +103,9 @@ func (p *Processor) Process(ctx context.Context, call agentic.ToolUse, result ag
 	formatted := strings.ToValidUTF8(agentic.FormatToolResult(result.Content), "�")
 	data := []byte(formatted)
 	result.Content = formatted
+	if p.config.Disabled {
+		return result, nil
+	}
 	if len(data) <= p.config.Threshold {
 		return result, nil
 	}
