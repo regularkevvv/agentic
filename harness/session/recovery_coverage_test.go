@@ -64,27 +64,6 @@ func createdEntry(t *testing.T, payloadCodec codec.Codec) store.Entry {
 	return encodedEntry(t, payloadCodec, 1, kindSessionCreated, sessionCreatedPayload{})
 }
 
-func eventEntry(
-	t *testing.T,
-	payloadCodec codec.Codec,
-	seq uint64,
-	kind string,
-	eventType agentic.EventType,
-	payload any,
-) store.Entry {
-	t.Helper()
-	encoded, err := codec.Encode(payloadCodec, payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return encodedEntry(t, payloadCodec, seq, kind, event.Record{
-		Nature:  agentic.EventAuthoritative,
-		Type:    eventType,
-		Source:  "agentic",
-		Payload: encoded,
-	})
-}
-
 func TestFoldRejectsEveryMalformedPayloadKind(t *testing.T) {
 	payloadCodec := jsoncodec.New()
 	kinds := []string{

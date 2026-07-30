@@ -274,7 +274,7 @@ func TestPolicyPatternValidationTiesAndNilDefault(t *testing.T) {
 		Rule{Pattern: "tool/name/**", Decision: DecisionAsk},
 		Rule{Pattern: "tool/name/**", Decision: DecisionAllow},
 		Rule{Pattern: "too/long/pattern", Decision: DecisionAsk},
-		Rule{Pattern: "tool/?ther/**", Decision: DecisionAsk},
+		Rule{Pattern: "tool/oth?r/**", Decision: DecisionAsk},
 	)
 	if err != nil {
 		t.Fatal(err)

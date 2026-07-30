@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io/fs"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -75,11 +74,10 @@ func (r repositoryStub) Open(ctx context.Context, id string) (store.Journal, err
 }
 
 type journalStub struct {
-	id        string
-	load      func(context.Context) (store.Snapshot, error)
-	append    func(context.Context, store.Cursor, ...store.PendingEntry) (store.Commit, error)
-	close     func(context.Context) error
-	closeOnce sync.Once
+	id     string
+	load   func(context.Context) (store.Snapshot, error)
+	append func(context.Context, store.Cursor, ...store.PendingEntry) (store.Commit, error)
+	close  func(context.Context) error
 }
 
 func (j *journalStub) SessionID() string { return j.id }
