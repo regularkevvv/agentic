@@ -1,8 +1,8 @@
 # Harness Framework: Production Design and Delivery Plan
 
-**Status:** Final proposal; ready to implement
-**Date:** 2026-07-21
-**Repository baseline:** `a67bbef` (`v0.3.0`)
+**Status:** Final production design; Phase 2 implementation in review
+**Date:** 2026-07-29
+**Repository baseline:** `9c33333` (`v0.4.0`)
 **Decision owner:** `agentic` maintainers
 
 ---
@@ -131,6 +131,18 @@ Permissions and compaction are policies layered over that substrate. Putting
 permissions inside a filesystem does not make shell execution safe, and putting
 filesystem methods directly inside capabilities makes alternate backends
 impossible.
+
+The dependency direction is strict: runtime and session policy import ports,
+never adapters. Durable payloads are opaque bytes behind an injected codec;
+session journals are exclusive leases with expected-leaf appends; environments,
+event hubs, and result processors are created by session-scoped factories.
+Memory, JSONL, local-filesystem, in-process-bus, and spill implementations live
+in adapter subpackages. A deployment selects them only at its composition root.
+
+This separation does not turn state-machine policy into configuration. Queue
+linearization, append-before-execute ordering, recovery classification, repair,
+durable cursors, subscriber lag behavior, usage, and budgets remain invariant
+core behavior.
 
 > The durable transcript is truth; each provider request is a derived view.
 
@@ -702,16 +714,33 @@ agentic/                       root module: github.com/regularkevvv/agentic
 └── harness/                   nested module
     ├── go.mod                 github.com/regularkevvv/agentic/harness
     ├── harness.go
-    ├── artifact/
-    ├── capability/
-    ├── contextpolicy/
-    ├── env/
-    ├── event/
-    ├── permission/
-    ├── runtime/
-    ├── session/
-    └── subagent/              later phase
+    ├── artifact/              ports and opaque handle types
+    │   ├── artifacttest/      reusable adapter conformance
+    │   ├── file/              file-backed adapter
+    │   ├── memory/            in-memory adapter
+    │   └── spill/             oversized-result processor adapter
+    ├── codec/                 durable payload representation port
+    │   └── json/              JSON codec adapter
+    ├── env/                   substrate ports and error taxonomy
+    │   ├── envtest/           reusable adapter conformance
+    │   ├── local/             host-local adapter; not a sandbox
+    │   └── memory/            in-memory adapter
+    ├── event/                 hub and subscription ports
+    │   ├── eventtest/         reusable adapter conformance
+    │   └── inproc/            bounded process-local adapter
+    ├── repair/
+    ├── runtime/               ToolRuntime, clock, and identity ports
+    │   └── system/            wall-clock and cryptographic-ID adapters
+    ├── session/               state-machine/application core
+    └── store/                 journal contracts and opaque entries
+        ├── jsonl/             filesystem JSON-lines adapter
+        ├── memory/            in-memory adapter
+        └── storetest/         reusable adapter conformance
 ```
+
+Phase 2 creates no empty future-layout packages. Capability, context-policy,
+permission, subagent, codemode, memory, skill, and eval packages arrive only
+with their implementation phases.
 
 Do not move the root module into `agentic/`; doing so changes its published import
 path. Nested-module releases use subdirectory tags such as `harness/v0.1.0`, as
@@ -840,6 +869,7 @@ func (s *Session[O]) Interrupt(context.Context) error
 func (s *Session[O]) Snapshot(context.Context) (Snapshot, error)
 func (s *Session[O]) Subscribe(SubscribeOptions) *Subscription
 func (s *Session[O]) WaitForIdle(context.Context) error
+func (s *Session[O]) Close(context.Context) error
 
 type Snapshot struct {
     Cursor     uint64
@@ -850,6 +880,28 @@ type Snapshot struct {
     Usage      agentic.Usage
 }
 ```
+
+The low-level Phase 2 composition is explicit and adapter-neutral:
+
+```go
+type RuntimeConfig struct {
+    Sessions         store.Repository
+    Codec            codec.Codec
+    Events           event.Factory
+    Environments     env.Factory
+    ResultProcessors artifact.ProcessorFactory
+    Clock            runtime.Clock
+    IDs              runtime.IDGenerator
+    ToolCancellationGrace time.Duration
+}
+```
+
+`Close` releases the session's journal lease, event hub, and environment without
+rewriting durable state. Idle, suspended, and faulted sessions may be closed and
+later reopened. Active sessions reject close until they reach a safe state.
+Close is idempotent and retryable: a canceled or failed cleanup does not release
+the Harness's ownership, and `ResumeSession` completes any outstanding cleanup
+before opening fresh session-scoped adapters.
 
 `Prompt` is valid only while idle. A suspended session must use `Resume` or
 `Interrupt`; a second prompt cannot accidentally paper over unresolved calls.
@@ -884,6 +936,7 @@ Idle --Prompt--> Running --natural/error--> Closing --> Idle
 Running --suspend--> Suspended --Resume--> Running
 Running/Suspended --Interrupt--> Interrupting --> Idle
 Running/Closing/Suspended --store failure--> Faulted
+Idle/Suspended/Faulted --Close--> Closed
 ```
 
 The `Closing` transition and queue check occur under the session mutex. Public
@@ -897,7 +950,7 @@ acceptance write that fails before in-memory enqueue does not fault the session.
 
 ## 17. Durable transcript and recovery
 
-The session store is an append-only entry tree:
+The session persistence port is an append-only journal with opaque payloads:
 
 ```go
 type Entry struct {
@@ -905,10 +958,34 @@ type Entry struct {
     Seq      uint64
     ID       string // UUIDv7
     ParentID string
-    Kind     EntryKind
-    Payload  json.RawMessage
+    Kind     string
+    Payload  []byte
+}
+
+type Repository interface {
+    Create(context.Context, string, ...PendingEntry) (Journal, Commit, error)
+    Open(context.Context, string) (Journal, error)
+}
+
+type Journal interface {
+    SessionID() string
+    Load(context.Context) (Snapshot, error)
+    Append(context.Context, Cursor, ...PendingEntry) (Commit, error)
+    Close(context.Context) error
+}
+
+type Codec interface {
+    Encode(any) ([]byte, error)
+    Decode([]byte, any) error
 }
 ```
+
+Opening a journal acquires its exclusive writer lease. Every append supplies the
+expected exact leaf cursor and returns `ErrConflict` on stale state. This makes
+single ownership a storage contract rather than a mutex hidden in one Harness
+or one concrete store value. The session core chooses which facts require
+synchronous durability; adapters implement that acknowledgement requirement.
+Payload encoding and journal envelope encoding are independent choices.
 
 Entry kinds include messages, queue accepted/drained/cancelled, turn boundaries,
 tool batch planned, tool started, tool result, suspension, resolution,
@@ -920,16 +997,18 @@ entries for forward compatibility. Public branching is deferred until a
 single-writer store coordinator can prevent two branch sessions from writing the
 same file independently.
 
-`JSONLStore` has one writer per session, opens with append semantics, and
-serializes writes. It calls `fsync` before
+The `store/jsonl` adapter has one writer per session, opens with append
+semantics, and serializes writes. It calls `fsync` before
 acknowledging queue acceptance, tool start/result, suspension/resolution, and
 turn/run termination, and syncs the parent directory when creating a session
 file. `v0.1.0` has no buffered mode that weakens the word
 “durable.” A trailing partial JSON line after a crash is copied to a diagnostic
 sidecar and the incomplete tail is truncated before append resumes; earlier
 valid entries remain. Moving the leaf or creating a branch is another append,
-not an in-place rewrite or an “atomic rename.” `MemStore` implements the same
-contract for tests.
+not an in-place rewrite or an “atomic rename.” It refuses a second
+process-local/file-lock owner; this is exclusion, not a distributed lease.
+`store/memory` implements the same port and passes the same reusable conformance
+suite.
 
 Recovery folds valid entries from root to leaf, reapplies the last compaction,
 restores unconsumed inbox entries, and examines tool states:
@@ -1057,17 +1136,33 @@ frontier.
 ```go
 package env
 
+type CanonicalResource struct {
+    Scheme  string
+    ID      string // opaque outside the backend
+    Display string
+}
+
 type Environment interface {
-    FileSystem
-    Shell
-    Cleanup(context.Context) error
+    Files() FileSystem
+    Shell() (Shell, bool)
+}
+
+type Lease interface {
+    Environment
+    Close(context.Context) error
+}
+
+type Factory interface {
+    Open(context.Context, string /* session ID */) (Lease, error)
 }
 ```
 
 Initial implementations are `Local` and `Memory`; container and remote backends
 come later. Errors map to a closed backend-independent code set. Relative paths
-resolve against environment `Cwd`. Authorization checks use a canonical path and
-the operation must guard against path replacement between check and use.
+resolve against environment `Cwd`. Canonicalization returns a backend-qualified
+opaque resource rather than a backend-specific raw string. Authorization checks
+use that canonical resource and the operation must guard against path
+replacement between check and use.
 
 `Local` rejects path traversal and follows an explicit symlink policy, but its
 permission rules are not an OS security boundary against a hostile shell command
@@ -1093,6 +1188,9 @@ bound runner preserves its exact dependency type.
 
 Environment cleanup is bounded and best effort. Cleanup failures emit lifecycle
 errors but do not replace an earlier run failure.
+
+`Harness` asks the factory for a distinct lease for every session; it never
+shares one environment instance implicitly across sessions.
 
 ## 21. Harness events and backpressure
 
@@ -1128,6 +1226,10 @@ func (s *Subscription) Close()
 
 Historical replay contains authoritative/lifecycle events only. Preview starts
 live after replay, so a cursor never promises recovery of token deltas.
+
+Session code depends on an `event.Hub` and `event.Factory`. The bounded
+process-local implementation lives in `event/inproc`; alternate hubs must pass
+the same preview-gap, lag-disconnect, replay, close, and race conformance tests.
 
 This is the only coherent way to combine bounded memory, nonblocking execution,
 and no silent loss of authoritative events. “Never drop and never block” without
@@ -1251,7 +1353,7 @@ critical path.
 |---|---|---|
 | 0 | This corrected production design | Complete |
 | 1 | Root `v0.4.0` shared fold and `Driver[O]` | Blocking/streaming/typed parity and all terminal-pair invariants pass |
-| 2 | Monorepo scaffolding plus harness runtime/session/events/repair/env/artifacts | Both modules pass independently with `GOWORK=off`; restart, spill, and lag tests pass |
+| 2 | Monorepo scaffolding plus port-driven harness runtime/session/events/repair/env/artifacts and concrete adapters | Both modules pass independently with `GOWORK=off`; adapter conformance, architecture direction, restart, spill, and lag tests pass |
 | 3 | Capability graph, context policy, permissions, deferred resume, `Default()` | `harness/v0.1.0` experimental; default uses only public capability APIs |
 | 4 | Capture-restricted subagents and remaining toolset wrappers | Parent/child routing, budget, recursion, and cancellation tests pass |
 | 5 | Codemode, memory, evals, optional product surface | Separate proposal and release |
@@ -1295,6 +1397,11 @@ contract needs focused proof before a second module depends on it.
   only through its opaque handle;
 - interrupt repairs every frontier and preserves `NextTurn`;
 - repair idempotence and byte stability, including after compaction;
+- reusable conformance suites for journal, event-hub, environment, and artifact
+  adapters;
+- a dependency-direction test proving runtime/session core imports no concrete
+  adapter and no root `internal/...` package;
+- independent session environment leases and deterministic cleanup/reopen;
 - `Default()` can be reconstructed from exported capability APIs; and
 - `go test -race` for session, event, and store packages.
 
@@ -1325,7 +1432,8 @@ release proof.
 
 - Exactly-once external side effects require tool-specific idempotency or an
   external transaction system.
-- Multi-process session ownership requires leases and a different store.
+- Distributed multi-process session ownership requires a lease-capable
+  repository; the JSONL adapter only refuses concurrent local/file-lock owners.
 - Remote/container environments need backend-specific TOCTTOU and cancellation
   audits.
 - Codemode depends on experimental runtimes and remains isolated behind

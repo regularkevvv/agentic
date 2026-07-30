@@ -6,7 +6,7 @@
 
 A lightweight, type-safe Go framework for building AI agents with tool use, structured output, and multi-agent orchestration.
 
-Current release: **v0.3.0**. The next release is **v0.4.0**.
+Current release: **v0.4.0**.
 
 ## Features
 
@@ -270,6 +270,21 @@ handler runs; persist the returned `Execution.Result.Messages` and
 `BindProvider` still return `Runner`, while their concrete values also implement
 `Driver` and can be checked with `RequireDriver`.
 
+## Experimental Durable Harness
+
+The repository also contains the nested experimental module
+`github.com/regularkevvv/agentic/harness`. Its Phase 2 runtime adds durable
+single-process sessions, steering/follow-up/next-turn queues, interruption and
+recovery, bounded cursor subscriptions, transcript repair, Local and Memory
+environments, and session-scoped artifact spill.
+
+The low-level constructor is `harness.NewRuntime`; it depends on generic
+journal, codec, event, environment, clock/ID, and result-processing ports.
+Concrete memory, JSONL, local, file, and in-process adapters are selected only
+at the application composition root. Capability assembly, permissions,
+policy-driven deferred resume, and `Default` remain later-phase work. See
+[`harness/README.md`](harness/README.md) for the exact experimental boundary.
+
 ## History Processors
 
 Manage context window with built-in processors:
@@ -313,6 +328,7 @@ perRun := agent.BindProvider(func(ctx context.Context) (*MyDeps, error) {
 
 ```
 agentic/
+  go.work             # Local root + nested harness workspace
   agent.go            # Core agent orchestration
   agent_options.go    # Configuration options
   driver.go           # Start/continue/resume execution capability
@@ -328,6 +344,7 @@ agentic/
   internal/core/      # Shared types (Message, Tool, Model, etc.)
   mcp/                # Model Context Protocol integration
   examples/           # Runnable example programs
+  harness/            # Nested experimental durable-session module
 ```
 
 ## Examples

@@ -12,8 +12,7 @@
 *.out
 *.coverprofile
 
-# Go workspace file
-go.work
+# Go workspace checksum (go.work is committed for the root and harness modules)
 go.work.sum
 
 # Dependency directories
