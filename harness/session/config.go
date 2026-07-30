@@ -7,6 +7,7 @@ import (
 	agentic "github.com/regularkevvv/agentic"
 	"github.com/regularkevvv/agentic/harness/artifact"
 	"github.com/regularkevvv/agentic/harness/codec"
+	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
@@ -24,6 +25,11 @@ type Config[O any] struct {
 	Clock                 harnessruntime.Clock
 	IDs                   harnessruntime.IDGenerator
 	ToolCancellationGrace time.Duration
+	Toolsets              []agentic.Toolset
+	ToolGate              agentic.ToolGate
+	Context               contextpolicy.Projector
+	EventMiddleware       []event.Middleware
+	LifecycleHooks        []harnessruntime.LifecycleHook
 }
 
 func (c Config[O]) validate() error {
@@ -54,6 +60,16 @@ func (c Config[O]) validate() error {
 	if c.IDs == nil {
 		return errors.New("session ID generator is required")
 	}
+	for _, middleware := range c.EventMiddleware {
+		if middleware == nil {
+			return errors.New("session event middleware must not be nil")
+		}
+	}
+	for _, hook := range c.LifecycleHooks {
+		if hook == nil {
+			return errors.New("session lifecycle hook must not be nil")
+		}
+	}
 	if c.ToolCancellationGrace < 0 {
 		return errors.New("tool cancellation grace cannot be negative")
 	}
@@ -73,6 +89,7 @@ type runOpenedPayload struct {
 	ID       string
 	Mode     string
 	Recovery bool
+	Limits   *agentic.UsageLimits
 }
 
 type runClosedPayload struct {
@@ -100,4 +117,18 @@ type usagePayload struct {
 
 type interruptMarkerPayload struct {
 	Message string
+}
+
+type contextMessagePayload struct {
+	After   int
+	Message agentic.Message
+}
+
+type compactionPayload struct {
+	Compaction contextpolicy.Compaction
+}
+
+type resolutionAcceptedPayload struct {
+	SuspensionID string
+	Request      harnessruntime.ResumeRequest
 }

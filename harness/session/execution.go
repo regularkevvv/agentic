@@ -8,7 +8,6 @@ import (
 	agentic "github.com/regularkevvv/agentic"
 	"github.com/regularkevvv/agentic/harness/codec"
 	"github.com/regularkevvv/agentic/harness/event"
-	"github.com/regularkevvv/agentic/harness/repair"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 )
 
@@ -43,7 +42,7 @@ func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agent
 	}
 	next := s.queueByKindsLocked(QueueNextTurn)
 	batch := newEntryBatch(s.codec, 2+2*len(next))
-	batch.Add(kindRunOpened, runOpenedPayload{ID: runID, Mode: "start"})
+	batch.Add(kindRunOpened, runOpenedPayload{ID: runID, Mode: "start", Limits: cloneLimitsPointer(limits)})
 	for _, entry := range next {
 		batch.Add(kindQueueDrained, queueMutationPayload{ID: entry.ID})
 		batch.Add(kindMessage, messagePayload{Message: entry.Message, Source: string(QueueNextTurn), QueueID: entry.ID})
@@ -70,10 +69,12 @@ func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agent
 	runCtx, cancel := context.WithCancel(ctx)
 	s.runCancel = cancel
 	s.run = &activeRun{
-		id:       runID,
-		mode:     agentic.DriveStart,
-		history:  history,
-		expected: []agentic.Message{promptCopy},
+		id:                 runID,
+		mode:               agentic.DriveStart,
+		history:            history,
+		expected:           []agentic.Message{promptCopy},
+		contextMarkerCount: len(s.contextMarkers),
+		limits:             cloneLimitsPointer(limits),
 	}
 	s.transitionLocked(Running)
 	s.mu.Unlock()
@@ -106,11 +107,17 @@ func (s *Session[O]) promptErrorLocked() error {
 
 func (s *Session[O]) runOptions(limits *agentic.UsageLimits) []agentic.RunOption {
 	options := []agentic.RunOption{
-		agentic.WithRunHistoryProcessor(repair.Repair(repair.CloseInterruptedFrontier, repair.PendingCalls{})),
+		agentic.WithRunHistoryProcessor(agentic.HistoryProcessorFunc(s.projectHistory)),
 		agentic.WithRunTurnHook(s.turnHook),
-		agentic.WithRunEventSink(s),
+		agentic.WithRunEventSink(s.eventSink),
 		agentic.WithRunToolResultProcessor(s.processor),
 		agentic.WithRunToolCancellationGrace(s.grace),
+	}
+	if len(s.toolsets) > 0 {
+		options = append(options, agentic.WithRunToolsets(s.toolsets...))
+	}
+	if s.toolGate != nil {
+		options = append(options, agentic.WithRunToolGate(s.toolGate))
 	}
 	if limits != nil {
 		options = append(options, agentic.WithRunUsageLimits(*limits))
@@ -396,6 +403,10 @@ func (s *Session[O]) applyAgenticEventLocked(value agentic.Event) {
 	case *agentic.TurnStartedEvent:
 		s.run.turn = current.TurnIndex()
 		s.run.previewOrdinal = 0
+	case *agentic.RunStartedEvent:
+		if s.run.resumeInProgress {
+			s.run.resumeEventSeen = true
+		}
 	case *agentic.RunSuspendedEvent:
 		s.suspension = cloneSuspension(&current.Suspension)
 	}

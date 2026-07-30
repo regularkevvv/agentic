@@ -3,11 +3,13 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
 	agentic "github.com/regularkevvv/agentic"
 	"github.com/regularkevvv/agentic/harness/codec"
+	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
@@ -27,6 +29,11 @@ type activeRun struct {
 	planned             []agentic.ToolUse
 	started             map[string]bool
 	results             map[string]bool
+	contextMarkerCount  int
+	limits              *agentic.UsageLimits
+	resumeInProgress    bool
+	resumeEventSeen     bool
+	publicNewStart      int
 }
 
 type contextMarker struct {
@@ -45,12 +52,20 @@ type Session[O any] struct {
 	ids         harnessruntime.IDGenerator
 	grace       time.Duration
 	bus         event.Hub
+	toolsets    []agentic.Toolset
+	toolGate    agentic.ToolGate
+	context     contextpolicy.Projector
+	eventSink   agentic.EventSink
+	lifecycle   []harnessruntime.LifecycleHook
+	compaction  *contextpolicy.Compaction
 
 	closeMu           sync.Mutex
 	previewMu         sync.Mutex
 	busClosed         bool
 	journalClosed     bool
 	environmentClosed bool
+	closingHookDone   bool
+	closedHookDone    bool
 
 	mu             sync.Mutex
 	state          State
@@ -85,6 +100,10 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 	grace := config.ToolCancellationGrace
 	if grace == 0 {
 		grace = time.Second
+	}
+	contextProjector := config.Context
+	if contextProjector == nil {
+		contextProjector = contextpolicy.Passthrough()
 	}
 	environment, err := config.Environments.Open(ctx, config.ID)
 	if err != nil {
@@ -149,11 +168,26 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 		ids:         config.IDs,
 		grace:       grace,
 		bus:         bus,
+		toolsets:    append([]agentic.Toolset(nil), config.Toolsets...),
+		toolGate:    config.ToolGate,
+		context:     contextProjector,
+		lifecycle:   append([]harnessruntime.LifecycleHook(nil), config.LifecycleHooks...),
 		state:       Idle,
 		stateChange: make(chan struct{}),
 		cursor:      commit.Cursor,
 		budget:      settings.budget,
 		drainAll:    settings.drainAll,
+	}
+	sink, err := event.Chain(session, config.EventMiddleware...)
+	if err != nil {
+		return nil, err
+	}
+	session.eventSink = sink
+	if err := harnessruntime.RunLifecycleHooks(ctx, session.lifecycle, harnessruntime.LifecycleEvent{
+		Phase:     harnessruntime.LifecycleSessionOpened,
+		SessionID: session.id,
+	}); err != nil {
+		return nil, fmt.Errorf("session opened lifecycle: %w", err)
 	}
 	cleanupJournal = false
 	cleanupBus = false

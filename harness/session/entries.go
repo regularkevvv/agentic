@@ -33,6 +33,8 @@ const (
 	kindUsageCommitted     = "usage.committed"
 	kindRepair             = "transcript.repair"
 	kindInterruptMarker    = "interrupt.marker"
+	kindContextMessage     = "context.durable"
+	kindResolutionAccepted = "resolution.accepted"
 	kindRecoverySuspension = "recovery.suspension"
 	kindRecovered          = "session.recovered"
 	kindFault              = "session.fault"

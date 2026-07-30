@@ -1,6 +1,4 @@
-// Package harness provides the Phase 2 durable session runtime for Agentic.
-// Capability assembly, permissions, deferred resolution policy, and Default
-// are intentionally reserved for later phases.
+// Package harness provides durable, policy-composable Agentic sessions.
 package harness
 
 import (
@@ -11,7 +9,9 @@ import (
 
 	agentic "github.com/regularkevvv/agentic"
 	"github.com/regularkevvv/agentic/harness/artifact"
+	"github.com/regularkevvv/agentic/harness/capability"
 	"github.com/regularkevvv/agentic/harness/codec"
+	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
 	"github.com/regularkevvv/agentic/harness/repair"
@@ -20,8 +20,8 @@ import (
 	"github.com/regularkevvv/agentic/harness/store"
 )
 
-// RuntimeConfig is the explicit low-level Phase 2 assembly. It is not the
-// policy-bearing Default configuration planned for Phase 3.
+// RuntimeConfig is the explicit low-level substrate assembly. Capability
+// policy is layered on it by Builder.
 type RuntimeConfig struct {
 	Sessions              store.Repository
 	Codec                 codec.Codec
@@ -46,6 +46,12 @@ type Harness[O any] struct {
 	clock        harnessruntime.Clock
 	ids          harnessruntime.IDGenerator
 	grace        time.Duration
+	capabilities []string
+	toolsets     []agentic.Toolset
+	toolGate     agentic.ToolGate
+	context      contextpolicy.Projector
+	eventPolicy  []event.Middleware
+	lifecycle    []harnessruntime.LifecycleHook
 
 	mu      sync.Mutex
 	live    map[string]*Session[O]
@@ -64,6 +70,9 @@ type QueueEntry = session.QueueEntry
 type QueueReceipt = session.QueueReceipt
 type Snapshot = session.Snapshot
 type SessionOption = session.Option
+type ResumeRequest = session.ResumeRequest
+type ToolResolution = session.ToolResolution
+type ResolutionAction = session.ResolutionAction
 type SubscribeOptions = event.SubscribeOptions
 type Subscription = event.Subscription
 type Event = event.Record
@@ -80,6 +89,11 @@ const (
 	SteerQueue    = session.QueueSteer
 	FollowUpQueue = session.QueueFollowUp
 	NextTurnQueue = session.QueueNextTurn
+
+	ResolutionInvalid        = session.ResolutionInvalid
+	ResolutionApprove        = session.ResolutionApprove
+	ResolutionDeny           = session.ResolutionDeny
+	ResolutionExternalResult = session.ResolutionExternalResult
 )
 
 var (
@@ -92,6 +106,8 @@ var (
 	ErrCommitProjectionMismatch = session.ErrCommitProjectionMismatch
 	ErrBudgetExceeded           = session.ErrBudgetExceeded
 	ErrInvalidMessage           = session.ErrInvalidMessage
+	ErrInvalidResumeRequest     = session.ErrInvalidResumeRequest
+	ErrIndeterminateTool        = session.ErrIndeterminateTool
 	ErrSessionOpen              = session.ErrSessionOpen
 	ErrSessionClosed            = session.ErrSessionClosed
 )
@@ -99,9 +115,13 @@ var (
 func WithBudget(limits agentic.UsageLimits) SessionOption { return session.WithBudget(limits) }
 func WithDrainAll(enabled bool) SessionOption             { return session.WithDrainAll(enabled) }
 
-// NewRuntime validates the released root Driver capability at construction.
-// All storage and environment choices are explicit; Phase 2 has no Default.
+// NewRuntime validates the released root Driver capability and constructs the
+// policy-neutral low-level runtime.
 func NewRuntime[O any](runner agentic.Runner[O], config RuntimeConfig) (*Harness[O], error) {
+	return newHarness(runner, config, capability.Plan{})
+}
+
+func newHarness[O any](runner agentic.Runner[O], config RuntimeConfig, plan capability.Plan) (*Harness[O], error) {
 	driver, err := agentic.RequireDriver(runner)
 	if err != nil {
 		return nil, err
@@ -134,6 +154,10 @@ func NewRuntime[O any](runner agentic.Runner[O], config RuntimeConfig) (*Harness
 	if grace == 0 {
 		grace = time.Second
 	}
+	contextProjector := plan.ContextPolicy()
+	if contextProjector == nil {
+		contextProjector = contextpolicy.Passthrough()
+	}
 	return &Harness[O]{
 		driver:       driver,
 		sessions:     config.Sessions,
@@ -144,9 +168,20 @@ func NewRuntime[O any](runner agentic.Runner[O], config RuntimeConfig) (*Harness
 		clock:        config.Clock,
 		ids:          config.IDs,
 		grace:        grace,
+		capabilities: plan.IDs(),
+		toolsets:     plan.Toolsets(),
+		toolGate:     plan.ToolGate(),
+		context:      contextProjector,
+		eventPolicy:  plan.EventMiddleware(),
+		lifecycle:    plan.LifecycleHooks(),
 		live:         make(map[string]*Session[O]),
 		opening:      make(map[string]bool),
 	}, nil
+}
+
+// Capabilities returns the stable topological order frozen at Build time.
+func (h *Harness[O]) Capabilities() []string {
+	return append([]string(nil), h.capabilities...)
 }
 
 func (h *Harness[O]) NewSession(ctx context.Context, opts ...SessionOption) (*Session[O], error) {
@@ -215,6 +250,11 @@ func (h *Harness[O]) sessionConfig(id string) session.Config[O] {
 		Clock:                 h.clock,
 		IDs:                   h.ids,
 		ToolCancellationGrace: h.grace,
+		Toolsets:              append([]agentic.Toolset(nil), h.toolsets...),
+		ToolGate:              h.toolGate,
+		Context:               h.context,
+		EventMiddleware:       append([]event.Middleware(nil), h.eventPolicy...),
+		LifecycleHooks:        append([]harnessruntime.LifecycleHook(nil), h.lifecycle...),
 	}
 }
 
