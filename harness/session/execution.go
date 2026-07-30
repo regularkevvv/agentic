@@ -129,6 +129,8 @@ func (s *Session[O]) withToolRuntime(ctx context.Context) context.Context {
 	return harnessruntime.WithContext(ctx, harnessruntime.ToolRuntime{
 		Environment: s.environment,
 		SessionID:   s.id,
+		Scope:       s.scope,
+		Capture:     s,
 		Emit:        s.emitToolUpdate,
 	})
 }
@@ -149,7 +151,14 @@ func (s *Session[O]) emitToolUpdate(update harnessruntime.ToolUpdate) {
 		ordinal = s.run.previewOrdinal
 	}
 	s.mu.Unlock()
-	s.bus.PublishPreview(event.Record{Nature: agentic.EventPreview, Turn: turn, Ordinal: ordinal, Source: "tool", Name: update.Kind, Payload: payload})
+	s.bus.PublishPreview(s.scopedRecord(event.Record{
+		Nature:  agentic.EventPreview,
+		Turn:    turn,
+		Ordinal: ordinal,
+		Source:  "tool",
+		Name:    update.Kind,
+		Payload: payload,
+	}))
 }
 
 func (s *Session[O]) turnHook(ctx context.Context, turn agentic.Turn) (agentic.TurnDecision, error) {
@@ -167,6 +176,10 @@ func (s *Session[O]) turnHook(ctx context.Context, turn agentic.Turn) (agentic.T
 		s.mu.Unlock()
 		return agentic.TurnDecision{}, fmt.Errorf("turn hook observed session state %s", s.state)
 	}
+	var childBudgetErr error
+	if s.run.childUsageCharged && s.budget != nil {
+		_, childBudgetErr = remainingLimits(*s.budget, s.usage)
+	}
 
 	entries := s.queueByKindsLocked(QueueSteer)
 	if len(entries) == 0 && turn.Candidate.Valid() {
@@ -178,9 +191,18 @@ func (s *Session[O]) turnHook(ctx context.Context, turn agentic.Turn) (agentic.T
 	if len(entries) == 0 {
 		if turn.Candidate.Valid() {
 			s.transitionLocked(Closing)
+		} else if childBudgetErr != nil {
+			s.transitionLocked(Closing)
+			s.mu.Unlock()
+			return agentic.TurnDecision{}, childBudgetErr
 		}
 		s.mu.Unlock()
 		return agentic.TurnDecision{Action: agentic.TurnDefault}, nil
+	}
+	if childBudgetErr != nil {
+		s.transitionLocked(Closing)
+		s.mu.Unlock()
+		return agentic.TurnDecision{}, childBudgetErr
 	}
 
 	batch := newEntryBatch(s.codec, len(entries))
@@ -250,9 +272,10 @@ func (s *Session[O]) Emit(ctx context.Context, value agentic.Event) error {
 			record.Ordinal = s.run.previewOrdinal
 		}
 		s.mu.Unlock()
-		s.bus.PublishPreview(record)
+		s.bus.PublishPreview(s.scopedRecord(record))
 		return nil
 	}
+	record = s.scopedRecord(record)
 	kind, err := agenticEntryKind(record.Type)
 	if err != nil {
 		s.mu.Lock()

@@ -12,6 +12,7 @@ import (
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
+	"github.com/regularkevvv/agentic/harness/repair"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 	"github.com/regularkevvv/agentic/harness/store"
 )
@@ -34,6 +35,7 @@ type activeRun struct {
 	resumeInProgress    bool
 	resumeEventSeen     bool
 	publicNewStart      int
+	childUsageCharged   bool
 }
 
 type contextMarker struct {
@@ -57,9 +59,12 @@ type Session[O any] struct {
 	context     contextpolicy.Projector
 	eventSink   agentic.EventSink
 	lifecycle   []harnessruntime.LifecycleHook
+	scope       harnessruntime.Scope
+	delegation  []string
 	compaction  *contextpolicy.Compaction
 
 	closeMu           sync.Mutex
+	childBudget       chan struct{}
 	previewMu         sync.Mutex
 	busClosed         bool
 	journalClosed     bool
@@ -97,6 +102,10 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 			return nil, err
 		}
 	}
+	initialHistory, err := validateInitialHistory(settings.initialHistory)
+	if err != nil {
+		return nil, err
+	}
 	grace := config.ToolCancellationGrace
 	if grace == 0 {
 		grace = time.Second
@@ -105,6 +114,8 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 	if contextProjector == nil {
 		contextProjector = contextpolicy.Passthrough()
 	}
+	scope := config.Scope
+	scope.SessionID = config.ID
 	environment, err := config.Environments.Open(ctx, config.ID)
 	if err != nil {
 		return nil, err
@@ -138,12 +149,28 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 			bus.Close()
 		}
 	}()
-	payload := sessionCreatedPayload{Options: persistedOptions{Budget: settings.budget, DrainAll: settings.drainAll}}
+	persistedScope := scope
+	payload := sessionCreatedPayload{
+		Options: persistedOptions{Budget: settings.budget, DrainAll: settings.drainAll},
+		Scope:   &persistedScope,
+	}
 	initial, err := pending(config.Codec, kindSessionCreated, payload)
 	if err != nil {
 		return nil, err
 	}
-	journal, commit, err := config.Repository.Create(ctx, config.ID, initial)
+	initialEntries := make([]store.PendingEntry, 0, 1+len(initialHistory))
+	initialEntries = append(initialEntries, initial)
+	for _, message := range initialHistory {
+		entry, encodeErr := pending(config.Codec, kindMessage, messagePayload{
+			Message: message,
+			Source:  "initial_history",
+		})
+		if encodeErr != nil {
+			return nil, encodeErr
+		}
+		initialEntries = append(initialEntries, entry)
+	}
+	journal, commit, err := config.Repository.Create(ctx, config.ID, initialEntries...)
 	if err != nil {
 		return nil, err
 	}
@@ -153,10 +180,16 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 			_ = journal.Close(context.Background())
 		}
 	}()
-	if len(commit.Entries) != 1 {
-		return nil, errors.New("session repository did not commit the creation entry")
+	if len(commit.Entries) != len(initialEntries) {
+		return nil, errors.New("session repository did not commit every creation entry")
 	}
-	bus.PublishDurable(ownRecord(commit.Entries[0], agentic.EventLifecycle))
+	for index, entry := range commit.Entries {
+		nature := agentic.EventAuthoritative
+		if index == 0 {
+			nature = agentic.EventLifecycle
+		}
+		bus.PublishDurable(scopeRecord(scope, ownRecord(entry, nature)))
+	}
 	session := &Session[O]{
 		id:          config.ID,
 		driver:      config.Driver,
@@ -172,12 +205,17 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 		toolGate:    config.ToolGate,
 		context:     contextProjector,
 		lifecycle:   append([]harnessruntime.LifecycleHook(nil), config.LifecycleHooks...),
+		scope:       scope,
+		delegation:  append([]string(nil), config.DelegationTools...),
+		childBudget: make(chan struct{}, 1),
 		state:       Idle,
 		stateChange: make(chan struct{}),
 		cursor:      commit.Cursor,
+		messages:    cloneMessages(initialHistory),
 		budget:      settings.budget,
 		drainAll:    settings.drainAll,
 	}
+	session.childBudget <- struct{}{}
 	sink, err := event.Chain(session, config.EventMiddleware...)
 	if err != nil {
 		return nil, err
@@ -193,6 +231,21 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 	cleanupBus = false
 	cleanupEnvironment = false
 	return session, nil
+}
+
+func validateInitialHistory(messages []agentic.Message) ([]agentic.Message, error) {
+	history := cloneMessages(messages)
+	if len(history) == 0 {
+		return nil, nil
+	}
+	repaired, err := repair.Process(history, repair.CloseInterruptedFrontier, repair.PendingCalls{})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInvalidInitialHistory, err)
+	}
+	if !messagesEqual(history, repaired) {
+		return nil, ErrInvalidInitialHistory
+	}
+	return history, nil
 }
 
 func (s *Session[O]) ID() string { return s.id }
@@ -348,7 +401,7 @@ func (s *Session[O]) faultLocked(cause error) context.CancelFunc {
 
 func (s *Session[O]) publishOwn(entries []store.Entry, nature agentic.EventNature) {
 	for _, entry := range entries {
-		s.bus.PublishDurable(ownRecord(entry, nature))
+		s.bus.PublishDurable(s.scopedRecord(ownRecord(entry, nature)))
 	}
 }
 

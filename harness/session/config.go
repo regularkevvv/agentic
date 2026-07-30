@@ -30,6 +30,8 @@ type Config[O any] struct {
 	Context               contextpolicy.Projector
 	EventMiddleware       []event.Middleware
 	LifecycleHooks        []harnessruntime.LifecycleHook
+	Scope                 harnessruntime.Scope
+	DelegationTools       []string
 }
 
 func (c Config[O]) validate() error {
@@ -73,6 +75,32 @@ func (c Config[O]) validate() error {
 	if c.ToolCancellationGrace < 0 {
 		return errors.New("tool cancellation grace cannot be negative")
 	}
+	scope := c.Scope
+	if scope.SessionID == "" {
+		scope.SessionID = c.ID
+	}
+	if err := validateScope(c.ID, scope); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateScope(sessionID string, scope harnessruntime.Scope) error {
+	if scope.Depth < 0 {
+		return errors.New("session scope depth cannot be negative")
+	}
+	if scope.SessionID != sessionID {
+		return errors.New("session scope ID does not match session ID")
+	}
+	if scope.ParentSessionID == scope.SessionID {
+		return errors.New("session scope cannot be its own parent")
+	}
+	if scope.Depth == 0 && scope.ParentSessionID != "" {
+		return errors.New("top-level session scope cannot have a parent")
+	}
+	if scope.Depth > 0 && (scope.ParentSessionID == "" || scope.Agent == "") {
+		return errors.New("child session scope requires a parent and agent")
+	}
 	return nil
 }
 
@@ -83,6 +111,7 @@ type persistedOptions struct {
 
 type sessionCreatedPayload struct {
 	Options persistedOptions
+	Scope   *harnessruntime.Scope
 }
 
 type runOpenedPayload struct {
@@ -131,4 +160,9 @@ type compactionPayload struct {
 type resolutionAcceptedPayload struct {
 	SuspensionID string
 	Request      harnessruntime.ResumeRequest
+}
+
+type childUsagePayload struct {
+	Charge  harnessruntime.UsageCharge
+	Session agentic.Usage
 }

@@ -19,6 +19,10 @@ type Record struct {
 	Type        agentic.EventType
 	Turn        int
 	Ordinal     uint64
+	SessionID   string
+	ParentID    string
+	Agent       string
+	Depth       int
 	Source      string
 	Name        string
 	Payload     []byte

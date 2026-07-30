@@ -26,6 +26,7 @@ var (
 	ErrDuplicateEffect     = errors.New("duplicate tool effect resolver")
 	ErrContextConfigured   = errors.New("context policy is already configured")
 	ErrGateBroadened       = errors.New("tool gate middleware broadened a prior decision")
+	ErrUnknownTool         = errors.New("capability tool is not registered")
 )
 
 // Ordering declares capability graph edges by stable capability ID.
@@ -103,6 +104,7 @@ type Registry struct {
 	toolsets          []agentic.Toolset
 	tools             []agentic.Tool
 	toolNames         map[string]bool
+	delegationTools   map[string]bool
 	effects           map[string]EffectResolver
 	gates             []ToolGateMiddleware
 	contextTransforms []contextpolicy.Transform
@@ -115,8 +117,9 @@ type Registry struct {
 
 func newRegistry() *Registry {
 	return &Registry{
-		toolNames: make(map[string]bool),
-		effects:   make(map[string]EffectResolver),
+		toolNames:       make(map[string]bool),
+		delegationTools: make(map[string]bool),
+		effects:         make(map[string]EffectResolver),
 	}
 }
 
@@ -153,6 +156,20 @@ func (r *Registry) AddToolset(toolset agentic.Toolset) error {
 	}
 	r.toolsets = append(r.toolsets, frozen)
 	r.tools = append(r.tools, cloned...)
+	return nil
+}
+
+// MarkDelegationTool classifies a registered tool as topology-changing.
+// Inherited toolsets exclude these tools unless recursion is explicitly
+// enabled by a topology capability.
+func (r *Registry) MarkDelegationTool(toolName string) error {
+	if err := r.mutable(); err != nil {
+		return err
+	}
+	if !r.toolNames[toolName] {
+		return fmt.Errorf("%w: %s", ErrUnknownTool, toolName)
+	}
+	r.delegationTools[toolName] = true
 	return nil
 }
 
@@ -249,6 +266,7 @@ type Plan struct {
 	context         contextpolicy.Projector
 	eventMiddleware []event.Middleware
 	lifecycleHooks  []harnessruntime.LifecycleHook
+	delegationTools []string
 }
 
 func (p Plan) IDs() []string {
@@ -280,6 +298,11 @@ func (p Plan) LifecycleHooks() []harnessruntime.LifecycleHook {
 	return append([]harnessruntime.LifecycleHook(nil), p.lifecycleHooks...)
 }
 
+// DelegationTools returns the stable names of topology-changing tools.
+func (p Plan) DelegationTools() []string {
+	return append([]string(nil), p.delegationTools...)
+}
+
 // Compile validates, stably sorts, and freezes one capability graph.
 func Compile(capabilities ...Capability) (Plan, error) {
 	sorted, err := stableOrder(capabilities)
@@ -301,6 +324,11 @@ func Compile(capabilities ...Capability) (Plan, error) {
 	if err != nil {
 		return Plan{}, fmt.Errorf("build context policy: %w", err)
 	}
+	delegationTools := make([]string, 0, len(registry.delegationTools))
+	for name := range registry.delegationTools {
+		delegationTools = append(delegationTools, name)
+	}
+	sort.Strings(delegationTools)
 	return Plan{
 		ids:             ids,
 		toolsets:        append([]agentic.Toolset(nil), registry.toolsets...),
@@ -309,6 +337,7 @@ func Compile(capabilities ...Capability) (Plan, error) {
 		context:         projector,
 		eventMiddleware: append([]event.Middleware(nil), registry.eventMiddleware...),
 		lifecycleHooks:  append([]harnessruntime.LifecycleHook(nil), registry.lifecycleHooks...),
+		delegationTools: delegationTools,
 	}, nil
 }
 

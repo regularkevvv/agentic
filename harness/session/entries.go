@@ -39,6 +39,8 @@ const (
 	kindRecovered          = "session.recovered"
 	kindFault              = "session.fault"
 	kindCompaction         = "transcript.compaction"
+	kindChildEvent         = "subagent.event"
+	kindChildUsage         = "subagent.usage"
 	kindBranchMoved        = "branch.moved"
 )
 

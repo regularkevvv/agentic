@@ -31,6 +31,7 @@ type RuntimeConfig struct {
 	Clock                 harnessruntime.Clock
 	IDs                   harnessruntime.IDGenerator
 	ToolCancellationGrace time.Duration
+	Scope                 harnessruntime.Scope
 }
 
 // Harness has immutable execution configuration and is safe for concurrent
@@ -52,6 +53,8 @@ type Harness[O any] struct {
 	context      contextpolicy.Projector
 	eventPolicy  []event.Middleware
 	lifecycle    []harnessruntime.LifecycleHook
+	scope        harnessruntime.Scope
+	delegation   []string
 
 	mu      sync.Mutex
 	live    map[string]*Session[O]
@@ -108,12 +111,16 @@ var (
 	ErrInvalidMessage           = session.ErrInvalidMessage
 	ErrInvalidResumeRequest     = session.ErrInvalidResumeRequest
 	ErrIndeterminateTool        = session.ErrIndeterminateTool
+	ErrInvalidInitialHistory    = session.ErrInvalidInitialHistory
 	ErrSessionOpen              = session.ErrSessionOpen
 	ErrSessionClosed            = session.ErrSessionClosed
 )
 
 func WithBudget(limits agentic.UsageLimits) SessionOption { return session.WithBudget(limits) }
 func WithDrainAll(enabled bool) SessionOption             { return session.WithDrainAll(enabled) }
+func WithInitialHistory(messages ...agentic.Message) SessionOption {
+	return session.WithInitialHistory(messages...)
+}
 
 // NewRuntime validates the released root Driver capability and constructs the
 // policy-neutral low-level runtime.
@@ -150,6 +157,9 @@ func newHarness[O any](runner agentic.Runner[O], config RuntimeConfig, plan capa
 	if config.ToolCancellationGrace < 0 {
 		return nil, errors.New("tool cancellation grace cannot be negative")
 	}
+	if config.Scope.Depth < 0 {
+		return nil, errors.New("harness scope depth cannot be negative")
+	}
 	grace := config.ToolCancellationGrace
 	if grace == 0 {
 		grace = time.Second
@@ -174,6 +184,8 @@ func newHarness[O any](runner agentic.Runner[O], config RuntimeConfig, plan capa
 		context:      contextProjector,
 		eventPolicy:  plan.EventMiddleware(),
 		lifecycle:    plan.LifecycleHooks(),
+		scope:        config.Scope,
+		delegation:   plan.DelegationTools(),
 		live:         make(map[string]*Session[O]),
 		opening:      make(map[string]bool),
 	}, nil
@@ -239,6 +251,8 @@ func (h *Harness[O]) ResumeSession(ctx context.Context, id string) (*Session[O],
 }
 
 func (h *Harness[O]) sessionConfig(id string) session.Config[O] {
+	scope := h.scope
+	scope.SessionID = id
 	return session.Config[O]{
 		ID:                    id,
 		Driver:                h.driver,
@@ -255,6 +269,8 @@ func (h *Harness[O]) sessionConfig(id string) session.Config[O] {
 		Context:               h.context,
 		EventMiddleware:       append([]event.Middleware(nil), h.eventPolicy...),
 		LifecycleHooks:        append([]harnessruntime.LifecycleHook(nil), h.lifecycle...),
+		Scope:                 scope,
+		DelegationTools:       append([]string(nil), h.delegation...),
 	}
 }
 
