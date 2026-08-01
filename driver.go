@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -54,6 +55,10 @@ type ToolResumeDecision struct {
 	// Input nil means use the original persisted tool arguments.
 	Input  map[string]any
 	Result *ToolExecutionResult
+	// Payload is opaque handler-owned resume data. The driver never interprets
+	// it; it is exposed only through CurrentToolResume while re-entering a
+	// suspendable handler. It is valid only with ToolResumeExecute.
+	Payload json.RawMessage
 }
 
 // ToolResumeAction describes how a suspended tool call is completed.
@@ -134,7 +139,18 @@ type ToolCallContext struct {
 	Attempt int
 }
 
+// ToolResumeContext is attached only while Driver.Resume re-enters a handler
+// that previously returned ToolHandlerSuspension. Deferral is the exact
+// handler-owned value carried by the durable root suspension. Payload is the
+// caller-validated opaque data from ToolResumeDecision.
+type ToolResumeContext struct {
+	SuspensionID string
+	Deferral     ToolDeferral
+	Payload      json.RawMessage
+}
+
 type toolCallContextKey struct{}
+type toolResumeContextKey struct{}
 
 func withToolCallContext(ctx context.Context, call ToolCallContext) context.Context {
 	return context.WithValue(ctx, toolCallContextKey{}, call)
@@ -145,6 +161,24 @@ func withToolCallContext(ctx context.Context, call ToolCallContext) context.Cont
 func CurrentToolCall(ctx context.Context) (ToolCallContext, bool) {
 	call, ok := ctx.Value(toolCallContextKey{}).(ToolCallContext)
 	return call, ok
+}
+
+func withToolResumeContext(ctx context.Context, resume ToolResumeContext) context.Context {
+	resume.Deferral.Payload = append(json.RawMessage(nil), resume.Deferral.Payload...)
+	resume.Payload = append(json.RawMessage(nil), resume.Payload...)
+	return context.WithValue(ctx, toolResumeContextKey{}, resume)
+}
+
+// CurrentToolResume returns the exact resume metadata for the current handler.
+// Ordinary handler execution returns false.
+func CurrentToolResume(ctx context.Context) (ToolResumeContext, bool) {
+	resume, ok := ctx.Value(toolResumeContextKey{}).(ToolResumeContext)
+	if !ok {
+		return ToolResumeContext{}, false
+	}
+	resume.Deferral.Payload = append(json.RawMessage(nil), resume.Deferral.Payload...)
+	resume.Payload = append(json.RawMessage(nil), resume.Payload...)
+	return resume, true
 }
 
 func makeToolResultError(call ToolUse, message string, cause error) ToolExecutionResult {

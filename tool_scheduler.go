@@ -16,9 +16,13 @@ type scheduledResult struct {
 // executeAdmittedTools runs one already-gated batch concurrently while keeping
 // result order deterministic. Cancellation stops waiting after the configured
 // grace period; late handler results are intentionally ignored.
-func (c *agentCore) executeAdmittedTools(ls *loopState, calls []ToolUse) ([]ToolExecutionResult, error) {
+func (c *agentCore) executeAdmittedTools(
+	ls *loopState,
+	calls []ToolUse,
+	resumes map[string]ToolResumeContext,
+) ([]ToolExecutionResult, *ToolDeferral, error) {
 	if len(calls) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 	for index, call := range calls {
 		attempt := ls.retryCounts[call.Name] + 1
@@ -27,7 +31,7 @@ func (c *agentCore) executeAdmittedTools(ls *loopState, calls []ToolUse) ([]Tool
 			Call:      call,
 			Attempt:   attempt,
 		}); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		_ = index
 	}
@@ -41,6 +45,9 @@ func (c *agentCore) executeAdmittedTools(ls *loopState, calls []ToolUse) ([]Tool
 		attempt := ls.retryCounts[call.Name] + 1
 		go func() {
 			callCtx := withToolCallContext(baseCtx, ToolCallContext{ID: call.ID, Name: call.Name, Attempt: attempt})
+			if resume, ok := resumes[call.ID]; ok {
+				callCtx = withToolResumeContext(callCtx, resume)
+			}
 			result, err := ls.registry.Execute(callCtx, call, ls.deps)
 			resultCh <- scheduledResult{index: index, result: result, err: err}
 		}()
@@ -117,7 +124,53 @@ func (c *agentCore) executeAdmittedTools(ls *loopState, calls []ToolUse) ([]Tool
 			cancellation = nil
 		}
 	}
-	return results, firstErr
+	for index, result := range results {
+		deferral, suspended, err := handlerDeferral(ls.registry, calls[index], result)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			results[index] = makeToolResultError(calls[index], err.Error(), err)
+			continue
+		}
+		if suspended {
+			return nil, deferral, firstErr
+		}
+	}
+	return results, nil, firstErr
+}
+
+func handlerDeferral(
+	registry *executionToolRegistry,
+	call ToolUse,
+	result ToolExecutionResult,
+) (*ToolDeferral, bool, error) {
+	var suspension ToolHandlerSuspension
+	switch value := result.Content.(type) {
+	case ToolHandlerSuspension:
+		suspension = value
+	case *ToolHandlerSuspension:
+		if value == nil {
+			return nil, false, fmt.Errorf("%w: handler %q returned a nil suspension", ErrToolHandlerSuspension, call.Name)
+		}
+		suspension = *value
+	default:
+		return nil, false, nil
+	}
+	handler, ok := registry.Get(call.Name)
+	marker, marked := handler.(SuspendableToolHandler)
+	if !ok || !marked || !marker.MaySuspendToolExecution() {
+		return nil, false, fmt.Errorf("%w: handler %q did not declare suspension", ErrToolHandlerSuspension, call.Name)
+	}
+	if err := validateToolResultIdentity(call, result); err != nil {
+		return nil, false, fmt.Errorf("%w: handler %q returned mismatched suspension identity: %v", ErrToolHandlerSuspension, call.Name, err)
+	}
+	if result.IsError || result.Error != nil || suspension.Deferral.Kind == "" {
+		return nil, false, fmt.Errorf("%w: handler %q returned an invalid deferral", ErrToolHandlerSuspension, call.Name)
+	}
+	deferral := suspension.Deferral
+	deferral.Payload = append([]byte(nil), deferral.Payload...)
+	return &deferral, true, nil
 }
 
 func validateToolBatchDecision(calls []ToolUse, decision ToolBatchDecision) (bool, error) {

@@ -529,12 +529,12 @@ func TestPhase1SchedulerAndRegularTurnFailureBranches(t *testing.T) {
 			messages: []Message{NewToolUseMessage(call)},
 		}
 	}
-	if _, err := c.executeAdmittedTools(newState(EventSinkFunc(func(_ context.Context, event Event) error {
+	if _, _, err := c.executeAdmittedTools(newState(EventSinkFunc(func(_ context.Context, event Event) error {
 		if event.Type() == EventTypeToolStarted {
 			return errors.New("start event failed")
 		}
 		return nil
-	})), []ToolUse{call}); err == nil {
+	})), []ToolUse{call}, nil); err == nil {
 		t.Fatal("expected ToolStarted sink error")
 	}
 
@@ -545,7 +545,7 @@ func TestPhase1SchedulerAndRegularTurnFailureBranches(t *testing.T) {
 	}
 	brokenState := newState(nil)
 	brokenState.registry = brokenRegistry
-	results, err := c.executeAdmittedTools(brokenState, []ToolUse{call})
+	results, _, err := c.executeAdmittedTools(brokenState, []ToolUse{call}, nil)
 	if err == nil || len(results) != 1 || !results[0].IsError {
 		t.Fatalf("broken scheduler = %#v, %v", results, err)
 	}

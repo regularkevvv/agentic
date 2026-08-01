@@ -12,6 +12,7 @@ const toolSuspensionPayloadVersion = 1
 type toolSuspensionPayload struct {
 	Version           int
 	SuspensionID      string
+	HandlerSuspension bool
 	Calls             []ToolUse
 	ExecutableCallIDs []string
 	Iteration         int
@@ -71,7 +72,12 @@ func (c *agentCore) executionFingerprint(ls *loopState) string {
 	return hex.EncodeToString(hash[:])
 }
 
-func (c *agentCore) newToolSuspension(ls *loopState, calls, executable []ToolUse, deferral ToolDeferral) (*Suspension, error) {
+func (c *agentCore) newToolSuspension(
+	ls *loopState,
+	calls, executable []ToolUse,
+	deferral ToolDeferral,
+	handlerSuspension bool,
+) (*Suspension, error) {
 	id := newSuspensionID()
 	ids := make([]string, len(executable))
 	for index, call := range executable {
@@ -80,6 +86,7 @@ func (c *agentCore) newToolSuspension(ls *loopState, calls, executable []ToolUse
 	payload := toolSuspensionPayload{
 		Version:           toolSuspensionPayloadVersion,
 		SuspensionID:      id,
+		HandlerSuspension: handlerSuspension,
 		Calls:             cloneToolUses(calls),
 		ExecutableCallIDs: ids,
 		Iteration:         ls.iteration,
