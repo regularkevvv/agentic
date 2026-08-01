@@ -6,7 +6,7 @@
 
 A lightweight, type-safe Go framework for building AI agents with tool use, structured output, and multi-agent orchestration.
 
-Current release: **v0.5.0**.
+Current release: **v0.5.1**.
 
 ## Features
 
@@ -276,6 +276,9 @@ that handler from other regular calls before execution and leaves its tool
 frontier open. On `Resume`, the same handler reads its persisted deferral and
 the caller-validated decision payload with `CurrentToolResume`. Ordinary
 handlers and gate-originated resumptions never receive that resume context.
+Composite tool hosts use `WithToolCallContext` before invoking a nested handler
+so it receives its own call identity without inheriting the outer handler's
+resume payload.
 
 ## Experimental Durable Harness
 

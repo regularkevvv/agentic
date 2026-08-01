@@ -152,7 +152,13 @@ type ToolResumeContext struct {
 type toolCallContextKey struct{}
 type toolResumeContextKey struct{}
 
-func withToolCallContext(ctx context.Context, call ToolCallContext) context.Context {
+// WithToolCallContext starts a fresh logical tool invocation. It installs call
+// metadata for CurrentToolCall and clears any handler-owned resume metadata
+// inherited from an outer composite tool. Driver-managed handlers receive this
+// context automatically; composite tool hosts use it before invoking a nested
+// handler.
+func WithToolCallContext(ctx context.Context, call ToolCallContext) context.Context {
+	ctx = context.WithValue(ctx, toolResumeContextKey{}, struct{}{})
 	return context.WithValue(ctx, toolCallContextKey{}, call)
 }
 
