@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/codec"
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
@@ -59,6 +60,7 @@ type Session[O any] struct {
 	context     contextpolicy.Projector
 	eventSink   agentic.EventSink
 	lifecycle   []harnessruntime.LifecycleHook
+	resume      harnessruntime.ResumePlanner
 	scope       harnessruntime.Scope
 	delegation  []string
 	compaction  *contextpolicy.Compaction
@@ -113,6 +115,10 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 	contextProjector := config.Context
 	if contextProjector == nil {
 		contextProjector = contextpolicy.Passthrough()
+	}
+	resumePlanner := config.ResumePlanner
+	if resumePlanner == nil {
+		resumePlanner = harnessruntime.DefaultResumePlanner()
 	}
 	scope := config.Scope
 	scope.SessionID = config.ID
@@ -205,6 +211,7 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 		toolGate:    config.ToolGate,
 		context:     contextProjector,
 		lifecycle:   append([]harnessruntime.LifecycleHook(nil), config.LifecycleHooks...),
+		resume:      resumePlanner,
 		scope:       scope,
 		delegation:  append([]string(nil), config.DelegationTools...),
 		childBudget: make(chan struct{}, 1),

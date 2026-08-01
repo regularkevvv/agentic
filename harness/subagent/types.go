@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness"
 	"github.com/regularkevvv/agentic/harness/capability"
 )

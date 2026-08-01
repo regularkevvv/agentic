@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	jsoncodec "github.com/regularkevvv/agentic/harness/codec/json"
 	storejsonl "github.com/regularkevvv/agentic/harness/store/jsonl"
 )

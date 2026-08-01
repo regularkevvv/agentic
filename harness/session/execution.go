@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/codec"
 	"github.com/regularkevvv/agentic/harness/event"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
@@ -131,6 +132,7 @@ func (s *Session[O]) withToolRuntime(ctx context.Context) context.Context {
 		SessionID:   s.id,
 		Scope:       s.scope,
 		Capture:     s,
+		Operations:  s,
 		Emit:        s.emitToolUpdate,
 	})
 }

@@ -3,7 +3,7 @@ module github.com/regularkevvv/agentic/harness
 go 1.25.4
 
 require (
-	github.com/regularkevvv/agentic v0.4.0
+	github.com/regularkevvv/agentic v0.5.1
 	golang.org/x/sys v0.39.0
 )
 

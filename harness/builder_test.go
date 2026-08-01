@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/capability"
 	environmentcapability "github.com/regularkevvv/agentic/harness/capability/environment"
 	"github.com/regularkevvv/agentic/harness/permission"

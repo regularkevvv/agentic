@@ -9,6 +9,7 @@ import (
 	"time"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	artifactmemory "github.com/regularkevvv/agentic/harness/artifact/memory"
 	"github.com/regularkevvv/agentic/harness/artifact/spill"
 	jsoncodec "github.com/regularkevvv/agentic/harness/codec/json"

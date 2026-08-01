@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/event"
 )
 

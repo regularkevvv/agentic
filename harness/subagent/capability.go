@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/capability"
 	"github.com/regularkevvv/agentic/harness/env"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"

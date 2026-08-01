@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
@@ -27,6 +28,8 @@ var (
 	ErrContextConfigured   = errors.New("context policy is already configured")
 	ErrGateBroadened       = errors.New("tool gate middleware broadened a prior decision")
 	ErrUnknownTool         = errors.New("capability tool is not registered")
+	ErrDuplicateSelection  = errors.New("duplicate selected capability tool")
+	ErrDuplicatePlanner    = errors.New("duplicate capability resume planner")
 )
 
 // Ordering declares capability graph edges by stable capability ID.
@@ -113,6 +116,7 @@ type Registry struct {
 	compactor         contextpolicy.Compactor
 	eventMiddleware   []event.Middleware
 	lifecycleHooks    []harnessruntime.LifecycleHook
+	resumePlanners    map[string]harnessruntime.ResumePlanner
 }
 
 func newRegistry() *Registry {
@@ -120,6 +124,7 @@ func newRegistry() *Registry {
 		toolNames:       make(map[string]bool),
 		delegationTools: make(map[string]bool),
 		effects:         make(map[string]EffectResolver),
+		resumePlanners:  make(map[string]harnessruntime.ResumePlanner),
 	}
 }
 
@@ -158,6 +163,80 @@ func (r *Registry) AddToolset(toolset agentic.Toolset) error {
 	r.tools = append(r.tools, cloned...)
 	return nil
 }
+
+// TakeToolset removes explicitly named tools from the model-visible registry
+// and returns a frozen toolset containing them in caller order. Tool names
+// remain reserved and effect resolvers remain registered so a composite host
+// can route the selected handlers through the same policy graph.
+func (r *Registry) TakeToolset(names ...string) (agentic.Toolset, error) {
+	if err := r.mutable(); err != nil {
+		return nil, err
+	}
+	if len(names) == 0 {
+		return nil, errors.New("selected capability tools are required")
+	}
+	wanted := make(map[string]bool, len(names))
+	for _, name := range names {
+		if name == "" || !r.toolNames[name] {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownTool, name)
+		}
+		if wanted[name] {
+			return nil, fmt.Errorf("%w: %s", ErrDuplicateSelection, name)
+		}
+		wanted[name] = true
+	}
+	type pair struct {
+		tool    agentic.Tool
+		handler agentic.ToolHandler
+	}
+	selected := make(map[string]pair, len(names))
+	remainingSets := make([]agentic.Toolset, 0, len(r.toolsets))
+	for _, set := range r.toolsets {
+		tools, handlers := set.ToolsAndHandlers()
+		keptTools := make([]agentic.Tool, 0, len(tools))
+		keptHandlers := make([]agentic.ToolHandler, 0, len(handlers))
+		for index, tool := range tools {
+			name := tool.Function.Name
+			if wanted[name] {
+				selected[name] = pair{tool: tool, handler: handlers[index]}
+				continue
+			}
+			keptTools = append(keptTools, tool)
+			keptHandlers = append(keptHandlers, handlers[index])
+		}
+		if len(keptTools) > 0 {
+			remainingSets = append(remainingSets, &frozenToolset{tools: keptTools, handlers: keptHandlers})
+		}
+	}
+	chosenTools := make([]agentic.Tool, len(names))
+	chosenHandlers := make([]agentic.ToolHandler, len(names))
+	for index, name := range names {
+		item, ok := selected[name]
+		if !ok {
+			return nil, fmt.Errorf("%w: %s", ErrUnknownTool, name)
+		}
+		chosenTools[index] = item.tool
+		chosenHandlers[index] = item.handler
+	}
+	remainingTools := make([]agentic.Tool, 0, len(r.tools)-len(names))
+	for _, tool := range r.tools {
+		if !wanted[tool.Function.Name] {
+			remainingTools = append(remainingTools, tool)
+		}
+	}
+	r.toolsets = remainingSets
+	r.tools = remainingTools
+	return &frozenToolset{tools: chosenTools, handlers: chosenHandlers}, nil
+}
+
+// IsDelegationTool reports whether a registered tool changes session
+// topology. Composite execution capabilities use it to reject recursive or
+// ownership-changing selections before extracting a toolset.
+func (r *Registry) IsDelegationTool(name string) bool { return r.delegationTools[name] }
+
+// HasTool reports whether a name is already reserved by the graph, including
+// tools hidden by a prior composite capability.
+func (r *Registry) HasTool(name string) bool { return r.toolNames[name] }
 
 // MarkDelegationTool classifies a registered tool as topology-changing.
 // Inherited toolsets exclude these tools unless recursion is explicitly
@@ -250,6 +329,24 @@ func (r *Registry) AddLifecycleHook(hook harnessruntime.LifecycleHook) error {
 	return nil
 }
 
+// AddResumePlanner registers one capability-owned suspension kind.
+func (r *Registry) AddResumePlanner(kind string, planner harnessruntime.ResumePlanner) error {
+	if err := r.mutable(); err != nil {
+		return err
+	}
+	if kind == "" || planner == nil {
+		return errors.New("resume planner kind and implementation are required")
+	}
+	if kind == harnessruntime.PermissionDeferralKind {
+		return fmt.Errorf("%w: %s", ErrDuplicatePlanner, kind)
+	}
+	if _, exists := r.resumePlanners[kind]; exists {
+		return fmt.Errorf("%w: %s", ErrDuplicatePlanner, kind)
+	}
+	r.resumePlanners[kind] = planner
+	return nil
+}
+
 func (r *Registry) mutable() error {
 	if r.frozen {
 		return ErrRegistryFrozen
@@ -267,6 +364,7 @@ type Plan struct {
 	eventMiddleware []event.Middleware
 	lifecycleHooks  []harnessruntime.LifecycleHook
 	delegationTools []string
+	resumePlanner   harnessruntime.ResumePlanner
 }
 
 func (p Plan) IDs() []string {
@@ -297,6 +395,8 @@ func (p Plan) EventMiddleware() []event.Middleware {
 func (p Plan) LifecycleHooks() []harnessruntime.LifecycleHook {
 	return append([]harnessruntime.LifecycleHook(nil), p.lifecycleHooks...)
 }
+
+func (p Plan) ResumePlanner() harnessruntime.ResumePlanner { return p.resumePlanner }
 
 // DelegationTools returns the stable names of topology-changing tools.
 func (p Plan) DelegationTools() []string {
@@ -329,6 +429,10 @@ func Compile(capabilities ...Capability) (Plan, error) {
 		delegationTools = append(delegationTools, name)
 	}
 	sort.Strings(delegationTools)
+	resumePlanner, err := harnessruntime.NewResumeRouter(registry.resumePlanners)
+	if err != nil {
+		return Plan{}, fmt.Errorf("build resume planner: %w", err)
+	}
 	return Plan{
 		ids:             ids,
 		toolsets:        append([]agentic.Toolset(nil), registry.toolsets...),
@@ -338,6 +442,7 @@ func Compile(capabilities ...Capability) (Plan, error) {
 		eventMiddleware: append([]event.Middleware(nil), registry.eventMiddleware...),
 		lifecycleHooks:  append([]harnessruntime.LifecycleHook(nil), registry.lifecycleHooks...),
 		delegationTools: delegationTools,
+		resumePlanner:   resumePlanner,
 	}, nil
 }
 

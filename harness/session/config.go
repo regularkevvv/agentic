@@ -5,6 +5,7 @@ import (
 	"time"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/artifact"
 	"github.com/regularkevvv/agentic/harness/codec"
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
@@ -30,6 +31,7 @@ type Config[O any] struct {
 	Context               contextpolicy.Projector
 	EventMiddleware       []event.Middleware
 	LifecycleHooks        []harnessruntime.LifecycleHook
+	ResumePlanner         harnessruntime.ResumePlanner
 	Scope                 harnessruntime.Scope
 	DelegationTools       []string
 }
