@@ -181,7 +181,33 @@ space identity here, as it would have to be for an asymmetric model.
 
 Sparse output is normalized from either observed shape: a full vocabulary-width
 row, whose length reveals the vocabulary size, or a coordinate map, which does
-not and therefore needs `WithSparseVocabulary`.
+not and therefore needs `WithSparseVocabulary`. Verified live on 2026-08-01,
+`BAAI/bge-m3-multi` returns the full row, so the vocabulary (250002) is
+observed and `WithSparseVocabulary` is unnecessary against that model.
+
+#### Response size and why requests are split by default
+
+This API's responses are far larger than its requests. Measured against
+`BAAI/bge-m3-multi` on 2026-08-01:
+
+| Requested outputs | Response per input |
+| --- | --- |
+| dense | 39 KB |
+| sparse | 977 KB |
+| multi-vector | ~34 KB per token |
+| all three | 1185 KB |
+
+Sparse is expensive on the wire because the row is the entire 250002-entry
+vocabulary, almost all of it zeros. Dense is roughly twice the size the numbers
+need, because the response also carries `embedding_jsons` — the same vectors
+again as JSON strings — which this package ignores.
+
+So `provider/deepinfra` splits at 32 inputs per request by default. Without
+that, encoding a few hundred documents with sparse output would build a
+response of hundreds of megabytes, exceed the response ceiling, and fail
+*after* the inference had been done and billed. Multi-vector scales with
+document length rather than count, so lower `WithBatchSize` for long documents;
+`WithBatchSize(0)` disables splitting when you know the response will fit.
 
 ### Hugging Face
 

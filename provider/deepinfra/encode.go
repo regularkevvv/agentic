@@ -28,6 +28,12 @@ type inferenceRequest struct {
 
 // inferenceResponse is DeepInfra's native response. Sparse rows stay raw until
 // their shape is known; see decodeSparse.
+//
+// The live response also carries "embedding_jsons": the same dense vectors a
+// second time, serialized as JSON strings. It is deliberately not decoded —
+// it duplicates data already in "embeddings" and roughly doubles the size of a
+// dense response — but it is why a 1024-float vector costs 39 KB on the wire
+// rather than the 20 KB the numbers alone need.
 type inferenceResponse struct {
 	Embeddings  [][]float32       `json:"embeddings"`
 	Sparse      []json.RawMessage `json:"sparse"`

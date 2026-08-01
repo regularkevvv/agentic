@@ -614,6 +614,79 @@ func TestEncodeBatchesLargeRequests(t *testing.T) {
 	}
 }
 
+// Sparse output is a full 250002-wide row per input on this API, so an
+// unsplit batch of a few hundred documents would build a response of hundreds
+// of megabytes and fail after the inference had already been billed. The
+// default splits without being asked.
+func TestEncodeSplitsByDefault(t *testing.T) {
+	var batches [][]string
+	encoder, _ := newTestEncoder(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Inputs []string `json:"inputs"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		batches = append(batches, body.Inputs)
+
+		rows := make([]string, len(body.Inputs))
+		for i := range body.Inputs {
+			rows[i] = "[0.1, 0.2]"
+		}
+		fmt.Fprintf(w, `{"embeddings": [%s], "input_tokens": 1}`, strings.Join(rows, ","))
+	})
+
+	input := make([]string, 70)
+	for i := range input {
+		input[i] = "document"
+	}
+	resp, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+		Input:   input,
+		Outputs: []core.RepresentationKind{core.RepresentationDense},
+	})
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if len(batches) != 3 {
+		t.Fatalf("made %d provider calls for 70 inputs, want 3 at the default size of 32", len(batches))
+	}
+	if len(batches[0]) != 32 || len(batches[2]) != 6 {
+		t.Errorf("chunk sizes = %d, %d, %d", len(batches[0]), len(batches[1]), len(batches[2]))
+	}
+	if len(resp.Data) != 70 {
+		t.Errorf("got %d representations for 70 inputs", len(resp.Data))
+	}
+}
+
+// A caller who knows the response will fit can opt out.
+func TestEncodeBatchSizeZeroSendsOneRequest(t *testing.T) {
+	calls := 0
+	encoder, _ := newTestEncoder(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		var body struct {
+			Inputs []string `json:"inputs"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		rows := make([]string, len(body.Inputs))
+		for i := range body.Inputs {
+			rows[i] = "[0.1, 0.2]"
+		}
+		fmt.Fprintf(w, `{"embeddings": [%s], "input_tokens": 1}`, strings.Join(rows, ","))
+	}, deepinfra.WithBatchSize(0))
+
+	input := make([]string, 70)
+	for i := range input {
+		input[i] = "document"
+	}
+	if _, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+		Input:   input,
+		Outputs: []core.RepresentationKind{core.RepresentationDense},
+	}); err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("made %d calls with splitting disabled, want 1", calls)
+	}
+}
+
 func TestEncodeRejectsOversizedResponses(t *testing.T) {
 	big := strings.Repeat("0.1,", 1000) + "0.1"
 	encoder, _ := newTestEncoder(t,

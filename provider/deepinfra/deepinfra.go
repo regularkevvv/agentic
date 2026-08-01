@@ -46,6 +46,27 @@ const BGEM3Model = "BAAI/bge-m3-multi"
 // shape does not reveal the vocabulary on its own.
 const BGEM3SparseVocabulary = 250002
 
+// defaultBatchSize splits requests by default, because this API's responses
+// are far larger than its requests.
+//
+// Measured against BAAI/bge-m3-multi on 2026-08-01, per input:
+//
+//	dense        39 KB   (a 1024-float vector, sent twice — see encode.go)
+//	sparse      977 KB   (the full 250002-wide vocabulary row, mostly zeros)
+//	colbert     ~34 KB per token
+//	all three  1185 KB
+//
+// A caller encoding a few hundred documents with sparse output in one request
+// would build a response of several hundred megabytes, exceed the response
+// ceiling, and fail after the inference had already been done and billed. At
+// 32 inputs a sparse batch is around 31 MB, comfortably inside the default
+// ceiling with room for the dense and multi-vector kinds alongside it.
+//
+// Multi-vector output scales with document length rather than count, so a
+// batch of long documents needs a smaller size than this: budget roughly
+// 34 KB per token per input and set WithBatchSize accordingly.
+const defaultBatchSize = 32
+
 // Encoder implements core.RepresentationEncoder and core.Embedder against
 // DeepInfra's native inference API.
 type Encoder struct {
@@ -72,7 +93,7 @@ type config struct {
 	transportConfig
 
 	normalize        *bool
-	batchSize        int
+	batchSize        *int
 	sparseVocabulary int
 	revision         string
 	tokenizer        string
@@ -125,10 +146,13 @@ func WithNormalize(normalize bool) Option {
 // WithBatchSize splits requests larger than size into that many inputs per
 // provider call, preserving order and summing usage.
 //
-// Zero, the default, sends the batch as one request. Set it when a large
-// multi-vector batch would otherwise produce a response too big to hold.
+// The default is 32, chosen from measured response sizes; see
+// [defaultBatchSize]. Lower it for multi-vector output over long documents,
+// where response size scales with token count rather than input count. Zero
+// disables splitting and sends the batch as one request, which is only safe
+// when you know the response will fit.
 func WithBatchSize(size int) Option {
-	return func(c *config) { c.batchSize = size }
+	return func(c *config) { c.batchSize = &size }
 }
 
 // WithSparseVocabulary declares the tokenizer vocabulary size, which is the
@@ -193,11 +217,15 @@ func New(model string, opts ...Option) (*Encoder, error) {
 	for _, opt := range opts {
 		opt(cfg)
 	}
-	if cfg.batchSize < 0 {
-		return nil, &core.InvalidRepresentationRequestError{
-			Invariant: "batch_size.negative",
-			Detail:    "deepinfra: batch size cannot be negative",
+	batchSize := defaultBatchSize
+	if cfg.batchSize != nil {
+		if *cfg.batchSize < 0 {
+			return nil, &core.InvalidRepresentationRequestError{
+				Invariant: "batch_size.negative",
+				Detail:    "deepinfra: batch size cannot be negative",
+			}
 		}
+		batchSize = *cfg.batchSize
 	}
 	if cfg.sparseVocabulary < 0 {
 		return nil, &core.InvalidRepresentationRequestError{
@@ -237,7 +265,7 @@ func New(model string, opts ...Option) (*Encoder, error) {
 		client:           c,
 		model:            model,
 		normalize:        cfg.normalize,
-		batchSize:        cfg.batchSize,
+		batchSize:        batchSize,
 		sparseVocabulary: cfg.sparseVocabulary,
 		revision:         cfg.revision,
 		tokenizer:        cfg.tokenizer,
