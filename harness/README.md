@@ -1,7 +1,7 @@
 # Agentic Harness (experimental Phase 4)
 
 This nested module contains the experimental `v0.1` harness surface for
-Agentic `v0.4.0`. It currently provides:
+Agentic `v0.5.0`. It currently provides:
 
 - write-ahead `Harness`/`Session` execution with steering, follow-up,
   next-turn queues, interruption, snapshots, budgets, and crash recovery;
@@ -133,7 +133,7 @@ and evals remain deferred to the later work described in
 The module requires the released root module:
 
 ```text
-github.com/regularkevvv/agentic v0.4.0
+github.com/regularkevvv/agentic v0.5.0
 ```
 
 Local development uses the committed repository `go.work`; the module does not
