@@ -73,6 +73,21 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 	if contextProjector == nil {
 		contextProjector = contextpolicy.Passthrough()
 	}
+	scope := config.Scope
+	scope.SessionID = config.ID
+	if folded.scope != nil {
+		if folded.scope.SessionID != config.ID {
+			return nil, fmt.Errorf(
+				"persisted session scope ID %q does not match journal ID %q",
+				folded.scope.SessionID,
+				config.ID,
+			)
+		}
+		scope = *folded.scope
+	}
+	for index := range history {
+		history[index] = scopeRecord(scope, history[index])
+	}
 	bus, err := config.Events.Open(ctx, history)
 	if err != nil {
 		return nil, err
@@ -101,6 +116,9 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 		toolGate:       config.ToolGate,
 		context:        contextProjector,
 		lifecycle:      append([]harnessruntime.LifecycleHook(nil), config.LifecycleHooks...),
+		scope:          scope,
+		delegation:     append([]string(nil), config.DelegationTools...),
+		childBudget:    make(chan struct{}, 1),
 		compaction:     folded.compaction,
 		state:          folded.state,
 		stateChange:    make(chan struct{}),
@@ -115,6 +133,7 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 		run:            folded.run,
 		recoveryInputs: folded.unapplied,
 	}
+	session.childBudget <- struct{}{}
 	sink, err := event.Chain(session, config.EventMiddleware...)
 	if err != nil {
 		return nil, err
@@ -140,7 +159,7 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 			return nil, appendErr
 		}
 		session.cursor = recovered.Cursor
-		session.bus.PublishDurable(ownRecord(recovered.Entries[0], agentic.EventLifecycle))
+		session.bus.PublishDurable(session.scopedRecord(ownRecord(recovered.Entries[0], agentic.EventLifecycle)))
 		cleanupJournal = false
 		cleanupBus = false
 		cleanupEnvironment = false
@@ -169,6 +188,7 @@ type foldedState struct {
 	queue          []QueueEntry
 	usage          agentic.Usage
 	budget         *agentic.UsageLimits
+	scope          *harnessruntime.Scope
 	drainAll       bool
 	suspension     *agentic.Suspension
 	compaction     *contextpolicy.Compaction
@@ -186,6 +206,15 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 	created := false
 	for _, entry := range entries {
 		state.cursor = entry.Cursor()
+		if entry.Kind == kindChildEvent {
+			record, err := decodePayload[event.Record](payloadCodec, entry)
+			if err != nil {
+				return foldedState{}, nil, err
+			}
+			record.Cursor = entry.Seq
+			history = append(history, record)
+			continue
+		}
 		if isAgenticKind(entry.Kind) {
 			record, err := codec.Decode[event.Record](payloadCodec, entry.Payload)
 			if err != nil {
@@ -216,6 +245,13 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 			}
 			created = true
 			state.drainAll = payload.Options.DrainAll
+			if payload.Scope != nil {
+				if err := validateScope(payload.Scope.SessionID, *payload.Scope); err != nil {
+					return foldedState{}, nil, fmt.Errorf("invalid persisted session scope: %w", err)
+				}
+				copy := *payload.Scope
+				state.scope = &copy
+			}
 			if payload.Options.Budget != nil {
 				copy := cloneLimits(*payload.Options.Budget)
 				state.budget = &copy
@@ -317,6 +353,15 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 			state.usage = cloneUsage(payload.Session)
 			if state.run != nil {
 				state.run.lastUsage = cloneUsage(payload.Run)
+			}
+		case kindChildUsage:
+			payload, err := decodePayload[childUsagePayload](payloadCodec, entry)
+			if err != nil {
+				return foldedState{}, nil, err
+			}
+			state.usage = cloneUsage(payload.Session)
+			if state.run != nil {
+				state.run.childUsageCharged = true
 			}
 		case kindRecoverySuspension:
 			payload, err := decodePayload[event.SuspensionPayload](payloadCodec, entry)
@@ -494,7 +539,7 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 		s.cursor = commit.Cursor
 		s.recoveryInputs = nil
 		record.Cursor = commit.Cursor.Seq
-		s.bus.PublishDurable(record)
+		s.bus.PublishDurable(s.scopedRecord(record))
 	}
 	open, err := repair.InspectFrontier(s.messages)
 	if err != nil {
@@ -553,7 +598,7 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 		s.cursor = commit.Cursor
 		s.transitionLocked(Suspended)
 		s.mu.Unlock()
-		s.bus.PublishDurable(ownRecord(commit.Entries[0], agentic.EventLifecycle))
+		s.bus.PublishDurable(s.scopedRecord(ownRecord(commit.Entries[0], agentic.EventLifecycle)))
 		return nil
 	}
 

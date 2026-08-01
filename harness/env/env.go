@@ -83,6 +83,20 @@ type Lease interface {
 	Close(context.Context) error
 }
 
+// NarrowRequest asks a backend to create an independently closeable view rooted
+// below the current environment. Shell access is opt-in because command
+// arguments remain outside filesystem-path confinement on host substrates.
+type NarrowRequest struct {
+	Root  string
+	Shell bool
+}
+
+// Narrower is an optional environment capability. A narrowed lease must never
+// close or broaden its parent environment.
+type Narrower interface {
+	Narrow(context.Context, NarrowRequest) (Lease, error)
+}
+
 // Factory provisions one isolated environment lease per session. A factory may
 // point leases at the same workspace, but ownership and cleanup are never
 // shared implicitly by Harness.

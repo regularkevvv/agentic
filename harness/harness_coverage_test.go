@@ -38,6 +38,7 @@ func TestRuntimeValidationFacadeOptionsAndRepair(t *testing.T) {
 		{"clock", func(c *RuntimeConfig) { c.Clock = nil }, "clock"},
 		{"ids", func(c *RuntimeConfig) { c.IDs = nil }, "ID generator"},
 		{"grace", func(c *RuntimeConfig) { c.ToolCancellationGrace = -1 }, "negative"},
+		{"scope", func(c *RuntimeConfig) { c.Scope.Depth = -1 }, "depth"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -50,7 +51,9 @@ func TestRuntimeValidationFacadeOptionsAndRepair(t *testing.T) {
 		})
 	}
 	max := 2
-	if WithBudget(agentic.UsageLimits{MaxRequests: &max}) == nil || WithDrainAll(true) == nil {
+	if WithBudget(agentic.UsageLimits{MaxRequests: &max}) == nil ||
+		WithDrainAll(true) == nil ||
+		WithInitialHistory(agentic.NewTextMessage(agentic.RoleUser, "history")) == nil {
 		t.Fatal("facade options returned nil")
 	}
 	processor := Repair(CloseInterruptedFrontier, PendingCalls{})

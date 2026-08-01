@@ -125,3 +125,61 @@ func TestSmallAdaptersFrozenRegistryAndCloneBranches(t *testing.T) {
 		t.Fatalf("mutable clone aliased original: %#v", original)
 	}
 }
+
+func TestDelegationToolClassificationIsValidatedFrozenAndCopied(t *testing.T) {
+	toolA, handlerA := agentic.MustToolWithContext(
+		"alpha",
+		"alpha",
+		func(context.Context, struct{}) (string, error) { return "alpha", nil },
+	)
+	toolB, handlerB := agentic.MustToolWithContext(
+		"beta",
+		"beta",
+		func(context.Context, struct{}) (string, error) { return "beta", nil },
+	)
+	registry := newRegistry()
+	if err := registry.MarkDelegationTool("missing"); !errors.Is(err, ErrUnknownTool) {
+		t.Fatalf("unknown delegation tool = %v", err)
+	}
+	if err := registry.AddToolset(agentic.NewToolset().
+		Add(toolB, handlerB).
+		Add(toolA, handlerA)); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.MarkDelegationTool("beta"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.MarkDelegationTool("alpha"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.MarkDelegationTool("alpha"); err != nil {
+		t.Fatalf("idempotent delegation classification = %v", err)
+	}
+	registry.frozen = true
+	if err := registry.MarkDelegationTool("alpha"); !errors.Is(err, ErrRegistryFrozen) {
+		t.Fatalf("frozen delegation classification = %v", err)
+	}
+
+	plan, err := Compile(Func{Name: "delegation", Apply: func(registry *Registry) error {
+		if err := registry.AddToolset(agentic.NewToolset().
+			Add(toolB, handlerB).
+			Add(toolA, handlerA)); err != nil {
+			return err
+		}
+		if err := registry.MarkDelegationTool("beta"); err != nil {
+			return err
+		}
+		return registry.MarkDelegationTool("alpha")
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := plan.DelegationTools()
+	if !reflect.DeepEqual(names, []string{"alpha", "beta"}) {
+		t.Fatalf("delegation names = %#v", names)
+	}
+	names[0] = "mutated"
+	if plan.DelegationTools()[0] != "alpha" {
+		t.Fatal("delegation names exposed mutable plan storage")
+	}
+}

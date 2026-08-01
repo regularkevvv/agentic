@@ -217,6 +217,33 @@ func (m *Environment) Shell() (harnessenv.Shell, bool) {
 	return m, m.shell != nil
 }
 
+func (m *Environment) Narrow(ctx context.Context, request harnessenv.NarrowRequest) (harnessenv.Lease, error) {
+	if request.Root == "" {
+		return nil, &harnessenv.Error{Code: harnessenv.CodeInvalid, Op: "narrow", Err: errors.New("narrow root is required")}
+	}
+	resource, err := m.CanonicalPath(ctx, request.Root)
+	if err != nil {
+		return nil, err
+	}
+	info, err := m.Stat(ctx, resource.ID)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir {
+		return nil, &harnessenv.Error{
+			Code: harnessenv.CodeNotDirectory,
+			Op:   "narrow",
+			Path: resource.ID,
+			Err:  errors.New("narrow root is not a directory"),
+		}
+	}
+	return &narrowLease{
+		parent: m,
+		root:   resource.ID,
+		shell:  request.Shell && m.shell != nil,
+	}, nil
+}
+
 func memoryPath(cwd, name string) (string, error) {
 	if name == "" {
 		name = "."
@@ -256,3 +283,4 @@ func (f *Factory) Open(ctx context.Context, _ string) (harnessenv.Lease, error) 
 
 var _ harnessenv.Factory = (*Factory)(nil)
 var _ harnessenv.Lease = (*Environment)(nil)
+var _ harnessenv.Narrower = (*Environment)(nil)

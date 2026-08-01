@@ -78,8 +78,9 @@ type Snapshot struct {
 type Option func(*options) error
 
 type options struct {
-	budget   *agentic.UsageLimits
-	drainAll bool
+	budget         *agentic.UsageLimits
+	drainAll       bool
+	initialHistory []agentic.Message
 }
 
 func WithBudget(limits agentic.UsageLimits) Option {
@@ -93,6 +94,16 @@ func WithBudget(limits agentic.UsageLimits) Option {
 func WithDrainAll(enabled bool) Option {
 	return func(options *options) error {
 		options.drainAll = enabled
+		return nil
+	}
+}
+
+// WithInitialHistory copies a complete, protocol-valid transcript into a new
+// session before its first prompt. It is primarily used by explicit capture
+// policies; recovery never reapplies the option.
+func WithInitialHistory(messages ...agentic.Message) Option {
+	return func(options *options) error {
+		options.initialHistory = cloneMessages(messages)
 		return nil
 	}
 }
@@ -123,6 +134,7 @@ var (
 	ErrInvalidMessage           = errors.New("session input must be a user message")
 	ErrInvalidResumeRequest     = harnessruntime.ErrInvalidResumeRequest
 	ErrIndeterminateTool        = errors.New("indeterminate tool cannot be executed automatically")
+	ErrInvalidInitialHistory    = errors.New("initial session history is not protocol-valid")
 	ErrSessionOpen              = store.ErrSessionOpen
 	ErrSessionClosed            = errors.New("session is closed")
 )

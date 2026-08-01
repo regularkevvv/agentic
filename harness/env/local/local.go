@@ -271,6 +271,56 @@ func (l *Environment) Files() harnessenv.FileSystem { return l }
 
 func (l *Environment) Shell() (harnessenv.Shell, bool) { return l, true }
 
+// Narrow opens an independently owned os.Root below this environment. Allowing
+// shell preserves ordinary host execution semantics and is not containment.
+func (l *Environment) Narrow(ctx context.Context, request harnessenv.NarrowRequest) (harnessenv.Lease, error) {
+	if request.Root == "" {
+		return nil, &harnessenv.Error{
+			Code: harnessenv.CodeInvalid,
+			Op:   "narrow",
+			Err:  errors.New("narrow root is required"),
+		}
+	}
+	resource, err := l.CanonicalPath(ctx, request.Root)
+	if err != nil {
+		return nil, err
+	}
+	child, err := New(Config{
+		Root:     resource.ID,
+		Cwd:      ".",
+		Symlinks: l.symlinks,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &narrowLease{Lease: child, shell: request.Shell}, nil
+}
+
+type narrowLease struct {
+	harnessenv.Lease
+	shell bool
+}
+
+func (l *narrowLease) Shell() (harnessenv.Shell, bool) {
+	if !l.shell {
+		return nil, false
+	}
+	return l.Lease.Shell()
+}
+
+func (l *narrowLease) Narrow(ctx context.Context, request harnessenv.NarrowRequest) (harnessenv.Lease, error) {
+	narrower, ok := l.Lease.(harnessenv.Narrower)
+	if !ok {
+		return nil, &harnessenv.Error{
+			Code: harnessenv.CodeUnsupported,
+			Op:   "narrow",
+			Err:  errors.New("nested narrowing is unsupported"),
+		}
+	}
+	request.Shell = request.Shell && l.shell
+	return narrower.Narrow(ctx, request)
+}
+
 func (l *Environment) relative(name string) (string, error) {
 	if name == "" {
 		name = "."
@@ -368,6 +418,8 @@ func (f *Factory) Open(ctx context.Context, _ string) (harnessenv.Lease, error) 
 
 var _ harnessenv.Factory = (*Factory)(nil)
 var _ harnessenv.Lease = (*Environment)(nil)
+var _ harnessenv.Narrower = (*Environment)(nil)
+var _ harnessenv.Narrower = (*narrowLease)(nil)
 
 func (l *Environment) String() string {
 	return fmt.Sprintf("Local(root=%q, cwd=%q; not an OS sandbox)", l.rootPath, l.cwdRel)
