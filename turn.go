@@ -205,7 +205,7 @@ func (c *agentCore) executeRegularTurn(ls *loopState, calls []ToolUse) *regularT
 		return state
 	}
 	if suspended {
-		suspension, err := c.newToolSuspension(ls, calls, regular, *decision.Deferral)
+		suspension, err := c.newToolSuspension(ls, calls, regular, *decision.Deferral, false)
 		if err != nil {
 			state.fatal = err
 			for _, call := range regular {
@@ -247,7 +247,27 @@ func (c *agentCore) executeRegularTurn(ls *loopState, calls []ToolUse) *regularT
 		return state
 	}
 
-	results, executionErr := c.executeAdmittedTools(ls, executable)
+	if err := validateSuspendableBatch(ls.registry, regular, executable); err != nil {
+		state.fatal = err
+		for _, call := range executable {
+			state.results[call.ID] = makeToolResultError(call, err.Error(), err)
+		}
+		return state
+	}
+
+	results, handlerDeferral, executionErr := c.executeAdmittedTools(ls, executable, nil)
+	if handlerDeferral != nil {
+		suspension, err := c.newToolSuspension(ls, calls, executable, *handlerDeferral, true)
+		if err != nil {
+			state.fatal = err
+			for _, call := range executable {
+				state.results[call.ID] = makeToolResultError(call, "Unable to persist tool suspension.", err)
+			}
+			return state
+		}
+		state.suspension = suspension
+		return state
+	}
 	for index, result := range results {
 		call := executable[index]
 		projected, err := c.projectToolResult(ls.ctx, ls, call, result)
@@ -278,6 +298,31 @@ func (c *agentCore) executeRegularTurn(ls *loopState, calls []ToolUse) *regularT
 		state.fatal = executionErr
 	}
 	return state
+}
+
+func validateSuspendableBatch(
+	registry *executionToolRegistry,
+	regular []ToolUse,
+	executable []ToolUse,
+) error {
+	for _, call := range executable {
+		handler, ok := registry.Get(call.Name)
+		if !ok {
+			continue
+		}
+		marker, ok := handler.(SuspendableToolHandler)
+		if !ok || !marker.MaySuspendToolExecution() {
+			continue
+		}
+		if len(regular) != 1 || len(executable) != 1 {
+			return fmt.Errorf(
+				"%w: suspendable handler %q must be the only regular call in its batch",
+				ErrToolHandlerSuspension,
+				call.Name,
+			)
+		}
+	}
+	return nil
 }
 
 func (ls *loopState) commitToolResults(results []ToolExecutionResult) error {

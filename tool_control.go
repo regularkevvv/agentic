@@ -3,7 +3,12 @@ package agentic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 )
+
+// ErrToolHandlerSuspension reports a handler that violated the opt-in
+// suspension protocol.
+var ErrToolHandlerSuspension = errors.New("invalid tool handler suspension")
 
 // ToolGate preflights an entire regular-tool batch before any handler starts.
 // Output tools are framework calls and are not passed to the gate.
@@ -36,6 +41,21 @@ type ToolDisposition struct {
 type ToolDeferral struct {
 	Kind    string
 	Payload json.RawMessage
+}
+
+// SuspendableToolHandler is an optional marker implemented by a handler that
+// may return ToolHandlerSuspension. A suspendable handler is isolated from
+// other regular calls before execution so a post-start deferral cannot be
+// mixed with unrelated effects.
+type SuspendableToolHandler interface {
+	MaySuspendToolExecution() bool
+}
+
+// ToolHandlerSuspension asks the driver to leave the current tool frontier
+// open and return ExecutionSuspended. It is meaningful only when returned by a
+// handler implementing SuspendableToolHandler.
+type ToolHandlerSuspension struct {
+	Deferral ToolDeferral
 }
 
 // ToolDispositionKind is the permitted gate disposition.

@@ -179,6 +179,7 @@ func (c *agentCore) resolveSuspendedTools(ls *loopState, payload toolSuspensionP
 
 	state := &regularTurnState{results: make(map[string]ToolExecutionResult)}
 	toExecute := make([]ToolUse, 0, len(executable))
+	resumeContexts := make(map[string]ToolResumeContext, len(executable))
 	for _, call := range executable {
 		decision, ok := decisionByID[call.ID]
 		if !ok {
@@ -186,6 +187,9 @@ func (c *agentCore) resolveSuspendedTools(ls *loopState, payload toolSuspensionP
 		}
 		switch decision.Action {
 		case ToolResumeExecute:
+			if decision.Result != nil {
+				return nil, fmt.Errorf("%w: execute decision for %q supplied a result", ErrResumeDecision, call.ID)
+			}
 			definition, ok := ls.registry.Tool(call.Name)
 			if !ok {
 				return nil, fmt.Errorf("%w: tool %q is no longer registered", ErrResumeDecision, call.Name)
@@ -197,7 +201,35 @@ func (c *agentCore) resolveSuspendedTools(ls *loopState, payload toolSuspensionP
 				call.Input = decision.Input
 			}
 			toExecute = append(toExecute, call)
+			if payload.HandlerSuspension {
+				handler, exists := ls.registry.Get(call.Name)
+				marker, marked := handler.(SuspendableToolHandler)
+				if !exists || !marked || !marker.MaySuspendToolExecution() {
+					return nil, fmt.Errorf(
+						"%w: suspended handler %q no longer declares suspension",
+						ErrSuspensionMismatch,
+						call.Name,
+					)
+				}
+				resumeContexts[call.ID] = ToolResumeContext{
+					SuspensionID: payload.SuspensionID,
+					Deferral: ToolDeferral{
+						Kind:    payload.Deferral.Kind,
+						Payload: append(json.RawMessage(nil), payload.Deferral.Payload...),
+					},
+					Payload: append(json.RawMessage(nil), decision.Payload...),
+				}
+			} else if len(decision.Payload) != 0 {
+				return nil, fmt.Errorf(
+					"%w: execute decision for %q supplied handler payload for a gate suspension",
+					ErrResumeDecision,
+					call.ID,
+				)
+			}
 		case ToolResumeReturn:
+			if len(decision.Payload) != 0 || decision.Input != nil {
+				return nil, fmt.Errorf("%w: return decision for %q supplied execute-only data", ErrResumeDecision, call.ID)
+			}
 			if decision.Result == nil {
 				return nil, fmt.Errorf("%w: return decision for %q has no result", ErrResumeDecision, call.ID)
 			}
@@ -215,7 +247,18 @@ func (c *agentCore) resolveSuspendedTools(ls *loopState, payload toolSuspensionP
 	if err := ls.checkToolCallLimits(len(toExecute)); err != nil {
 		return nil, err
 	}
-	results, executionErr := c.executeAdmittedTools(ls, toExecute)
+	if err := validateSuspendableBatch(ls.registry, executable, toExecute); err != nil {
+		return nil, err
+	}
+	results, handlerDeferral, executionErr := c.executeAdmittedTools(ls, toExecute, resumeContexts)
+	if handlerDeferral != nil {
+		suspension, err := c.newToolSuspension(ls, payload.Calls, toExecute, *handlerDeferral, true)
+		if err != nil {
+			return nil, err
+		}
+		state.suspension = suspension
+		return state, nil
+	}
 	for index, result := range results {
 		call := toExecute[index]
 		projected, err := c.projectToolResult(ls.ctx, ls, call, result)
@@ -261,6 +304,9 @@ func driveLoop[O any](c *agentCore, ls *loopState, evaluator completionEvaluator
 	}
 	if resumed != nil {
 		outcome := completeAssistantTurn(c, ls, resumed.assistant, evaluator, true, resumed.regular)
+		if outcome.suspension != nil {
+			return suspendedExecution[O](c, ls, *outcome.suspension)
+		}
 		if resumePrompt != nil && outcome.fatal == nil && outcome.suspension == nil {
 			ls.messages = append(ls.messages, *resumePrompt)
 			outcome.continuation = true
