@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/env"
 	envmemory "github.com/regularkevvv/agentic/harness/env/memory"
 )

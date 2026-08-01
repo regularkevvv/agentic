@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	jsoncodec "github.com/regularkevvv/agentic/harness/codec/json"
 	"github.com/regularkevvv/agentic/harness/repair"
 	"github.com/regularkevvv/agentic/harness/store"

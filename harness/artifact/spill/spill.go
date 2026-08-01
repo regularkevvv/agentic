@@ -8,6 +8,7 @@ import (
 	"unicode/utf8"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/artifact"
 )
 

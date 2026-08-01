@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/artifact"
 	artifactmemory "github.com/regularkevvv/agentic/harness/artifact/memory"
 	"github.com/regularkevvv/agentic/harness/capability"

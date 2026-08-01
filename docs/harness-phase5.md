@@ -2,7 +2,7 @@
 
 **Status:** Accepted implementation proposal
 **Date:** 2026-08-01
-**Depends on:** Agentic `v0.5.0` and harness Phases 2-4
+**Depends on:** Agentic `v0.5.1` and harness Phases 2-4
 **Release target:** first harness module release (`harness/v0.1.0`)
 
 This proposal is the Phase 5 boundary required by
@@ -91,6 +91,9 @@ type Step struct {
 Exactly one of `Done` or a non-empty call batch is valid. A nonterminal step
 must include an opaque checkpoint. Calls have executor-stable IDs, names, and
 JSON-shaped keyword arguments. The host never interprets checkpoint bytes.
+Executor call IDs remain unchanged at the protocol boundary; nested handlers,
+effect idempotency, and result processors receive a collision-safe host ID
+derived from the outer call, executor step, and executor call ID.
 Inputs and outputs are defensively copied and bounded.
 
 The executor does not receive tool handlers. It can only yield proposed calls.
@@ -115,7 +118,10 @@ bounded by a configured maximum step count.
 
 The crash rules are conservative:
 
-- crash before a nested start: the durable checkpoint may be resumed;
+- once an outer suspension is durable, its checkpoint may be resumed without
+  starting a nested call twice;
+- a crash after the outer call starts but before its suspension or result is
+  durable is conservatively indeterminate, even if no nested start was seen;
 - crash after a nested start but before its result: the outer `run_code` call is
   indeterminate and is never automatically repeated; and
 - crash after a nested result but before the outer result: the outer call is
@@ -260,10 +266,12 @@ In addition to all Phase 2-4 gates, Phase 5 must prove:
 ## 8. Release
 
 No harness module tag exists at this proposal's baseline. The prerequisite root
-facade shipped separately as Agentic `v0.5.0`; the harness module must require
-that released version and pass with `GOWORK=off`. After the Phase 5 PR is merged
+facade shipped in Agentic `v0.5.0`; Agentic `v0.5.1` adds the public nested
+tool-invocation context helper that prevents selected handlers from inheriting
+an outer code-execution call or resume context. The harness module must require
+`v0.5.1` and pass with `GOWORK=off`. After the Phase 5 PR is merged
 and all hosted checks are green, release `harness/v0.1.0` from that merge
 commit. Before tagging, verify a fresh consumer with clean module and build
-caches against released `github.com/regularkevvv/agentic v0.5.0` and the
+caches against released `github.com/regularkevvv/agentic v0.5.1` and the
 candidate harness module. The implementation PR itself must not move the root
 module path or add a committed `replace` directive.

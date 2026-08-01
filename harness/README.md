@@ -1,7 +1,7 @@
-# Agentic Harness (experimental Phase 4)
+# Agentic Harness (experimental Phase 5)
 
 This nested module contains the experimental `v0.1` harness surface for
-Agentic `v0.5.0`. It currently provides:
+Agentic `v0.5.1`. It currently provides:
 
 - write-ahead `Harness`/`Session` execution with steering, follow-up,
   next-turn queues, interruption, snapshots, budgets, and crash recovery;
@@ -21,9 +21,19 @@ Agentic `v0.5.0`. It currently provides:
 - capture-restricted, in-process child agents with separate durable sessions
   and addressed inbox routing;
 - shared or narrowed history, environment, tools, permissions, dependencies,
-  and cumulative budget policies; and
+  and cumulative budget policies;
 - tagged descendant events, explicit recursion limits, parent cancellation,
-  and bounded UTF-8 child summaries.
+  and bounded UTF-8 child summaries;
+- an opt-in code-execution capability over a generic checkpointed `Executor`,
+  with selected-tool hiding, durable nested calls, exact approval resume, and
+  a fixed-binary subprocess protocol adapter;
+- bounded, host-scoped cross-session memory ports with in-memory and durable
+  JSONL adapters, optimistic concurrency, idempotent mutation, on-demand tools,
+  and optional ephemeral prompt injection;
+- bounded skill-source ports with in-memory and canonical-path `SKILL.md`
+  filesystem adapters plus on-demand list/read tools; and
+- a generic deterministic eval runner, built-in evaluators, JSON reporting,
+  and a fresh-session harness subject adapter.
 
 The runtime and session core import only ports. `harness.NewRuntime` remains
 the policy-neutral constructor; `harness.New(...).Build()` layers an immutable
@@ -125,15 +135,17 @@ artifact scopes. Their parent ID, agent name, and depth are persisted with
 session creation and remain authoritative after reopen. The process-local
 address router is available while a delegation call is executing. Completed
 children remain recoverable by their opaque session IDs. In-process synchronous
-delegation is the Phase 4 boundary: out-of-process workers, topology presets,
-automatic suspended-child orchestration, codemode, long-term memory, skills,
-and evals remain deferred to the later work described in
+delegation remains the topology boundary. Phase 5 adds opt-in code execution,
+cross-session memory, skills, and evals without changing `harness.Default`.
+Out-of-process workers, topology presets, automatic suspended-child
+orchestration, a bundled interpreter, vector database, provider-specific
+evaluator, CLI, TUI, and hosted service remain deferred to later work described in
 [`../docs/spike-harness-framework.md`](../docs/spike-harness-framework.md).
 
 The module requires the released root module:
 
 ```text
-github.com/regularkevvv/agentic v0.5.0
+github.com/regularkevvv/agentic v0.5.1
 ```
 
 Local development uses the committed repository `go.work`; the module does not

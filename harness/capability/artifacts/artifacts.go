@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/artifact"
 	"github.com/regularkevvv/agentic/harness/capability"
 	"github.com/regularkevvv/agentic/harness/env"
