@@ -1,7 +1,7 @@
 .PHONY: test lint vet build fmt check clean coverage coverage-check
 
 GOLANGCI_LINT_VERSION := v2.1.6
-COVERAGE_PACKAGES := $(shell go list ./... | grep -vE '/(artifacttest|envtest|eventtest|storetest)($$|/)')
+COVERAGE_PACKAGES := $(shell go list ./... | grep -vE '/(artifacttest|envtest|eventtest|memorytest|storetest)($$|/)')
 COVERAGE_THRESHOLD := 97.0
 
 test:
