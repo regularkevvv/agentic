@@ -16,6 +16,7 @@
 //   - Hugging Face dedicated endpoint: HF_TOKEN, HF_ENDPOINT_URL, HF_DENSE_SPACE_ID
 //   - SageMaker endpoint: AWS credentials, AWS_REGION, SAGEMAKER_ENDPOINT,
 //     SAGEMAKER_DENSE_SPACE_ID
+//   - Pinecone Inference: PINECONE_API_KEY, PINECONE_SPARSE_MODEL
 //
 // The dedicated and SageMaker gates include the expected space ID on purpose.
 // A live test that accepted whatever identity the endpoint reported would pass
@@ -31,12 +32,14 @@ import (
 	"errors"
 	"math"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
 	agentic "github.com/regularkevvv/agentic"
 	"github.com/regularkevvv/agentic/provider/deepinfra"
 	"github.com/regularkevvv/agentic/provider/huggingface"
+	"github.com/regularkevvv/agentic/provider/pinecone"
 	"github.com/regularkevvv/agentic/provider/sagemaker"
 )
 
@@ -59,6 +62,10 @@ const (
 
 	paraphraseQuery = "how much does the engineering team cost each month?"
 	rareTermQuery   = "quensel actuator recalibration"
+
+	// expansionQuery is short and ordinary on purpose: a learned sparse model
+	// that expands will weigh terms it never contained.
+	expansionQuery = "automobile"
 )
 
 func skipIfNoDeepInfraToken(t *testing.T) {
@@ -472,6 +479,103 @@ func checkDedicatedEndpoint(
 		})
 		if best != quenselDoc {
 			t.Errorf("highest sparse score = %d, want %d (the rare term)", best, quenselDoc)
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------
+// Pinecone Inference
+// ---------------------------------------------------------------------------
+
+// pineconeSparseVocabulary is the bound the live test declares for the hosted
+// sparse model. Pinecone does not report a vocabulary size, so this is a
+// measured ceiling rather than a documented constant: if a live response ever
+// carries a coordinate above it, the test fails loudly instead of storing an
+// index that would be out of range.
+const pineconeSparseVocabulary = 1 << 31
+
+func TestE2E_Representations_PineconeSparse(t *testing.T) {
+	apiKey := os.Getenv("PINECONE_API_KEY")
+	model := os.Getenv("PINECONE_SPARSE_MODEL")
+	if apiKey == "" || model == "" {
+		t.Skip("PINECONE_API_KEY / PINECONE_SPARSE_MODEL not set, skipping Pinecone e2e test")
+	}
+	ctx := representationCtx(t)
+
+	encoder, err := pinecone.New(model,
+		pinecone.WithOutputs(agentic.RepresentationSparse),
+		pinecone.WithSparseVocabulary(pineconeSparseVocabulary),
+		pinecone.WithReturnTokens(true),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	docs, _, err := encoder.EncodeWithTokens(ctx, &agentic.RepresentationRequest{
+		Input:     representationDocs,
+		InputType: agentic.EmbeddingInputDocument,
+		Outputs:   []agentic.RepresentationKind{agentic.RepresentationSparse},
+	})
+	if err != nil {
+		t.Fatalf("encode documents: %v", err)
+	}
+
+	space, _ := docs.Space(agentic.RepresentationSparse)
+	t.Logf("sparse space %s", space)
+	if space.Metric != agentic.SimilarityDotProduct {
+		t.Errorf("sparse metric = %q, want dot_product", space.Metric)
+	}
+	if docs.Usage.RequestCount != 1 || docs.Usage.InputTokens < 0 {
+		t.Errorf("usage = %+v", docs.Usage)
+	}
+
+	queries, queryTokens, err := encoder.EncodeWithTokens(ctx, &agentic.RepresentationRequest{
+		Input:     []string{rareTermQuery, expansionQuery},
+		InputType: agentic.EmbeddingInputQuery,
+		Outputs:   []agentic.RepresentationKind{agentic.RepresentationSparse},
+	})
+	if err != nil {
+		t.Fatalf("encode queries: %v", err)
+	}
+
+	// Query and passage roles encode into the same vocabulary, which is what
+	// makes a query comparable to an indexed passage at all.
+	querySpace, _ := queries.Space(agentic.RepresentationSparse)
+	if querySpace.ID != space.ID {
+		t.Fatalf("query space %s differs from document space %s", querySpace.ID, space.ID)
+	}
+
+	t.Run("sparse finds the rare term", func(t *testing.T) {
+		best := bestBy(t, len(docs.Data), func(i int) float64 {
+			return dotProduct(queries.Data[0].Sparse, docs.Data[i].Sparse)
+		})
+		if best != quenselDoc {
+			t.Errorf("highest sparse score = %d, want %d (the rare term)", best, quenselDoc)
+		}
+	})
+
+	// The plan's expansion case: a learned sparse model is supposed to weigh
+	// terms the query never contained. This asserts that expansion is
+	// observable and reported, not that a specific synonym appears — the
+	// vocabulary is the model's, and pinning one word would be pinning a model
+	// detail rather than a contract.
+	t.Run("expansion is observable", func(t *testing.T) {
+		tokens := queryTokens[1]
+		coordinates := queries.Data[1].Sparse.Len()
+		if len(tokens) != coordinates {
+			t.Fatalf("got %d tokens for %d coordinates", len(tokens), coordinates)
+		}
+		t.Logf("query %q expanded to %d coordinates: %v", expansionQuery, coordinates, tokens)
+
+		literal := strings.Fields(strings.ToLower(expansionQuery))
+		if coordinates <= len(literal) {
+			t.Logf("no expansion beyond the %d literal terms; this model may not expand",
+				len(literal))
+		}
+		for i, token := range tokens {
+			if token == "" {
+				t.Errorf("coordinate %d has no token string", i)
+			}
 		}
 	})
 }

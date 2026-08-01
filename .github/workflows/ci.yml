@@ -136,3 +136,26 @@ jobs:
         run: pip install -r requirements-dev.txt
       - name: Run contract tests
         run: pytest -q
+
+  # Golden fixtures are meant to be derived from sanitized real responses, so a
+  # sanitization miss commits a live credential to a public repository. This
+  # fails on the token shapes the providers here actually issue.
+  fixtures:
+    name: Fixture secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan recorded fixtures for credentials
+        run: |
+          set -uo pipefail
+          pattern='sk-[A-Za-z0-9]{20,}|hf_[A-Za-z0-9]{20,}|pcsk_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}|ASIA[0-9A-Z]{16}|Bearer [A-Za-z0-9._-]{20,}|aws_secret_access_key'
+          hits=$(grep -rInE "$pattern" \
+            --include='*.json' --include='*.txt' --include='*.jsonl' \
+            --exclude-dir=.git . || true)
+          if [ -n "$hits" ]; then
+            echo "::error::a fixture appears to contain a credential"
+            echo "$hits"
+            exit 1
+          fi
+          echo "no credential-shaped strings in recorded fixtures"

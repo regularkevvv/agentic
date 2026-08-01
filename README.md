@@ -24,6 +24,7 @@ Current release: **v0.5.1**.
 - **Multi-modal** -- images, audio, video, and document inputs
 - **MCP support** -- use tools from Model Context Protocol servers
 - **Embeddings** -- provider-agnostic `Embedder` interface with OpenAI, Voyage AI, Cohere, Gemini, Ollama, and Bedrock implementations and retrieval-tuned query/document input types
+- **Multi-representation encoding** -- `RepresentationEncoder` returns dense, learned sparse, and token multi-vectors from one call, with validated vector-space identity, via DeepInfra, Hugging Face, SageMaker, and Pinecone
 - **Reranking** -- `Reranker` cross-encoder interface with Voyage AI and Cohere implementations for two-stage retrieval
 - **Thinking tokens** -- extended reasoning for Anthropic, OpenAI o-series, and Gemini
 - **Output validation** -- struct tag validation with automatic retry
@@ -160,6 +161,68 @@ Requests are batch-first (`Input []string`), support dimension control via
 Voyage AI `voyage-3.5` and later), and report token usage. Vectors are returned
 in input order as `[][]float32`. `provider/test.NewTestEmbedder` provides a
 deterministic in-memory fake for tests.
+
+## Multi-representation encoding
+
+Some retrieval models produce more than one view of a text from a single
+forward pass. BGE-M3 produces a dense vector, a learned sparse vector, and a
+per-token multi-vector at once. `agentic.Embedder` carries the first and
+nothing else, so `agentic.RepresentationEncoder` sits beside it and carries all
+three without flattening them.
+
+```go
+import "github.com/regularkevvv/agentic/provider/deepinfra"
+
+encoder, _ := deepinfra.New(deepinfra.BGEM3Model) // token from DEEPINFRA_TOKEN
+
+resp, _ := agentic.EncodeDocuments(ctx, encoder,
+    []string{"PostgreSQL supports sparse vectors"},
+    agentic.RepresentationDense,
+    agentic.RepresentationSparse,
+)
+
+item := resp.Data[0]
+denseSpace := resp.Spaces[agentic.RepresentationDense]
+sparseSpace := resp.Spaces[agentic.RepresentationSparse]
+
+// Store item.Dense and item.Sparse in your index, each beside its space ID.
+```
+
+Outputs are explicit because they differ in cost by orders of magnitude. `Data`
+has one entry per input, in input order, carrying exactly the kinds you asked
+for.
+
+Store `space.ID` beside every value. Two vectors from the same *named* model
+but different weights revisions, or two sparse vectors from different tokenizer
+vocabularies, are not comparable — and the failure is silent, in the form of
+quietly worse recall rather than an error. The ID is a deterministic hash of
+the fields that make values comparable, so two processes agree on it without
+coordinating.
+
+| Provider | Import | Constructor | Dense | Sparse | Multi-vector |
+|----------|--------|-------------|-------|--------|--------------|
+| DeepInfra (native) | `provider/deepinfra` | `deepinfra.New(deepinfra.BGEM3Model)` | Yes | Yes | Yes |
+| Hugging Face endpoint | `provider/huggingface` | `huggingface.NewDedicated(endpointURL)` | Yes | Yes | Optional |
+| Hugging Face router | `provider/huggingface` | `huggingface.NewShared(model)` | Yes | No | No |
+| SageMaker | `provider/sagemaker` | `sagemaker.New(ctx, endpointName)` | Yes | Yes | Optional |
+| Pinecone Inference | `provider/pinecone` | `pinecone.New(model)` | Yes | Yes | No |
+
+Agentic normalizes inference and stops there. Indexing, BM25, candidate fusion,
+and final ranking belong to the retrieval system you build on top, which is why
+nothing here returns a score.
+
+Existing `Embedder` code is unaffected. `EmbedderAsRepresentationEncoder` drives
+any dense embedder through the new interface, and
+`RepresentationEncoderAsEmbedder` drives a multi-output encoder through the old
+one, so sparse output can be adopted when your index is ready for it.
+`provider/test.NewTestRepresentationEncoder` is a deterministic fake, and
+`provider/test/conformance.RunRepresentation` is the shared contract suite that
+every provider — and your own — is checked against.
+
+Hugging Face and SageMaker endpoints run the versioned handler in
+[`deploy/representations`](deploy/representations). See
+[docs/multi-representation-inference.md](docs/multi-representation-inference.md)
+for the full contract.
 
 ## Reranking
 
@@ -358,9 +421,11 @@ agentic/
   tool/channel.go     # Channel-backed and approval-gated tools
   history_processor.go # Message history transforms
   tool/               # Tool builders, registry, toolsets
-  provider/           # LLM provider implementations
+  representation.go   # Multi-representation encoding helpers and adapters
+  provider/           # LLM, embedding, reranking, and encoding providers
   internal/core/      # Shared types (Message, Tool, Model, etc.)
   mcp/                # Model Context Protocol integration
+  deploy/representations/ # agentic.representations.v1 schema and handler
   examples/           # Runnable example programs
   harness/            # Nested experimental durable-session module
 ```
