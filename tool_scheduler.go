@@ -44,7 +44,7 @@ func (c *agentCore) executeAdmittedTools(
 		index, call := index, call
 		attempt := ls.retryCounts[call.Name] + 1
 		go func() {
-			callCtx := withToolCallContext(baseCtx, ToolCallContext{ID: call.ID, Name: call.Name, Attempt: attempt})
+			callCtx := WithToolCallContext(baseCtx, ToolCallContext{ID: call.ID, Name: call.Name, Attempt: attempt})
 			if resume, ok := resumes[call.ID]; ok {
 				callCtx = withToolResumeContext(callCtx, resume)
 			}

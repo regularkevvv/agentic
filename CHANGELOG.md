@@ -5,6 +5,16 @@ All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the major version is 0, breaking changes may appear in minor releases.
 
+## [0.5.1] — 2026-08-01
+
+### Fixed
+
+- **Nested tool invocation context** — composite tool hosts can use
+  `WithToolCallContext` to install the nested call ID, name, and attempt while
+  clearing handler-resume metadata inherited from the outer tool. This prevents
+  nested handlers from observing the outer call's idempotency identity or
+  opaque resume decisions.
+
 ## [0.5.0] — 2026-08-01
 
 This release adds a small, capability-neutral extension to the resumable
