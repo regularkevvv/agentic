@@ -1,0 +1,33 @@
+{
+  "_comment": [
+    "Golden response for BAAI/bge-m3-multi, shaped from DeepInfra's published",
+    "MultiModalEmbeddingsOut schema (observed 2026-08-01) rather than captured",
+    "from a live call, so it carries no account identifiers and no real",
+    "document text. Vectors are truncated to 4 dimensions and the sparse rows",
+    "to an 8-token vocabulary; a live response is 1024 dimensions wide over a",
+    "250002-token vocabulary. Replace this file with a sanitized live capture,",
+    "and record the model revision observed, when one is available.",
+    "Inputs: [\"sparse vectors\", \"dense vectors\"]"
+  ],
+  "embeddings": [
+    [0.12, -0.03, 0.44, 0.9],
+    [0.08, 0.22, -0.51, 0.13]
+  ],
+  "sparse": [
+    [0.0, 0.91, 0.0, 0.0, 0.37, 0.0, 0.0, 0.0],
+    [0.63, 0.0, 0.0, 0.11, 0.0, 0.0, 0.24, 0.0]
+  ],
+  "colbert": [
+    [[0.5, 0.1, 1.0, 0.2], [0.3, 0.6, 0.5, 0.4]],
+    [[0.9, 0.2, 0.1, 0.7]]
+  ],
+  "input_tokens": 6,
+  "request_id": "req_redacted",
+  "inference_status": {
+    "status": "unknown",
+    "runtime_ms": 41,
+    "cost": 0.0,
+    "tokens_input": 6,
+    "tokens_generated": 0
+  }
+}

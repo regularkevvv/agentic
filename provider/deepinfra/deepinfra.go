@@ -1,0 +1,320 @@
+// Package deepinfra provides a DeepInfra implementation of
+// core.RepresentationEncoder, and of core.Embedder for its dense output.
+//
+// It targets DeepInfra's native inference API at /v1/inference/{model}, which
+// is the only route that exposes a multi-representation model's full output.
+// For BAAI/bge-m3-multi that is a dense vector, a learned sparse (lexical
+// weights) vector, and a ColBERT-style token multi-vector, all from one
+// forward pass over the batch.
+//
+// DeepInfra also serves an OpenAI-compatible /v1/openai/embeddings route. That
+// route returns a dense vector and nothing else, whatever the model can do, so
+// this package does not use it and a caller must not read dense-only success
+// there as evidence of sparse support. To use that route for plain dense
+// embeddings, point provider/openai at DeepInfra's base URL instead.
+//
+// # Vector spaces
+//
+// DeepInfra's response carries no model revision, so Revision and Tokenizer
+// are empty unless WithModelRevision supplies them. Without a revision, a
+// silent model redeployment produces vectors that land in the same space ID as
+// the old ones — record a revision for any index you intend to keep.
+//
+// BGE-M3 is a symmetric encoder: queries and documents go through the same
+// weights with no task instruction, so both roles are accepted, neither
+// changes the request, and their outputs are directly comparable. The input
+// role is therefore not part of the space identity here, as it would have to
+// be for an asymmetric model.
+package deepinfra
+
+import (
+	"net/http"
+
+	"github.com/regularkevvv/agentic/internal/core"
+)
+
+// providerName identifies this package in vector spaces and errors.
+const providerName = "deepinfra"
+
+// BGEM3Model is the DeepInfra model ID for BGE-M3's multi-representation
+// endpoint. It is a named constant rather than a default so that the model a
+// deployment encodes with is always visible at the call site.
+const BGEM3Model = "BAAI/bge-m3-multi"
+
+// BGEM3SparseVocabulary is BGE-M3's tokenizer vocabulary size, the logical
+// width of its sparse space. Pass it to WithSparseVocabulary when the response
+// shape does not reveal the vocabulary on its own.
+const BGEM3SparseVocabulary = 250002
+
+// Encoder implements core.RepresentationEncoder and core.Embedder against
+// DeepInfra's native inference API.
+type Encoder struct {
+	*client
+
+	model            string
+	normalize        *bool
+	batchSize        int
+	sparseVocabulary int
+	revision         string
+	tokenizer        string
+	outputs          []core.RepresentationKind
+	limits           core.RepresentationLimits
+
+	// embedder projects this encoder onto core.Embedder. It is nil when the
+	// encoder does not advertise dense output.
+	embedder *core.EncoderEmbedder
+}
+
+// Option configures the Encoder.
+type Option func(*config)
+
+type config struct {
+	transportConfig
+
+	normalize        *bool
+	batchSize        int
+	sparseVocabulary int
+	revision         string
+	tokenizer        string
+	outputs          []core.RepresentationKind
+	limits           *core.RepresentationLimits
+}
+
+// WithAPIToken sets the API token. If not set, the DEEPINFRA_TOKEN env var is
+// used.
+func WithAPIToken(token string) Option {
+	return func(c *config) { c.apiKey = token }
+}
+
+// WithBaseURL sets a custom base URL (default https://api.deepinfra.com/v1).
+func WithBaseURL(baseURL string) Option {
+	return func(c *config) { c.baseURL = baseURL }
+}
+
+// WithHTTPClient sets a custom HTTP client, for proxies, instrumentation, or
+// tests.
+func WithHTTPClient(client *http.Client) Option {
+	return func(c *config) { c.httpClient = client }
+}
+
+// WithMaxRetries sets how many times a request is retried on 429 and transient
+// 5xx responses (default 2).
+func WithMaxRetries(retries int) Option {
+	return func(c *config) { c.maxRetries = &retries }
+}
+
+// WithMaxResponseBytes caps the response body this encoder will read (default
+// 64 MiB). Lower it when requesting multi-vector output from a deployment with
+// a tight memory budget.
+func WithMaxResponseBytes(limit int64) Option {
+	return func(c *config) { c.maxResponseBytes = &limit }
+}
+
+// WithNormalize sets DeepInfra's normalize flag, which scales each returned
+// vector to unit length. Leaving it unset uses the API's own default, which is
+// not to normalize.
+//
+// Normalization does not change cosine similarity, which is the metric this
+// package declares. It does change dot-product scores, so a store that indexes
+// dense vectors under an inner-product metric must keep the setting fixed for
+// the life of the index.
+func WithNormalize(normalize bool) Option {
+	return func(c *config) { c.normalize = &normalize }
+}
+
+// WithBatchSize splits requests larger than size into that many inputs per
+// provider call, preserving order and summing usage.
+//
+// Zero, the default, sends the batch as one request. Set it when a large
+// multi-vector batch would otherwise produce a response too big to hold.
+func WithBatchSize(size int) Option {
+	return func(c *config) { c.batchSize = size }
+}
+
+// WithSparseVocabulary declares the tokenizer vocabulary size, which is the
+// logical width of the sparse space and the bound every sparse index must fall
+// within.
+//
+// It is only needed when the provider returns sparse output as a coordinate
+// map, which does not reveal the vocabulary. When the response is a full
+// vocabulary-width row the size is observed from it directly, and a value set
+// here must agree with what was observed.
+func WithSparseVocabulary(size int) Option {
+	return func(c *config) { c.sparseVocabulary = size }
+}
+
+// WithModelRevision records the immutable model and tokenizer revisions in
+// every vector space this encoder reports.
+//
+// DeepInfra does not return either, and this package will not invent them.
+// Supplying them is what lets a consumer detect that the deployment behind a
+// model name changed, instead of quietly mixing two generations of vectors in
+// one index.
+func WithModelRevision(model, tokenizer string) Option {
+	return func(c *config) {
+		c.revision = model
+		c.tokenizer = tokenizer
+	}
+}
+
+// WithOutputs restricts the representation kinds this encoder advertises.
+//
+// The default is all three, which is what BAAI/bge-m3-multi produces. Narrow
+// it when pointing this package at a DeepInfra model that produces fewer, so
+// that Capabilities() describes the deployment rather than the package.
+func WithOutputs(kinds ...core.RepresentationKind) Option {
+	return func(c *config) { c.outputs = append([]core.RepresentationKind(nil), kinds...) }
+}
+
+// WithLimits overrides the request and response size ceilings.
+func WithLimits(limits core.RepresentationLimits) Option {
+	return func(c *config) { c.limits = &limits }
+}
+
+// New creates a DeepInfra encoder for the given native inference model.
+//
+// Examples:
+//
+//	encoder, err := deepinfra.New(deepinfra.BGEM3Model)
+//	encoder, err := deepinfra.New(
+//	    deepinfra.BGEM3Model,
+//	    deepinfra.WithAPIToken("di-..."),
+//	    deepinfra.WithModelRevision("5617a9f61b028005a4858fdac845db406aefb181", "xlm-roberta-250002"),
+//	)
+func New(model string, opts ...Option) (*Encoder, error) {
+	if model == "" {
+		return nil, &core.InvalidRepresentationRequestError{
+			Invariant: "model.empty",
+			Detail:    "deepinfra: model cannot be empty",
+		}
+	}
+
+	cfg := &config{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	if cfg.batchSize < 0 {
+		return nil, &core.InvalidRepresentationRequestError{
+			Invariant: "batch_size.negative",
+			Detail:    "deepinfra: batch size cannot be negative",
+		}
+	}
+	if cfg.sparseVocabulary < 0 {
+		return nil, &core.InvalidRepresentationRequestError{
+			Invariant: "sparse_vocabulary.negative",
+			Detail:    "deepinfra: sparse vocabulary cannot be negative",
+		}
+	}
+
+	c, err := newClient(cfg.transportConfig)
+	if err != nil {
+		return nil, err
+	}
+
+	outputs := cfg.outputs
+	if outputs == nil {
+		outputs = []core.RepresentationKind{
+			core.RepresentationDense,
+			core.RepresentationSparse,
+			core.RepresentationMultiVector,
+		}
+	}
+	for _, kind := range outputs {
+		if !kind.Valid() {
+			return nil, &core.InvalidRepresentationRequestError{
+				Invariant: "outputs.unknown",
+				Detail:    "deepinfra: output kind " + string(kind) + " is not dense, sparse, or multi_vector",
+			}
+		}
+	}
+
+	limits := core.DefaultRepresentationLimits()
+	if cfg.limits != nil {
+		limits = *cfg.limits
+	}
+
+	encoder := &Encoder{
+		client:           c,
+		model:            model,
+		normalize:        cfg.normalize,
+		batchSize:        cfg.batchSize,
+		sparseVocabulary: cfg.sparseVocabulary,
+		revision:         cfg.revision,
+		tokenizer:        cfg.tokenizer,
+		outputs:          outputs,
+		limits:           limits,
+	}
+	// Built once here rather than per call, and left nil when the encoder was
+	// narrowed to non-dense outputs, so Embed fails with the same typed error
+	// a dense request would.
+	if encoder.Capabilities().Supports(core.RepresentationDense) {
+		encoder.embedder, err = core.NewEncoderEmbedder(encoder)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return encoder, nil
+}
+
+// MustNew is like New but panics on error.
+func MustNew(model string, opts ...Option) *Encoder {
+	e, err := New(model, opts...)
+	if err != nil {
+		panic(err)
+	}
+	return e
+}
+
+// Name implements core.RepresentationEncoder and core.Embedder.
+func (e *Encoder) Name() string { return e.model }
+
+// Capabilities implements core.RepresentationEncoder.
+//
+// Truncation is not offered: DeepInfra's native inference API has no truncate
+// parameter, and accepting the option while ignoring it would let a caller
+// believe an over-long document had been rejected when it was silently
+// clipped.
+func (e *Encoder) Capabilities() core.RepresentationCapabilities {
+	return core.RepresentationCapabilities{
+		Outputs: append([]core.RepresentationKind(nil), e.outputs...),
+		InputTypes: []core.EmbeddingInputType{
+			core.EmbeddingInputNone,
+			core.EmbeddingInputQuery,
+			core.EmbeddingInputDocument,
+		},
+		SupportsTruncation:  false,
+		SupportsMultiOutput: true,
+	}
+}
+
+// validator returns the contract checker used on both sides of a call.
+func (e *Encoder) validator() core.RepresentationValidator {
+	return core.RepresentationValidator{
+		Provider:     providerName,
+		Capabilities: e.Capabilities(),
+		Limits:       e.limits,
+	}
+}
+
+// space builds the descriptor for one kind at the observed width.
+func (e *Encoder) space(kind core.RepresentationKind, dimensions int) core.VectorSpace {
+	metric := core.SimilarityCosine
+	if kind == core.RepresentationSparse {
+		metric = core.SimilarityDotProduct
+	}
+	return core.VectorSpace{
+		Provider:   providerName,
+		Model:      e.model,
+		Revision:   e.revision,
+		Tokenizer:  e.tokenizer,
+		Kind:       kind,
+		Dimensions: dimensions,
+		Metric:     metric,
+	}.WithCanonicalID()
+}
+
+// Compile-time checks that Encoder satisfies both contracts.
+var (
+	_ core.RepresentationEncoder = (*Encoder)(nil)
+	_ core.Embedder              = (*Encoder)(nil)
+)
