@@ -1,0 +1,12 @@
+# Runtime dependencies for the BGE-M3 handler.
+#
+# Pinned exactly, not to a range. A retrieval index is only valid for the
+# weights and tokenizer that built it, and a floating dependency can change
+# either under a redeployment without anything failing loudly.
+#
+# Recorded 2026-08-01. Revalidate against the model card before deploying, and
+# bump AGENTIC_MODEL_REVISION and the space IDs whenever these change in a way
+# that moves the vectors.
+FlagEmbedding==1.3.4
+torch==2.5.1
+transformers==4.46.3

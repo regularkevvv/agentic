@@ -1,0 +1,4 @@
+# Contract-test dependencies. These install without a GPU or an ML stack, so
+# the protocol half of the handler can be tested anywhere.
+jsonschema==4.23.0
+pytest==8.3.4

@@ -1,0 +1,42 @@
+{
+  "version": "agentic.representations.v1",
+  "model": "BAAI/bge-m3",
+  "spaces": {
+    "dense": {
+      "id": "configured-immutable-dense-id",
+      "provider": "custom",
+      "model": "BAAI/bge-m3",
+      "revision": "immutable-revision",
+      "tokenizer": "immutable-tokenizer-revision",
+      "kind": "dense",
+      "dimensions": 2,
+      "metric": "cosine"
+    },
+    "sparse": {
+      "id": "configured-immutable-sparse-id",
+      "provider": "custom",
+      "model": "BAAI/bge-m3",
+      "revision": "immutable-revision",
+      "tokenizer": "immutable-tokenizer-revision",
+      "kind": "sparse",
+      "dimensions": 250002,
+      "metric": "dot_product"
+    }
+  },
+  "data": [
+    {
+      "dense": [0.12, -0.03],
+      "sparse": {"indices": [1012, 8271], "values": [0.91, 0.37]}
+    },
+    {
+      "dense": [0.08, 0.22],
+      "sparse": {"indices": [914, 1012], "values": [0.63, 0.11]}
+    }
+  ],
+  "usage": {
+    "input_tokens": 6,
+    "request_count": 1,
+    "input_bytes": 27,
+    "output_bytes": 0
+  }
+}

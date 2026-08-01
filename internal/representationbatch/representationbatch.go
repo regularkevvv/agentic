@@ -90,13 +90,21 @@ func Chunked(
 	return merged, nil
 }
 
-// single issues the request unsplit, still checking cardinality so that the
-// chunked and unchunked paths fail the same way.
+// single issues the request unsplit, still checking cancellation and
+// cardinality so that the chunked and unchunked paths behave the same way.
+//
+// The context check is here rather than left to the transport because not
+// every transport observes it: an SDK client or a stub can return a result for
+// a context that was already canceled, and a caller who has given up must not
+// be billed for work they cannot use.
 func single(
 	ctx context.Context,
 	req *core.RepresentationRequest,
 	fn func(context.Context, *core.RepresentationRequest) (*core.RepresentationResponse, error),
 ) (*core.RepresentationResponse, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	resp, err := fn(ctx, req)
 	if err != nil {
 		return nil, err

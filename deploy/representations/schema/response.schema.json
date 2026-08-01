@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/regularkevvv/agentic/deploy/representations/schema/response.schema.json",
+  "title": "agentic.representations.v1 response",
+  "description": "Body returned by a self-operated representation endpoint. Exactly one data entry per request input, in request order, carrying exactly the requested representations.",
+  "type": "object",
+  "required": ["version", "model", "spaces", "data"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^agentic\\.representations\\.v1(\\.[0-9]+)*$"
+    },
+    "model": {
+      "type": "string",
+      "minLength": 1
+    },
+    "spaces": {
+      "type": "object",
+      "description": "One descriptor per populated representation kind. A consumer persists the id beside the values and refuses to query an index built under a different one.",
+      "minProperties": 1,
+      "propertyNames": {"enum": ["dense", "sparse", "multi_vector"]},
+      "additionalProperties": {"$ref": "#/$defs/space"}
+    },
+    "data": {
+      "type": "array",
+      "minItems": 1,
+      "items": {"$ref": "#/$defs/item"}
+    },
+    "usage": {"$ref": "#/$defs/usage"}
+  },
+  "$defs": {
+    "space": {
+      "type": "object",
+      "required": ["id", "provider", "model", "kind", "dimensions", "metric"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Stable opaque identifier. For an opaque endpoint it is immutable deployment configuration, not something the handler derives at runtime."
+        },
+        "provider": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "revision": {
+          "type": "string",
+          "description": "Immutable model weights revision. Empty means the deployment could not prove one, which is itself information: a silent model swap cannot then be detected."
+        },
+        "tokenizer": {
+          "type": "string",
+          "description": "Immutable tokenizer and vocabulary revision. It matters most for sparse output, where the indices are vocabulary positions."
+        },
+        "kind": {"enum": ["dense", "sparse", "multi_vector"]},
+        "dimensions": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Vector width for dense, vocabulary size for sparse, per-token width for multi_vector."
+        },
+        "metric": {"enum": ["cosine", "dot_product"]}
+      }
+    },
+    "item": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "dense": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"type": "number"}
+        },
+        "sparse": {"$ref": "#/$defs/sparse"},
+        "multi_vector": {
+          "type": "array",
+          "minItems": 1,
+          "description": "One vector per token, for late-interaction scoring. Not a dense vector waiting to be pooled.",
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "number"}
+          }
+        }
+      }
+    },
+    "sparse": {
+      "type": "object",
+      "required": ["indices", "values"],
+      "additionalProperties": true,
+      "description": "Coordinate form. Indices are strictly increasing and within the space's declared vocabulary; values are finite and nonzero.",
+      "properties": {
+        "indices": {
+          "type": "array",
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "values": {
+          "type": "array",
+          "items": {"type": "number"}
+        }
+      }
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Measurements, not money. Combine them with a dated external price catalog.",
+      "properties": {
+        "input_tokens": {"type": "integer", "minimum": 0},
+        "request_count": {"type": "integer", "minimum": 0},
+        "input_bytes": {"type": "integer", "minimum": 0},
+        "output_bytes": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

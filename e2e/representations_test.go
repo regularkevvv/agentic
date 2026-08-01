@@ -10,7 +10,17 @@
 // Asserting HTTP 200 would prove none of that.
 //
 // Each provider skips cleanly when its gate is absent:
-//   - DEEPINFRA_TOKEN                      DeepInfra native BGE-M3
+//
+//   - DeepInfra native BGE-M3: DEEPINFRA_TOKEN
+//   - Hugging Face shared router (dense only): HF_TOKEN, HF_SHARED_MODEL
+//   - Hugging Face dedicated endpoint: HF_TOKEN, HF_ENDPOINT_URL, HF_DENSE_SPACE_ID
+//   - SageMaker endpoint: AWS credentials, AWS_REGION, SAGEMAKER_ENDPOINT,
+//     SAGEMAKER_DENSE_SPACE_ID
+//
+// The dedicated and SageMaker gates include the expected space ID on purpose.
+// A live test that accepted whatever identity the endpoint reported would pass
+// against a redeployment onto different weights, which is the failure the
+// space descriptor exists to catch.
 //
 // The corpus is deliberately tiny. These are metered APIs, and a handful of
 // short documents is enough to separate a working encoder from a broken one.
@@ -18,6 +28,7 @@ package e2e
 
 import (
 	"context"
+	"errors"
 	"math"
 	"os"
 	"testing"
@@ -25,6 +36,8 @@ import (
 
 	agentic "github.com/regularkevvv/agentic"
 	"github.com/regularkevvv/agentic/provider/deepinfra"
+	"github.com/regularkevvv/agentic/provider/huggingface"
+	"github.com/regularkevvv/agentic/provider/sagemaker"
 )
 
 // representationDocs has one document per retrieval mode being tested.
@@ -264,4 +277,201 @@ func TestE2E_Representations_DeepInfraDenseEmbedderCompatibility(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	checkEmbedder(t, ctx, encoder)
+}
+
+// ---------------------------------------------------------------------------
+// Hugging Face
+// ---------------------------------------------------------------------------
+
+func skipIfNoHFToken(t *testing.T) {
+	t.Helper()
+	if os.Getenv("HF_TOKEN") == "" && os.Getenv("HUGGING_FACE_HUB_TOKEN") == "" {
+		t.Skip("HF_TOKEN not set, skipping Hugging Face e2e test")
+	}
+}
+
+// The shared router returns dense vectors and nothing else, so this proves
+// dense retrieval and that the encoder refuses to claim more.
+func TestE2E_Representations_HuggingFaceShared(t *testing.T) {
+	skipIfNoHFToken(t)
+	model := os.Getenv("HF_SHARED_MODEL")
+	if model == "" {
+		t.Skip("HF_SHARED_MODEL not set, skipping Hugging Face shared e2e test")
+	}
+	ctx := representationCtx(t)
+
+	var opts []huggingface.SharedOption
+	if query, document := os.Getenv("HF_QUERY_PROMPT"), os.Getenv("HF_DOCUMENT_PROMPT"); query != "" || document != "" {
+		opts = append(opts, huggingface.WithPromptNames(query, document))
+	}
+	encoder, err := huggingface.NewShared(model, opts...)
+	if err != nil {
+		t.Fatalf("NewShared: %v", err)
+	}
+
+	if caps := encoder.Capabilities(); len(caps.Outputs) != 1 ||
+		caps.Outputs[0] != agentic.RepresentationDense {
+		t.Fatalf("shared router advertises %v, want dense only", caps.Outputs)
+	}
+	if _, err := agentic.EncodeDocuments(ctx, encoder, representationDocs,
+		agentic.RepresentationSparse); !errors.Is(err, agentic.ErrUnsupportedRepresentation) {
+		t.Fatalf("got %v, want the sparse request refused", err)
+	}
+
+	docs, err := encodeWithSupportedRole(ctx, encoder, representationDocs)
+	if err != nil {
+		t.Fatalf("encode documents: %v", err)
+	}
+	queries, err := encodeWithSupportedRole(ctx, encoder, []string{paraphraseQuery})
+	if err != nil {
+		t.Fatalf("encode query: %v", err)
+	}
+
+	space, _ := docs.Space(agentic.RepresentationDense)
+	t.Logf("dense space %s", space)
+
+	best := bestBy(t, len(docs.Data), func(i int) float64 {
+		return cosine(queries.Data[0].Dense, docs.Data[i].Dense)
+	})
+	if best != budgetDoc {
+		t.Errorf("nearest document = %d, want %d (the paraphrase)", best, budgetDoc)
+	}
+}
+
+// encodeWithSupportedRole uses the document and query roles when the model has
+// prompts configured for them, and the untyped form otherwise.
+func encodeWithSupportedRole(
+	ctx context.Context,
+	encoder agentic.RepresentationEncoder,
+	texts []string,
+) (*agentic.RepresentationResponse, error) {
+	inputType := agentic.EmbeddingInputNone
+	if encoder.Capabilities().SupportsInputType(agentic.EmbeddingInputDocument) {
+		inputType = agentic.EmbeddingInputDocument
+	}
+	return encoder.Encode(ctx, &agentic.RepresentationRequest{
+		Input:     texts,
+		InputType: inputType,
+		Outputs:   []agentic.RepresentationKind{agentic.RepresentationDense},
+	})
+}
+
+// A dedicated endpoint running the canonical handler is the path that carries
+// sparse output, so this is where the same logical request is proven against a
+// deployment you operate.
+func TestE2E_Representations_HuggingFaceDedicated(t *testing.T) {
+	skipIfNoHFToken(t)
+	endpoint := os.Getenv("HF_ENDPOINT_URL")
+	expectedSpace := os.Getenv("HF_DENSE_SPACE_ID")
+	if endpoint == "" || expectedSpace == "" {
+		t.Skip("HF_ENDPOINT_URL / HF_DENSE_SPACE_ID not set, skipping Hugging Face dedicated e2e test")
+	}
+	ctx := representationCtx(t)
+
+	encoder, err := huggingface.NewDedicated(endpoint, huggingface.WithModel("BAAI/bge-m3"))
+	if err != nil {
+		t.Fatalf("NewDedicated: %v", err)
+	}
+	checkDedicatedEndpoint(t, ctx, encoder, expectedSpace)
+}
+
+// ---------------------------------------------------------------------------
+// SageMaker
+// ---------------------------------------------------------------------------
+
+func TestE2E_Representations_SageMaker(t *testing.T) {
+	endpoint := os.Getenv("SAGEMAKER_ENDPOINT")
+	expectedSpace := os.Getenv("SAGEMAKER_DENSE_SPACE_ID")
+	if endpoint == "" || expectedSpace == "" {
+		t.Skip("SAGEMAKER_ENDPOINT / SAGEMAKER_DENSE_SPACE_ID not set, skipping SageMaker e2e test")
+	}
+	if os.Getenv("AWS_REGION") == "" && os.Getenv("AWS_DEFAULT_REGION") == "" {
+		t.Skip("AWS_REGION not set, skipping SageMaker e2e test")
+	}
+	ctx := representationCtx(t)
+
+	encoder, err := sagemaker.New(ctx, endpoint, sagemaker.WithModel("BAAI/bge-m3"))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	checkDedicatedEndpoint(t, ctx, encoder, expectedSpace)
+}
+
+// checkDedicatedEndpoint runs the same proof against any endpoint speaking
+// agentic.representations.v1, whichever transport carries it. That the two
+// deployments are interchangeable here is the point of publishing a protocol.
+func checkDedicatedEndpoint(
+	t *testing.T,
+	ctx context.Context,
+	encoder agentic.RepresentationEncoder,
+	expectedDenseSpaceID string,
+) {
+	t.Helper()
+
+	docs, err := agentic.EncodeDocuments(ctx, encoder, representationDocs,
+		agentic.RepresentationDense, agentic.RepresentationSparse)
+	if err != nil {
+		t.Fatalf("EncodeDocuments: %v", err)
+	}
+	if len(docs.Data) != len(representationDocs) {
+		t.Fatalf("got %d representations for %d documents", len(docs.Data), len(representationDocs))
+	}
+	if docs.Usage.RequestCount != 1 {
+		t.Errorf("request count = %d, want one call for both kinds", docs.Usage.RequestCount)
+	}
+
+	denseSpace, ok := docs.Space(agentic.RepresentationDense)
+	if !ok {
+		t.Fatal("response describes no dense space")
+	}
+	t.Logf("dense space %s", denseSpace)
+	if denseSpace.ID != expectedDenseSpaceID {
+		t.Fatalf("dense space ID = %q, want the configured %q; the deployment behind "+
+			"this endpoint is not the one this index was built from",
+			denseSpace.ID, expectedDenseSpaceID)
+	}
+
+	sparseSpace, ok := docs.Space(agentic.RepresentationSparse)
+	if !ok {
+		t.Fatal("response describes no sparse space")
+	}
+	if sparseSpace.Metric != agentic.SimilarityDotProduct {
+		t.Errorf("sparse metric = %q, want dot_product", sparseSpace.Metric)
+	}
+	for i, item := range docs.Data {
+		if len(item.Dense) != denseSpace.Dimensions {
+			t.Fatalf("document %d dense width = %d", i, len(item.Dense))
+		}
+		if item.Sparse.Len() == 0 {
+			t.Fatalf("document %d has no sparse coordinates", i)
+		}
+	}
+
+	queries, err := agentic.EncodeQueries(ctx, encoder, []string{paraphraseQuery, rareTermQuery},
+		agentic.RepresentationDense, agentic.RepresentationSparse)
+	if err != nil {
+		t.Fatalf("EncodeQueries: %v", err)
+	}
+	querySpace, _ := queries.Space(agentic.RepresentationDense)
+	if querySpace.ID != denseSpace.ID {
+		t.Fatalf("query space %s differs from document space %s", querySpace.ID, denseSpace.ID)
+	}
+
+	t.Run("dense finds the paraphrase", func(t *testing.T) {
+		best := bestBy(t, len(docs.Data), func(i int) float64 {
+			return cosine(queries.Data[0].Dense, docs.Data[i].Dense)
+		})
+		if best != budgetDoc {
+			t.Errorf("nearest document = %d, want %d (the paraphrase)", best, budgetDoc)
+		}
+	})
+
+	t.Run("sparse finds the rare term", func(t *testing.T) {
+		best := bestBy(t, len(docs.Data), func(i int) float64 {
+			return dotProduct(queries.Data[1].Sparse, docs.Data[i].Sparse)
+		})
+		if best != quenselDoc {
+			t.Errorf("highest sparse score = %d, want %d (the rare term)", best, quenselDoc)
+		}
+	})
 }

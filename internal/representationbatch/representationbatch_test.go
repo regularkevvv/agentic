@@ -401,6 +401,22 @@ func TestChunkedCancellationBeforeFirstChunk(t *testing.T) {
 	}
 }
 
+// The unsplit path must refuse an already-canceled context too, because not
+// every transport observes one: an SDK client or a stub can answer regardless.
+func TestChunkedUnsplitStopsOnCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := representationbatch.Chunked(ctx, request("a", "b"), 0,
+		func(context.Context, *core.RepresentationRequest) (*core.RepresentationResponse, error) {
+			t.Fatal("provider should not be called with an already-canceled context")
+			return nil, nil
+		})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("got %v, want context.Canceled", err)
+	}
+}
+
 func TestChunkedMergesEveryRequestedKind(t *testing.T) {
 	req := &core.RepresentationRequest{
 		Input:   []string{"a", "b", "c"},

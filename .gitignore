@@ -34,3 +34,7 @@ Thumbs.db
 # Environment
 .env
 .env.local
+
+# Python bytecode from the representation handler contract tests
+__pycache__/
+*.pyc

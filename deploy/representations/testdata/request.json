@@ -1,0 +1,7 @@
+{
+  "version": "agentic.representations.v1",
+  "inputs": ["a document", "another document"],
+  "input_type": "document",
+  "outputs": ["dense", "sparse"],
+  "truncate": true
+}

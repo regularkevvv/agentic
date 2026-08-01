@@ -114,3 +114,25 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
+
+  # The reference representation handler is deployed to endpoints we do not
+  # control, so its protocol half is tested here on every push. Only pytest and
+  # jsonschema are installed: the model is faked, so no GPU and no
+  # multi-gigabyte download are involved, and the runtime pins in
+  # requirements.txt stay out of CI's dependency surface.
+  handler:
+    name: Representation handler contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: deploy/representations
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install contract-test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Run contract tests
+        run: pytest -q
