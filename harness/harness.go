@@ -8,6 +8,7 @@ import (
 	"time"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/artifact"
 	"github.com/regularkevvv/agentic/harness/capability"
 	"github.com/regularkevvv/agentic/harness/codec"
@@ -53,6 +54,7 @@ type Harness[O any] struct {
 	context      contextpolicy.Projector
 	eventPolicy  []event.Middleware
 	lifecycle    []harnessruntime.LifecycleHook
+	resume       harnessruntime.ResumePlanner
 	scope        harnessruntime.Scope
 	delegation   []string
 
@@ -168,6 +170,10 @@ func newHarness[O any](runner agentic.Runner[O], config RuntimeConfig, plan capa
 	if contextProjector == nil {
 		contextProjector = contextpolicy.Passthrough()
 	}
+	resumePlanner := plan.ResumePlanner()
+	if resumePlanner == nil {
+		resumePlanner = harnessruntime.DefaultResumePlanner()
+	}
 	return &Harness[O]{
 		driver:       driver,
 		sessions:     config.Sessions,
@@ -184,6 +190,7 @@ func newHarness[O any](runner agentic.Runner[O], config RuntimeConfig, plan capa
 		context:      contextProjector,
 		eventPolicy:  plan.EventMiddleware(),
 		lifecycle:    plan.LifecycleHooks(),
+		resume:       resumePlanner,
 		scope:        config.Scope,
 		delegation:   plan.DelegationTools(),
 		live:         make(map[string]*Session[O]),
@@ -269,6 +276,7 @@ func (h *Harness[O]) sessionConfig(id string) session.Config[O] {
 		Context:               h.context,
 		EventMiddleware:       append([]event.Middleware(nil), h.eventPolicy...),
 		LifecycleHooks:        append([]harnessruntime.LifecycleHook(nil), h.lifecycle...),
+		ResumePlanner:         h.resume,
 		Scope:                 scope,
 		DelegationTools:       append([]string(nil), h.delegation...),
 	}

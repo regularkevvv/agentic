@@ -7,8 +7,8 @@ import (
 	"fmt"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/repair"
-	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 )
 
 // Resume resolves one durable suspension. The complete request is validated
@@ -28,7 +28,7 @@ func (s *Session[O]) Resume(ctx context.Context, request ResumeRequest) (*agenti
 	limits := cloneLimitsPointer(s.run.limits)
 	s.mu.Unlock()
 
-	decisions, err := harnessruntime.PlanResume(*suspension, request)
+	decisions, err := s.resume.PlanResume(*suspension, request)
 	if err != nil {
 		return nil, err
 	}

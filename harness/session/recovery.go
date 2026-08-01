@@ -10,6 +10,7 @@ import (
 	"time"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/codec"
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/event"
@@ -73,6 +74,10 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 	if contextProjector == nil {
 		contextProjector = contextpolicy.Passthrough()
 	}
+	resumePlanner := config.ResumePlanner
+	if resumePlanner == nil {
+		resumePlanner = harnessruntime.DefaultResumePlanner()
+	}
 	scope := config.Scope
 	scope.SessionID = config.ID
 	if folded.scope != nil {
@@ -116,6 +121,7 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 		toolGate:       config.ToolGate,
 		context:        contextProjector,
 		lifecycle:      append([]harnessruntime.LifecycleHook(nil), config.LifecycleHooks...),
+		resume:         resumePlanner,
 		scope:          scope,
 		delegation:     append([]string(nil), config.DelegationTools...),
 		childBudget:    make(chan struct{}, 1),

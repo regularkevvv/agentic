@@ -17,7 +17,72 @@ const (
 var (
 	ErrInvalidResumeRequest = errors.New("invalid harness resume request")
 	ErrUnsupportedDeferral  = errors.New("unsupported harness deferral")
+	ErrDuplicatePlanner     = errors.New("duplicate harness resume planner")
 )
+
+// ResumePlanner converts one capability-owned durable suspension into the
+// root driver's ordinary resume decisions. Implementations must be stateless:
+// every fact required to validate a request belongs in the suspension.
+type ResumePlanner interface {
+	PlanResume(agentic.Suspension, ResumeRequest) ([]agentic.ToolResumeDecision, error)
+}
+
+// ResumePlannerFunc adapts a function to ResumePlanner.
+type ResumePlannerFunc func(agentic.Suspension, ResumeRequest) ([]agentic.ToolResumeDecision, error)
+
+func (f ResumePlannerFunc) PlanResume(
+	suspension agentic.Suspension,
+	request ResumeRequest,
+) ([]agentic.ToolResumeDecision, error) {
+	return f(suspension, request)
+}
+
+type permissionResumePlanner struct{}
+
+func (permissionResumePlanner) PlanResume(
+	suspension agentic.Suspension,
+	request ResumeRequest,
+) ([]agentic.ToolResumeDecision, error) {
+	return PlanResume(suspension, request)
+}
+
+// DefaultResumePlanner preserves the policy-neutral runtime's permission
+// suspension behavior when no capability graph is present.
+func DefaultResumePlanner() ResumePlanner { return permissionResumePlanner{} }
+
+// ResumeRouter dispatches by the public suspension kind. The permission
+// planner is always installed; capabilities may add disjoint kinds.
+type ResumeRouter struct {
+	planners map[string]ResumePlanner
+}
+
+func NewResumeRouter(additional map[string]ResumePlanner) (*ResumeRouter, error) {
+	planners := map[string]ResumePlanner{PermissionDeferralKind: DefaultResumePlanner()}
+	for kind, planner := range additional {
+		if kind == "" || planner == nil {
+			return nil, errors.New("resume planner kind and implementation are required")
+		}
+		if _, exists := planners[kind]; exists {
+			return nil, fmt.Errorf("%w: %s", ErrDuplicatePlanner, kind)
+		}
+		planners[kind] = planner
+	}
+	return &ResumeRouter{planners: planners}, nil
+}
+
+func (r *ResumeRouter) PlanResume(
+	suspension agentic.Suspension,
+	request ResumeRequest,
+) ([]agentic.ToolResumeDecision, error) {
+	if r == nil {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedDeferral, suspension.Kind)
+	}
+	planner, ok := r.planners[suspension.Kind]
+	if !ok {
+		return nil, fmt.Errorf("%w: %s", ErrUnsupportedDeferral, suspension.Kind)
+	}
+	return planner.PlanResume(cloneRuntimeSuspension(suspension), cloneResumeRequest(request))
+}
 
 // ResolutionAction selects how one required deferred call is completed.
 type ResolutionAction uint8
@@ -56,9 +121,60 @@ type DeferredBatch struct {
 type rootToolSuspensionPayload struct {
 	Version           int
 	SuspensionID      string
+	HandlerSuspension bool
 	Calls             []agentic.ToolUse
 	ExecutableCallIDs []string
 	Deferral          agentic.ToolDeferral
+}
+
+// ToolSuspensionFrontier is the capability-neutral portion of the released
+// root tool-suspension envelope used by resume planners.
+type ToolSuspensionFrontier struct {
+	HandlerSuspension bool
+	Calls             []agentic.ToolUse
+	ExecutableCallIDs []string
+	Deferral          agentic.ToolDeferral
+}
+
+// InspectToolSuspension validates the root envelope without interpreting the
+// capability-owned deferral payload.
+func InspectToolSuspension(
+	suspension agentic.Suspension,
+	expectedKind string,
+) (ToolSuspensionFrontier, error) {
+	if suspension.ID == "" || expectedKind == "" || suspension.Kind != expectedKind {
+		return ToolSuspensionFrontier{}, fmt.Errorf("%w: %s", ErrUnsupportedDeferral, suspension.Kind)
+	}
+	var root rootToolSuspensionPayload
+	if err := json.Unmarshal(suspension.Payload, &root); err != nil {
+		return ToolSuspensionFrontier{}, fmt.Errorf("%w: decode root suspension: %v", ErrInvalidResumeRequest, err)
+	}
+	if root.Version != 1 || root.SuspensionID != suspension.ID ||
+		root.Deferral.Kind != expectedKind || len(root.Calls) == 0 || len(root.ExecutableCallIDs) == 0 {
+		return ToolSuspensionFrontier{}, fmt.Errorf("%w: malformed root suspension", ErrInvalidResumeRequest)
+	}
+	known := make(map[string]bool, len(root.Calls))
+	for _, call := range root.Calls {
+		if call.ID == "" || call.Name == "" || known[call.ID] {
+			return ToolSuspensionFrontier{}, fmt.Errorf("%w: duplicate root call %q", ErrInvalidResumeRequest, call.ID)
+		}
+		known[call.ID] = true
+	}
+	executable := make(map[string]bool, len(root.ExecutableCallIDs))
+	for _, id := range root.ExecutableCallIDs {
+		if !known[id] || executable[id] {
+			return ToolSuspensionFrontier{}, fmt.Errorf("%w: invalid executable call %q", ErrInvalidResumeRequest, id)
+		}
+		executable[id] = true
+	}
+	deferral := root.Deferral
+	deferral.Payload = append([]byte(nil), root.Deferral.Payload...)
+	return ToolSuspensionFrontier{
+		HandlerSuspension: root.HandlerSuspension,
+		Calls:             cloneRuntimeCalls(root.Calls),
+		ExecutableCallIDs: append([]string(nil), root.ExecutableCallIDs...),
+		Deferral:          deferral,
+	}, nil
 }
 
 // DeferredFrontier is the validated, public harness view of a root suspension.
@@ -72,17 +188,9 @@ type DeferredFrontier struct {
 // InspectDeferred validates the root envelope and harness deferral before
 // returning any operator-visible IDs.
 func InspectDeferred(suspension agentic.Suspension) (DeferredFrontier, error) {
-	if suspension.ID == "" || suspension.Kind != PermissionDeferralKind {
-		return DeferredFrontier{}, fmt.Errorf("%w: %s", ErrUnsupportedDeferral, suspension.Kind)
-	}
-	var root rootToolSuspensionPayload
-	if err := json.Unmarshal(suspension.Payload, &root); err != nil {
-		return DeferredFrontier{}, fmt.Errorf("%w: decode root suspension: %v", ErrInvalidResumeRequest, err)
-	}
-	if root.Version != 1 || root.SuspensionID != suspension.ID ||
-		root.Deferral.Kind != PermissionDeferralKind ||
-		len(root.Calls) == 0 || len(root.ExecutableCallIDs) == 0 {
-		return DeferredFrontier{}, fmt.Errorf("%w: malformed root suspension", ErrInvalidResumeRequest)
+	root, err := InspectToolSuspension(suspension, PermissionDeferralKind)
+	if err != nil {
+		return DeferredFrontier{}, err
 	}
 	var batch DeferredBatch
 	if err := json.Unmarshal(root.Deferral.Payload, &batch); err != nil {
@@ -254,6 +362,21 @@ func Resume[O any](
 func cloneRuntimeSuspension(value agentic.Suspension) agentic.Suspension {
 	value.Payload = append([]byte(nil), value.Payload...)
 	return value
+}
+
+func cloneResumeRequest(request ResumeRequest) ResumeRequest {
+	result := request
+	if request.Prompt != nil {
+		message := cloneRuntimeMessages([]agentic.Message{*request.Prompt})[0]
+		result.Prompt = &message
+	}
+	result.Resolutions = make([]ToolResolution, len(request.Resolutions))
+	for index, resolution := range request.Resolutions {
+		result.Resolutions[index] = resolution
+		result.Resolutions[index].OverrideArgs = cloneRuntimeMap(resolution.OverrideArgs)
+		result.Resolutions[index].Result = cloneRuntimeValue(resolution.Result)
+	}
+	return result
 }
 
 func cloneRuntimeMessages(messages []agentic.Message) []agentic.Message {

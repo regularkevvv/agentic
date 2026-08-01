@@ -6,6 +6,7 @@ import (
 	"context"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
 )
@@ -58,6 +59,7 @@ type ToolRuntime struct {
 	SessionID   string
 	Scope       Scope
 	Capture     CaptureRuntime
+	Operations  OperationRuntime
 	Emit        func(ToolUpdate)
 }
 
