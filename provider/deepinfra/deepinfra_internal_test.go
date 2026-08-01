@@ -423,7 +423,8 @@ func TestWidthHelpersHandleEmptyBatches(t *testing.T) {
 }
 
 func TestDecodeSparseRejectsEmptyRow(t *testing.T) {
-	if _, _, err := decodeSparse([]byte("  "), 0); err == nil {
+	var scratch []float32
+	if _, _, err := decodeSparse([]byte("  "), 0, &scratch); err == nil {
 		t.Fatal("an empty sparse row should be rejected")
 	}
 	if _, err := decodeSparseMap(nil, 0); err == nil {

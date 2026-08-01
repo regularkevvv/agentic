@@ -190,24 +190,39 @@ observed and `WithSparseVocabulary` is unnecessary against that model.
 This API's responses are far larger than its requests. Measured against
 `BAAI/bge-m3-multi` on 2026-08-01:
 
-| Requested outputs | Response per input |
-| --- | --- |
-| dense | 39 KB |
-| sparse | 977 KB |
-| multi-vector | ~34 KB per token |
-| all three | 1185 KB |
+| Requested outputs | Decompressed per input | On the wire |
+| --- | --- | --- |
+| dense | 39 KB | — |
+| sparse | 977 KB | **1.3 KB** |
+| multi-vector | ~34 KB per token | — |
+| all three | 1185 KB | — |
 
-Sparse is expensive on the wire because the row is the entire 250002-entry
-vocabulary, almost all of it zeros. Dense is roughly twice the size the numbers
-need, because the response also carries `embedding_jsons` — the same vectors
-again as JSON strings — which this package ignores.
+Sparse decompresses to a megabyte because the row is the entire 250002-entry
+vocabulary, almost all of it zeros — a short input leaves about **seven**
+coordinates nonzero, 0.003% of the payload. Dense is roughly twice the size the
+numbers need, because the response also carries `embedding_jsons`, the same
+vectors again as JSON strings, which this package ignores.
 
-So `provider/deepinfra` splits at 32 inputs per request by default. Without
-that, encoding a few hundred documents with sparse output would build a
-response of hundreds of megabytes, exceed the response ceiling, and fail
-*after* the inference had been done and billed. Multi-vector scales with
-document length rather than count, so lower `WithBatchSize` for long documents;
+Bandwidth is not the problem: Go's transport requests gzip automatically, and a
+megabyte of repeated zeros compresses about 760:1, so 1.3 KB actually crosses
+the network. The cost is decode-side — parsing a megabyte of JSON and holding a
+250002-entry `float32` row to extract seven numbers.
+
+Two things follow.
+
+`provider/deepinfra` splits at **32 inputs per request** by default. Without it,
+encoding a few hundred documents with sparse output would decompress to
+hundreds of megabytes, exceed the response ceiling, and fail *after* the
+inference had been done and billed. Multi-vector scales with document length
+rather than count, so lower `WithBatchSize` for long documents;
 `WithBatchSize(0)` disables splitting when you know the response will fit.
+
+The sparse row is decoded into a **scratch buffer reused across the batch**,
+which costs 464 B/op instead of 5.2 MB/op at the same speed. The tempting
+alternative — streaming the row token by token so the full width is never held
+— measures three times slower and allocates 1.5 million times per row, because
+`encoding/json` boxes every number into an interface. `BenchmarkDecodeSparseRow`
+keeps that measurement so the decision is not re-litigated from intuition.
 
 ### Hugging Face
 

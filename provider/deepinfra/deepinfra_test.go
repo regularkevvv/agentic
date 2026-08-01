@@ -299,6 +299,18 @@ func TestEncodeDecodesEveryRepresentation(t *testing.T) {
 	if sparse.Values[0] != 0.91 {
 		t.Errorf("sparse values = %v", sparse.Values)
 	}
+	// The second item must decode independently of the first. The rows share
+	// one scratch buffer across the batch, so a stale value bleeding between
+	// them is the failure this pins.
+	second := resp.Data[1].Sparse
+	if len(second.Indices) != 3 ||
+		second.Indices[0] != 0 || second.Indices[1] != 3 || second.Indices[2] != 6 {
+		t.Errorf("second item indices = %v, want [0 3 6]", second.Indices)
+	}
+	if second.Values[0] != 0.63 || second.Values[2] != 0.24 {
+		t.Errorf("second item values = %v", second.Values)
+	}
+
 	sparseSpace := resp.Spaces[core.RepresentationSparse]
 	if sparseSpace.Dimensions != 8 {
 		t.Errorf("sparse vocabulary = %d, want the observed row width", sparseSpace.Dimensions)

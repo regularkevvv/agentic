@@ -130,8 +130,12 @@ func (e *Encoder) buildResponse(req *core.RepresentationRequest, wire *inference
 			return nil, cardinalityError(core.RepresentationSparse, len(wire.Sparse), count)
 		}
 		vocabulary := e.sparseVocabulary
+		// One buffer for the batch: the vocabulary-width row is decoded into
+		// it once per input and reused, instead of allocating a megabyte per
+		// input to extract a handful of nonzeros.
+		var scratch []float32
 		for i, raw := range wire.Sparse {
-			vec, observed, err := decodeSparse(raw, i)
+			vec, observed, err := decodeSparse(raw, i, &scratch)
 			if err != nil {
 				return nil, err
 			}
@@ -231,7 +235,7 @@ func tokenWidth(vectors [][][]float32) int {
 //
 // The second return value is the observed vocabulary size, or zero when the
 // shape does not carry one.
-func decodeSparse(raw json.RawMessage, item int) (*core.SparseVector, int, error) {
+func decodeSparse(raw json.RawMessage, item int, scratch *[]float32) (*core.SparseVector, int, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return nil, 0, sparseError(item, "sparse row is empty")
@@ -239,7 +243,7 @@ func decodeSparse(raw json.RawMessage, item int) (*core.SparseVector, int, error
 
 	switch trimmed[0] {
 	case '[':
-		return decodeSparseRow(trimmed, item)
+		return decodeSparseRow(trimmed, item, scratch)
 	case '{':
 		vec, err := decodeSparseMap(trimmed, item)
 		return vec, 0, err
@@ -253,11 +257,25 @@ func decodeSparse(raw json.RawMessage, item int) (*core.SparseVector, int, error
 // decodeSparseRow converts a dense vocabulary-width row into coordinates,
 // dropping exact zeros. A non-finite weight is kept so that response
 // validation can reject it rather than having it silently disappear.
-func decodeSparseRow(raw json.RawMessage, item int) (*core.SparseVector, int, error) {
-	var row []float32
+//
+// BGE-M3's row is the whole 250002-token vocabulary, and a short input makes
+// fewer than a dozen of them nonzero — the live response carries a megabyte to
+// deliver about seven useful numbers. The obvious fix, streaming the row token
+// by token so the full width is never held, measures three times slower and
+// five times more allocating than this, because encoding/json boxes every
+// number into an interface: 1.5 million allocations against 42. See
+// BenchmarkDecodeSparseRow.
+//
+// So the row is decoded whole, into a scratch buffer the caller reuses across
+// the batch. That keeps the stdlib's fast path and pays the megabyte once per
+// request rather than once per input: 464 B/op reusing the buffer against
+// 5.2 MB/op allocating a fresh one, at the same speed.
+func decodeSparseRow(raw json.RawMessage, item int, scratch *[]float32) (*core.SparseVector, int, error) {
+	row := (*scratch)[:0]
 	if err := json.Unmarshal(raw, &row); err != nil {
 		return nil, 0, sparseError(item, "sparse row is not an array of weights")
 	}
+	*scratch = row
 
 	vec := &core.SparseVector{}
 	for index, value := range row {
