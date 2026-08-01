@@ -5,7 +5,35 @@ All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the major version is 0, breaking changes may appear in minor releases.
 
-## [0.4.0] — Unreleased
+## [0.5.0] — 2026-08-01
+
+This release adds a small, capability-neutral extension to the resumable
+execution driver for tools that discover deferred work only after their handler
+has started. It is the root prerequisite for durable nested execution without
+introducing harness or code-execution concepts into the root module.
+
+### Added
+
+- **Suspendable tool handlers** — handlers may explicitly implement
+  `SuspendableToolHandler` and return `ToolHandlerSuspension` with an ordinary
+  `ToolDeferral`. The driver returns the existing `ExecutionSuspended` state
+  without committing a duplicate or synthetic tool result.
+- **Handler resume context** — `ToolResumeDecision.Payload` carries opaque,
+  caller-validated resume data. The re-entered handler retrieves defensive
+  copies of that payload and its persisted deferral through
+  `CurrentToolResume`.
+
+### Safety
+
+- A suspendable handler must be the only regular tool call in its batch, which
+  is validated before any handler starts.
+- Undeclared, malformed, mismatched, and stale handler suspensions fail closed.
+- Handler-owned resume data is never exposed to ordinary gate-suspended tools.
+- A resumed handler may suspend again through the same durable driver contract.
+- Existing v0.4 gate-suspension payloads remain valid and resume without handler
+  context.
+
+## [0.4.0] — 2026-07-21
 
 This release makes an agent execution an explicit, resumable capability. It is
 an observable transcript change for consumers that relied on unmatched tool

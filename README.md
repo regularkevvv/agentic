@@ -6,7 +6,7 @@
 
 A lightweight, type-safe Go framework for building AI agents with tool use, structured output, and multi-agent orchestration.
 
-Current release: **v0.4.0**.
+Current release: **v0.5.0**.
 
 ## Features
 
@@ -14,7 +14,7 @@ Current release: **v0.4.0**.
 - **Type-safe tools** -- generic tool builders with automatic JSON Schema generation from Go structs
 - **Structured output** -- `TypedAgent[OutputT]` returns validated typed results
 - **Streaming** -- first-class streaming with channel-based event delivery
-- **Resumable execution** -- explicit `Driver` control for start, continue, suspend, and resume
+- **Resumable execution** -- explicit `Driver` control for start, continue, gate or handler suspension, and resume
 - **Execution events** -- canonical lifecycle, transcript, tool, and preview events for one run
 - **Dependency injection** -- opt-in, exact dependency types shared by runs, prompts, tools, validators, and handoffs
 - **Multi-agent** -- delegate tasks between agents with `Handoff`
@@ -269,6 +269,13 @@ handler runs; persist the returned `Execution.Result.Messages` and
 `ToolResumeDecision` for each suspended executable call. `Bind` and
 `BindProvider` still return `Runner`, while their concrete values also implement
 `Driver` and can be checked with `RequireDriver`.
+
+A handler that can discover deferred work only after it starts may opt into
+`SuspendableToolHandler` and return `ToolHandlerSuspension`. The driver isolates
+that handler from other regular calls before execution and leaves its tool
+frontier open. On `Resume`, the same handler reads its persisted deferral and
+the caller-validated decision payload with `CurrentToolResume`. Ordinary
+handlers and gate-originated resumptions never receive that resume context.
 
 ## Experimental Durable Harness
 
