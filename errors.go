@@ -30,6 +30,15 @@ var (
 	ErrExecutionFailed      = errors.New("agent execution failed")
 )
 
+// Representation encoding errors. Each is matched by errors.Is from the typed
+// errors the encoders return, so callers can branch on the class of failure
+// without depending on a concrete error type.
+var (
+	ErrUnsupportedRepresentation     = core.ErrUnsupportedRepresentation
+	ErrInvalidRepresentationRequest  = core.ErrInvalidRepresentationRequest
+	ErrInvalidRepresentationResponse = core.ErrInvalidRepresentationResponse
+)
+
 // ModelRetry is a sentinel error that tools can return to request a retry.
 // When a tool returns this error, the error message is sent back to the LLM
 // as a tool error, and the agent re-enters the loop (up to MaxRetries).

@@ -63,12 +63,32 @@ type RerankRequest = core.RerankRequest
 type RerankResponse = core.RerankResponse
 type RerankResult = core.RerankResult
 type RerankUsage = core.RerankUsage
+type RepresentationEncoder = core.RepresentationEncoder
+type RepresentationKind = core.RepresentationKind
+type RepresentationRequest = core.RepresentationRequest
+type RepresentationResponse = core.RepresentationResponse
+type Representation = core.Representation
+type RepresentationUsage = core.RepresentationUsage
+type RepresentationCapabilities = core.RepresentationCapabilities
+type RepresentationLimits = core.RepresentationLimits
+type RepresentationValidator = core.RepresentationValidator
+type SparseVector = core.SparseVector
+type VectorSpace = core.VectorSpace
+type SimilarityMetric = core.SimilarityMetric
+type UnsupportedRepresentationError = core.UnsupportedRepresentationError
+type InvalidRepresentationRequestError = core.InvalidRepresentationRequestError
+type InvalidRepresentationResponseError = core.InvalidRepresentationResponseError
 
 // Domain constants (from core)
 const (
 	EmbeddingInputNone        = core.EmbeddingInputNone
 	EmbeddingInputQuery       = core.EmbeddingInputQuery
 	EmbeddingInputDocument    = core.EmbeddingInputDocument
+	RepresentationDense       = core.RepresentationDense
+	RepresentationSparse      = core.RepresentationSparse
+	RepresentationMultiVector = core.RepresentationMultiVector
+	SimilarityCosine          = core.SimilarityCosine
+	SimilarityDotProduct      = core.SimilarityDotProduct
 	ToolTypeFunction          = core.ToolTypeFunction
 	ToolChoiceNone            = core.ToolChoiceNone
 	ToolChoiceAuto            = core.ToolChoiceAuto

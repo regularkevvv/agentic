@@ -1,7 +1,7 @@
 .PHONY: test lint vet build fmt check clean test-e2e coverage coverage-check
 
 GOLANGCI_LINT_VERSION := v2.1.6
-COVERAGE_PACKAGES := $(shell go list ./... | grep -vE '/(e2e|examples|internal/testutil)($$|/)')
+COVERAGE_PACKAGES := $(shell go list ./... | grep -vE '/(e2e|examples|internal/testutil|provider/test/conformance)($$|/)')
 COVERAGE_THRESHOLD := 97.0
 
 # Run all tests (excluding e2e)
