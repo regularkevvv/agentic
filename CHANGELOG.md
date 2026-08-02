@@ -95,6 +95,42 @@ This is additive. Existing `Embedder` users compile and behave as before.
 
   `make test-e2e` is unchanged. No import path a consumer uses moved.
 
+- **`ARCHITECTURE.md` is the map of the repository**, and `architecture_test.go`
+  enforces it: the set of modules, which of them `go.work` lists, how each
+  resolves the root module, the contents of `internal/`, the top-level
+  directories, that every provider declares its capabilities in code, that the
+  chat and retrieval halves do not reference each other, that no compiled binary
+  is tracked, and that every relative Markdown link resolves. Each rule was
+  checked by breaking it. A layout that is only written down drifts; this one
+  fails the build instead.
+
+- **`docs/` now separates what exists from why.** Documents describing the
+  current code stay at `docs/`; the plans and spikes that led to it moved to
+  `docs/design/`, which is not maintained. `docs/README.md` is the index.
+
+- **`internal/core` and `internal/retrieval` document themselves**, as do the
+  public `provider/test` and the root package, which previously had no package
+  comment at all and so rendered blank on pkg.go.dev.
+
+### Fixed
+
+- **A 26 MiB compiled binary was removed from the repository.** `go build ./...`
+  in the `e2e/localinference` module writes an executable named after the
+  package into the module root; it has no extension, so the `*.exe` and
+  `*.dylib` rules in `.gitignore` never matched it, and `git add -A` committed
+  it. `.gitignore` now names the binaries the examples produce, and the test
+  above fails on any tracked file whose leading bytes are ELF, Mach-O, PE, or an
+  `ar` archive — which does not go stale when an example is added. The blob
+  remains in history.
+- `staticcheck`'s ST1000 is enabled, and golangci-lint's issue truncation is
+  off. Together they caught two package comments naming packages that no longer
+  existed after the `internal/retrieval` split, and a section header in
+  `aliases.go` that godoc was rendering as the documentation for
+  `ApprovalFunc`. A lint report that silently stops at three issues per kind is
+  not a lint report.
+- Two dead relative links, one left by `provider/local/onnx` moving a directory
+  deeper and one by the `docs/design` split.
+
 ### Safety
 
 - Requests are validated before transport and responses after decoding; a

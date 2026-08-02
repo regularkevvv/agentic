@@ -1,5 +1,12 @@
 go 1.25.4
 
+// Three of the repository's five modules. provider/local/onnx and
+// e2e/localinference are deliberately absent: they need CGO, a native ONNX
+// Runtime, and a statically linked tokenizer, and adding them here would make
+// `go build ./...` at the repository root fail for everyone who has not
+// installed those. They are built and linted by the `onnx` CI job instead, and
+// TestWorkspaceListsEveryNonCGOModule in architecture_test.go fails if this
+// list drifts from that rule in either direction. See ARCHITECTURE.md.
 use (
 	.
 	./harness

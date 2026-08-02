@@ -1,3 +1,8 @@
+// Package memory keeps artifacts in process memory, for tests and for runs
+// that should leave nothing behind.
+//
+// It is an adapter for [artifact.Store]; see the file adapter beside it for
+// what that means for imports.
 package memory
 
 import (

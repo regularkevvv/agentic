@@ -93,7 +93,7 @@ onnxscript` does the same thing unpinned.
 
 The 117 MiB graph cannot live in the repository, which is why the live tests are
 gated on a local path. See
-[docs/multi-representation-inference.md](../../docs/multi-representation-inference.md#in-process-with-no-server)
+[docs/multi-representation-inference.md](../../../docs/multi-representation-inference.md#in-process-with-no-server)
 for the export step and the runtime setup in one place.
 
 ## Using it

@@ -1,3 +1,9 @@
+// Package memory implements an environment backed by an in-process filesystem
+// and a caller-supplied shell function.
+//
+// Tests are the point. A run against this adapter touches no disk and executes
+// no command, so the shell is whatever [ShellFunc] you hand it, and a test can
+// assert on the commands an agent tried to run rather than on their effects.
 package memory
 
 import (

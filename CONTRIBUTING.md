@@ -15,6 +15,13 @@ Thank you for your interest in contributing!
    git checkout -b feature/my-change
    ```
 
+### Where code goes
+
+Read [ARCHITECTURE.md](ARCHITECTURE.md) before adding a file. It has a table of
+where each kind of code lives, and most of what it says is enforced by
+`architecture_test.go` — so if you put something in the wrong place, the build
+tells you rather than a reviewer.
+
 ## Development
 
 ### Prerequisites
