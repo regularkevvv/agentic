@@ -487,12 +487,10 @@ func checkDedicatedEndpoint(
 // Pinecone Inference
 // ---------------------------------------------------------------------------
 
-// pineconeSparseVocabulary is the bound the live test declares for the hosted
-// sparse model. Pinecone does not report a vocabulary size, so this is a
-// measured ceiling rather than a documented constant: if a live response ever
-// carries a coordinate above it, the test fails loudly instead of storing an
-// index that would be out of range.
-const pineconeSparseVocabulary = 1 << 31
+// The bound comes from the provider package, where it is recorded as a
+// measurement rather than a specification. This test is what would catch it
+// drifting: a live coordinate above the bound fails validation loudly instead
+// of being stored out of range.
 
 func TestE2E_Representations_PineconeSparse(t *testing.T) {
 	apiKey := os.Getenv("PINECONE_API_KEY")
@@ -504,7 +502,7 @@ func TestE2E_Representations_PineconeSparse(t *testing.T) {
 
 	encoder, err := pinecone.New(model,
 		pinecone.WithOutputs(agentic.RepresentationSparse),
-		pinecone.WithSparseVocabulary(pineconeSparseVocabulary),
+		pinecone.WithSparseIndexSpace(pinecone.SparseEnglishIndexSpace),
 		pinecone.WithReturnTokens(true),
 	)
 	if err != nil {
@@ -554,28 +552,68 @@ func TestE2E_Representations_PineconeSparse(t *testing.T) {
 		}
 	})
 
-	// The plan's expansion case: a learned sparse model is supposed to weigh
-	// terms the query never contained. This asserts that expansion is
-	// observable and reported, not that a specific synonym appears — the
-	// vocabulary is the model's, and pinning one word would be pinning a model
-	// detail rather than a contract.
-	t.Run("expansion is observable", func(t *testing.T) {
+	// Whether a model weights terms the input never contained is a property to
+	// measure, not to assume. pinecone-sparse-english-v0 does not, so this
+	// records what it actually returned; a model that starts expanding shows
+	// up in the log rather than silently changing what gets retrieved.
+	t.Run("token diagnostics are aligned and reported", func(t *testing.T) {
 		tokens := queryTokens[1]
 		coordinates := queries.Data[1].Sparse.Len()
 		if len(tokens) != coordinates {
 			t.Fatalf("got %d tokens for %d coordinates", len(tokens), coordinates)
 		}
-		t.Logf("query %q expanded to %d coordinates: %v", expansionQuery, coordinates, tokens)
-
-		literal := strings.Fields(strings.ToLower(expansionQuery))
-		if coordinates <= len(literal) {
-			t.Logf("no expansion beyond the %d literal terms; this model may not expand",
-				len(literal))
-		}
 		for i, token := range tokens {
 			if token == "" {
 				t.Errorf("coordinate %d has no token string", i)
 			}
+		}
+
+		typed := map[string]bool{}
+		for _, word := range strings.Fields(strings.ToLower(expansionQuery)) {
+			typed[word] = true
+		}
+		var untyped []string
+		for _, token := range tokens {
+			if !typed[strings.ToLower(token)] {
+				untyped = append(untyped, token)
+			}
+		}
+		t.Logf("query %q -> %d coordinates %v", expansionQuery, coordinates, tokens)
+		t.Logf("terms weighted that were not in the input: %v", untyped)
+	})
+
+	// The roles are not interchangeable: the query side weights every term at
+	// 1.0, the passage side carries the saliency. Encoding documents with the
+	// query role would erase the difference between a rare term and a
+	// stopword, and nothing would report an error.
+	t.Run("query and passage roles differ", func(t *testing.T) {
+		asPassage, passageTokens, err := encoder.EncodeWithTokens(ctx, &agentic.RepresentationRequest{
+			Input:     []string{rareTermQuery},
+			InputType: agentic.EmbeddingInputDocument,
+			Outputs:   []agentic.RepresentationKind{agentic.RepresentationSparse},
+		})
+		if err != nil {
+			t.Fatalf("encode as passage: %v", err)
+		}
+
+		asQuery := queries.Data[0].Sparse
+		passage := asPassage.Data[0].Sparse
+		if asQuery.Len() != passage.Len() {
+			t.Fatalf("roles produced %d and %d coordinates", asQuery.Len(), passage.Len())
+		}
+
+		identical := true
+		for i := range asQuery.Values {
+			if asQuery.Values[i] != passage.Values[i] {
+				identical = false
+			}
+		}
+		if identical {
+			t.Error("query and passage weights are identical; the role is not reaching the API")
+		}
+		for i, token := range passageTokens[0] {
+			t.Logf("  %-16q query %.4f   passage %.4f",
+				token, asQuery.Values[i], passage.Values[i])
 		}
 	})
 }

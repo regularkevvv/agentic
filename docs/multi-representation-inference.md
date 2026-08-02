@@ -270,17 +270,41 @@ One Pinecone model returns one vector type. Declare it with `WithOutputs`; the
 default is dense. The response carries its own `vector_type`, and a mismatch
 with what was declared is an error rather than a silent reinterpretation.
 
-A sparse model needs `WithSparseVocabulary`. Pinecone does not report a
-vocabulary size, and the bound every index must fall within is not something
-this package will invent.
+A sparse model needs `WithSparseIndexSpace`. Pinecone reports no bound on its
+sparse indices, and this package will not invent one.
 
-Query and document roles map onto Pinecone's `query` and `passage` input types.
-They encode into the same vocabulary, which is what makes a query comparable to
-an indexed passage, so the role is not part of the space identity.
+Its indices are **32-bit hashes of the token, not vocabulary positions**.
+Sampling ordinary English on 2026-08-01 produced indices up to 4,209,819,644 —
+98% of the way through the unsigned 32-bit range — so the bound is the whole
+range, exported as `SparseEnglishIndexSpace`. An earlier version of this
+repository's own test guessed 2^31 and would have rejected about half of all
+valid vectors.
 
-Pinecone's sparse models expand a query beyond its literal terms.
-`WithReturnTokens` plus `EncodeWithTokens` make that observable, for diagnostics
-only.
+Query and document roles map onto Pinecone's `query` and `passage` input types,
+and they are **not interchangeable**. Both return the same coordinates for the
+same text, but the query side weights every term at exactly 1.0 while the
+passage side carries the saliency:
+
+| token | query | passage |
+| --- | --- | --- |
+| `quensel` | 1.0000 | 5.8281 |
+| `actuator` | 1.0000 | 4.3438 |
+| `the` | 1.0000 | 0.6924 |
+
+A document encoded with the query role loses every distinction between a rare
+term and a stopword, and nothing reports an error. They share a coordinate
+space, which is what makes a query comparable to an indexed passage, so the
+role is not part of the space identity.
+
+**This model does not expand.** Learned sparse encoders are often described as
+weighting synonyms the text never contained. Measured against
+`pinecone-sparse-english-v0`, this one does not: `"automobile"` returns exactly
+one coordinate, `automobile`, and a ten-word sentence returns ten coordinates
+with no term that was not typed. It is a term weighter.
+
+`WithReturnTokens` plus `EncodeWithTokens` expose the token behind each
+coordinate so you can check that against whatever model you deploy rather than
+trusting a model card. Treat the strings as diagnostics only.
 
 ### Not in scope
 

@@ -68,17 +68,17 @@ func (e *Encoder) Encode(ctx context.Context, req *core.RepresentationRequest) (
 // each sparse coordinate, one slice per input, aligned with that input's
 // SparseVector.Indices.
 //
-// It requires [WithReturnTokens]. Use it to observe what a sparse model
-// expanded a query into — a synonym or a morphological variant that the
-// literal text never contained. Do not store the strings as identity: a
-// tokenizer change can keep a string and move its coordinate, or the reverse.
+// It requires [WithReturnTokens]. Use it to see which terms a model actually
+// weighted, and whether any of them were absent from the input. Do not store
+// the strings as identity: a tokenizer change can keep a string and move its
+// coordinate, or the reverse.
 //
 // Tokens are nil for a dense encoder, which has no coordinates to name.
 func (e *Encoder) EncodeWithTokens(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, [][]string, error) {
 	if !e.returnTokens {
 		return nil, nil, &core.InvalidRepresentationRequestError{
 			Invariant: "return_tokens.disabled",
-			Detail:    "pinecone: build the encoder with WithReturnTokens(true) to observe token expansion",
+			Detail:    "pinecone: build the encoder with WithReturnTokens(true) to observe the tokens behind each coordinate",
 		}
 	}
 	return e.encode(ctx, req)

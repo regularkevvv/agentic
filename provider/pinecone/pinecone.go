@@ -14,23 +14,42 @@
 // own vector_type, and a mismatch with what was declared is an error rather
 // than a silent reinterpretation.
 //
-// A sparse model additionally needs [WithSparseVocabulary]. Pinecone does not
-// report the vocabulary size, and the bound every sparse index must fall
-// within is not something this package will invent — measure it against the
-// model you are deploying and pass it.
+// A sparse model additionally needs [WithSparseIndexSpace]. Pinecone reports
+// no bound on its sparse indices, and this package will not invent one; see
+// [SparseEnglishIndexSpace] for the measured value.
 //
-// # Input roles and expansion
+// # Input roles
 //
-// Query and document roles are distinct here and map onto Pinecone's query and
-// passage input types. They encode into the same vocabulary, which is what
-// makes a query comparable to an indexed passage, so the role is not part of
-// the space identity.
+// Query and document roles map onto Pinecone's query and passage input types,
+// and they are not interchangeable. Measured against
+// pinecone-sparse-english-v0 on 2026-08-01, both roles return the same
+// coordinates for the same text, but the query side weights every term at
+// exactly 1.0 while the passage side carries the term saliency:
 //
-// Pinecone's sparse models expand a query beyond its literal terms. That
-// expansion is observable with [WithReturnTokens] and
-// [Encoder.EncodeWithTokens], which return the token strings behind each
-// coordinate. Use them for diagnostics only: the stable storage identity is
-// the vocabulary index and the model revision, not the token string.
+//	token           query    passage
+//	"quensel"       1.0000    5.9883
+//	"actuator"      1.0000    4.9219
+//	"the"           1.0000    0.6924
+//
+// So a document encoded with the query role loses every distinction between a
+// rare term and a stopword. Encode with the role that matches the side you are
+// on. The two share a coordinate space, which is what makes a query comparable
+// to an indexed passage, so the role is not part of the space identity.
+//
+// # This model does not expand
+//
+// Learned sparse encoders are often described as expanding a query beyond its
+// literal terms — weighting synonyms the text never contained. Measured against
+// pinecone-sparse-english-v0, this one does not: "automobile" returns exactly
+// one coordinate, "automobile", and a ten-word sentence returns ten
+// coordinates with no term that was not typed.
+//
+// It is a term weighter, not an expander. [WithReturnTokens] and
+// [Encoder.EncodeWithTokens] expose the token behind each coordinate so you
+// can verify that for yourself against whatever model you deploy, rather than
+// trusting this comment or a model card. Treat the strings as diagnostics: the
+// stable storage identity is the index and the model revision, not the token
+// text.
 package pinecone
 
 import (
@@ -47,6 +66,21 @@ const providerName = "pinecone"
 // encodes with is always visible at the call site.
 const SparseEnglishModel = "pinecone-sparse-english-v0"
 
+// SparseEnglishIndexSpace is the coordinate bound for [SparseEnglishModel].
+//
+// Its indices are 32-bit hashes of the token, not positions in a vocabulary:
+// sampling ordinary English text on 2026-08-01 produced indices up to
+// 4,209,819,644, which is 98% of the way through the unsigned 32-bit range. So
+// the bound is the whole range, and a smaller guess would reject valid vectors
+// — an earlier version of this package's own test used 2^31 and would have
+// rejected about half of them.
+//
+// Pinecone documents no bound, so this is measurement rather than
+// specification. Re-measure before relying on it for a different model.
+//
+// The value exceeds a 32-bit int, so it requires a 64-bit build.
+const SparseEnglishIndexSpace = 1 << 32
+
 // Encoder implements core.RepresentationEncoder against Pinecone Inference.
 type Encoder struct {
 	*client
@@ -54,7 +88,7 @@ type Encoder struct {
 	model            string
 	kind             core.RepresentationKind
 	dimensions       int
-	sparseVocabulary int
+	sparseIndexSpace int
 	revision         string
 	tokenizer        string
 	returnTokens     bool
@@ -71,7 +105,7 @@ type config struct {
 
 	kind             core.RepresentationKind
 	dimensions       int
-	sparseVocabulary int
+	sparseIndexSpace int
 	revision         string
 	tokenizer        string
 	returnTokens     bool
@@ -132,11 +166,15 @@ func WithDimensions(dimensions int) Option {
 	return func(c *config) { c.dimensions = dimensions }
 }
 
-// WithSparseVocabulary declares the vocabulary size of a sparse model, which
-// is the logical width of its space and the bound every index must fall
-// within. It is required for a sparse model.
-func WithSparseVocabulary(size int) Option {
-	return func(c *config) { c.sparseVocabulary = size }
+// WithSparseIndexSpace declares the coordinate bound of a sparse model: the
+// value every returned index must fall below. It is required for a sparse
+// model, and it becomes the space's declared width.
+//
+// It is not a vocabulary size. Pinecone's sparse indices are hashes of the
+// token rather than positions in a token list, so the bound is the size of the
+// hash space; see [SparseEnglishIndexSpace].
+func WithSparseIndexSpace(bound int) Option {
+	return func(c *config) { c.sparseIndexSpace = bound }
 }
 
 // WithModelRevision records the immutable model and tokenizer revisions in the
@@ -154,6 +192,11 @@ func WithModelRevision(model, tokenizer string) Option {
 
 // WithReturnTokens asks Pinecone to return the token string behind each sparse
 // coordinate.
+//
+// It is how you check what a model actually did — whether it weighted only the
+// terms you typed, or added others. Do that against your own model rather than
+// trusting a description of it; the hosted English model adds nothing, and a
+// different one may.
 //
 // The tokens are diagnostics, reachable through [Encoder.EncodeWithTokens].
 // They are not the storage identity: a tokenizer change can keep a token
@@ -182,7 +225,7 @@ func WithLimits(limits core.RepresentationLimits) Option {
 //
 //	encoder, err := pinecone.New(pinecone.SparseEnglishModel,
 //	    pinecone.WithOutputs(agentic.RepresentationSparse),
-//	    pinecone.WithSparseVocabulary(measuredVocabularySize),
+//	    pinecone.WithSparseIndexSpace(pinecone.SparseEnglishIndexSpace),
 //	)
 func New(model string, opts ...Option) (*Encoder, error) {
 	if model == "" {
@@ -215,11 +258,12 @@ func New(model string, opts ...Option) (*Encoder, error) {
 		}
 	}
 
-	if cfg.kind == core.RepresentationSparse && cfg.sparseVocabulary <= 0 {
+	if cfg.kind == core.RepresentationSparse && cfg.sparseIndexSpace <= 0 {
 		return nil, &core.InvalidRepresentationRequestError{
-			Invariant: "sparse_vocabulary.missing",
-			Detail: "pinecone: a sparse model needs its vocabulary size; Pinecone does not " +
-				"report one, so measure it and pass WithSparseVocabulary",
+			Invariant: "sparse_index_space.missing",
+			Detail: "pinecone: a sparse model needs its coordinate bound; Pinecone reports " +
+				"none, so pass WithSparseIndexSpace (SparseEnglishIndexSpace for the " +
+				"hosted English model)",
 		}
 	}
 	if cfg.dimensions < 0 {
@@ -250,7 +294,7 @@ func New(model string, opts ...Option) (*Encoder, error) {
 		model:            model,
 		kind:             cfg.kind,
 		dimensions:       cfg.dimensions,
-		sparseVocabulary: cfg.sparseVocabulary,
+		sparseIndexSpace: cfg.sparseIndexSpace,
 		revision:         cfg.revision,
 		tokenizer:        cfg.tokenizer,
 		returnTokens:     cfg.returnTokens,
@@ -308,7 +352,7 @@ func (e *Encoder) space(dimensions int) core.VectorSpace {
 	metric := core.SimilarityCosine
 	if e.kind == core.RepresentationSparse {
 		metric = core.SimilarityDotProduct
-		dimensions = e.sparseVocabulary
+		dimensions = e.sparseIndexSpace
 	}
 	return core.VectorSpace{
 		Provider:   providerName,

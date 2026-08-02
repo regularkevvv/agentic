@@ -16,10 +16,9 @@ import (
 	"github.com/regularkevvv/agentic/provider/test/conformance"
 )
 
-// The sparse vocabulary a deployment measures for the hosted English model.
-// It is a test constant, not a package default: this package will not invent a
-// bound it cannot observe in a response.
-const testVocabulary = 100000
+// A small coordinate bound, so the hermetic tests can exercise the
+// out-of-range rejection without building indices near 2^32.
+const testIndexSpace = 100000
 
 const denseResponse = `{
 	"model": "llama-text-embed-v2",
@@ -57,7 +56,7 @@ func newSparseEncoder(t *testing.T, handler http.HandlerFunc, opts ...pinecone.O
 		pinecone.WithAPIKey("pc-test"),
 		pinecone.WithBaseURL(server.URL),
 		pinecone.WithOutputs(core.RepresentationSparse),
-		pinecone.WithSparseVocabulary(testVocabulary),
+		pinecone.WithSparseIndexSpace(testIndexSpace),
 	}, opts...)
 
 	encoder, err := pinecone.New(pinecone.SparseEnglishModel, opts...)
@@ -122,15 +121,15 @@ func TestNewReadsKeyFromEnvironment(t *testing.T) {
 	}
 }
 
-// A sparse model has no usable space without a declared vocabulary, and this
-// package will not guess one.
-func TestNewRequiresSparseVocabulary(t *testing.T) {
+// A sparse model has no usable space without a declared coordinate bound, and
+// this package will not guess one.
+func TestNewRequiresSparseIndexSpace(t *testing.T) {
 	_, err := pinecone.New(pinecone.SparseEnglishModel,
 		pinecone.WithAPIKey("k"),
 		pinecone.WithOutputs(core.RepresentationSparse),
 	)
-	if err == nil || !strings.Contains(err.Error(), "WithSparseVocabulary") {
-		t.Fatalf("got %v, want an error naming the missing vocabulary", err)
+	if err == nil || !strings.Contains(err.Error(), "WithSparseIndexSpace") {
+		t.Fatalf("got %v, want an error naming the missing bound", err)
 	}
 }
 
@@ -373,7 +372,7 @@ func TestEncodeSparseCanonicalizesCoordinates(t *testing.T) {
 	}
 
 	space := resp.Spaces[core.RepresentationSparse]
-	if space.Dimensions != testVocabulary || space.Metric != core.SimilarityDotProduct {
+	if space.Dimensions != testIndexSpace || space.Metric != core.SimilarityDotProduct {
 		t.Errorf("space = %+v", space)
 	}
 }
@@ -444,7 +443,7 @@ func TestEncodeSparseRejectsMalformedVectors(t *testing.T) {
 		},
 		{
 			name: "out of vocabulary",
-			body: fmt.Sprintf(`{"vector_type":"sparse","data":[{"vector_type":"sparse","sparse_indices":[%d],"sparse_values":[0.5]}]}`, testVocabulary),
+			body: fmt.Sprintf(`{"vector_type":"sparse","data":[{"vector_type":"sparse","sparse_indices":[%d],"sparse_values":[0.5]}]}`, testIndexSpace),
 			want: "outside the declared vocabulary",
 		},
 		{
@@ -705,7 +704,7 @@ func writeSynthetic(w http.ResponseWriter, r *http.Request, sparse bool) {
 	for i, in := range body.Inputs {
 		if sparse {
 			rows[i] = fmt.Sprintf(`{"vector_type":"sparse","sparse_indices":[%d],"sparse_values":[0.75]}`,
-				len(in.Text)%testVocabulary)
+				len(in.Text)%testIndexSpace)
 			continue
 		}
 		rows[i] = fmt.Sprintf(`{"vector_type":"dense","values":[%d,0.5]}`, len(in.Text))
