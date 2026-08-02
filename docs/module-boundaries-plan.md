@@ -481,6 +481,18 @@ Where the implementation departed from the text above, and why.
    two READMEs state both units, since the ~6% gap is otherwise read as two
    different artifacts.
 
+11. **`e2e/localinference` exists so `e2e` can stay CGO-free.** The plan gave
+    the ONNX encoder its own tests and stopped there, which left it with no
+    consumer: nothing imported it, and no example showed it working. Importing
+    it from `e2e` directly would have been simpler, and Go compiles only what an
+    entry point reaches, so a single example would still run — but
+    `go build ./...`, `go vet ./...`, and `golangci-lint run ./...` compile every
+    package in their module, so both e2e CI jobs and any contributor running
+    those commands would have needed a native ONNX Runtime and
+    `libtokenizers.a`. A fourth module costs one `go.mod` and keeps every other
+    example buildable with nothing but a Go toolchain. It holds the only example
+    in the repository that needs no credentials.
+
 ## Definition of done
 
 - The root `go.mod` requires nothing added by tests, examples, or ONNX.

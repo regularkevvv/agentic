@@ -1,4 +1,4 @@
-.PHONY: test lint lint-all lint-onnx vet build fmt check clean test-e2e coverage coverage-check
+.PHONY: test lint lint-all lint-cgo vet build fmt check clean test-e2e coverage coverage-check
 
 GOLANGCI_LINT_VERSION := v2.1.6
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
@@ -40,16 +40,18 @@ lint:
 	cd harness && GOWORK=off $(GOLANGCI_LINT) run ./...
 	cd e2e && GOWORK=off $(GOLANGCI_LINT) run --build-tags=e2e ./...
 
-# provider/local/onnx is linted apart from the others, not forgotten by them: linting
+# The two CGO modules are linted apart from the others, not forgotten by them:
+# linting
 # it compiles cgo against ONNX Runtime and libtokenizers.a, and requiring those
 # for `make lint` would make the ordinary contributor loop depend on the one
 # thing this repository deliberately keeps optional. CI runs it as its own job.
 # See provider/local/onnx/README.md for the two downloads.
-lint-onnx:
+lint-cgo:
 	cd provider/local/onnx && GOWORK=off $(GOLANGCI_LINT) run ./...
+	cd e2e/localinference && GOWORK=off $(GOLANGCI_LINT) run ./...
 
 # Every module, for when the native libraries are installed.
-lint-all: lint lint-onnx
+lint-all: lint lint-cgo
 
 # Run go vet
 vet:

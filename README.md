@@ -471,7 +471,8 @@ agentic/
   mcp/                # Model Context Protocol integration
   harness/            # Nested module: experimental durable sessions
   e2e/                # Nested module: live provider tests and examples
-  provider/local/onnx/ # Nested module: in-process sparse encoding (CGO)
+  provider/local/onnx/  # Nested module: in-process sparse encoding (CGO)
+  e2e/localinference/   # Nested module: the example that uses it
 ```
 
 ## Examples

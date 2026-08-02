@@ -184,6 +184,17 @@ jobs:
       # this job has already paid for the two downloads that makes possible.
       - name: Lint
         run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6 run ./...
+      # e2e/localinference holds the one example that imports this package, and
+      # is the only consumer proving the module is usable from outside itself.
+      # It shares this job because it needs the same two artifacts.
+      - name: Build and lint the example that uses it
+        working-directory: e2e/localinference
+        env:
+          CGO_LDFLAGS: -L${{ github.workspace }}/provider/local/onnx/lib
+        run: |
+          go build ./...
+          go vet ./...
+          go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6 run ./...
 
   workspace:
     name: Workspace integration
