@@ -1,3 +1,9 @@
+// Package testutil holds the test doubles the root package's own tests share.
+//
+// It is internal and test-only: provider/test is the equivalent for callers
+// writing tests against Agentic, and is public for that reason. Nothing here is
+// excluded from the coverage threshold by accident — see COVERAGE_PACKAGES in
+// the Makefile.
 package testutil
 
 import (

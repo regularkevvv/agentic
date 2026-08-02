@@ -1,3 +1,11 @@
+// Package local runs an environment against the real machine: files under a
+// root directory, shell commands as the current OS user.
+//
+// It is not a sandbox and must not be described as one. Filesystem access is
+// traversal-resistant because it goes through [os.Root], but a shell command
+// reaches everything the process can reach, which is the whole machine. The
+// isolation you want from untrusted code has to come from a container or a VM
+// underneath this, not from here.
 package local
 
 import (

@@ -1,3 +1,9 @@
+// Package file stores artifacts as content-addressed files under a directory.
+//
+// It is an adapter for [artifact.Store], not part of the harness core: the
+// architecture test in the harness root fails if a core package imports it, so
+// choosing a store stays the caller's decision at construction rather than the
+// harness's at compile time.
 package file
 
 import (

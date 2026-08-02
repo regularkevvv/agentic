@@ -1,3 +1,10 @@
+// Package spill bounds oversized tool results by writing the whole value to an
+// artifact store and leaving the model a head, a tail, and a handle.
+//
+// A tool that returns a large file otherwise spends the context window on
+// bytes no one reads, and the failure is silent: the run simply gets worse.
+// The default threshold is 64 KiB, and [Config.Disabled] is the explicit
+// opt-out, so the zero value is the safe setting rather than no setting.
 package spill
 
 import (

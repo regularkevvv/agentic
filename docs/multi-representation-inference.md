@@ -5,7 +5,7 @@ Status: implemented
 Date: 2026-08-01
 
 This documents what shipped. The design rationale and the alternatives
-considered are in [multi-representation-inference-plan.md](multi-representation-inference-plan.md).
+considered are in [design/multi-representation-inference-plan.md](design/multi-representation-inference-plan.md).
 
 ## What this is
 
@@ -369,9 +369,9 @@ defer encoder.Close()
 
 Sparse only. Dense and multi-vector requests return
 `ErrUnsupportedRepresentation` rather than an answer from the wrong reduction.
-The pooling is the same `log1p(relu(logits))`, masked, max over positions that
-`handler_splade.py` performs — restated in Go rather than baked into the graph,
-so a disagreement with PyTorch says which half moved.
+The pooling is `log1p(relu(logits))`, masked, max over positions — written in
+Go rather than baked into the exported graph, so a disagreement with the
+PyTorch reference says which half moved.
 
 #### The one-time export
 

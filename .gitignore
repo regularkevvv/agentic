@@ -8,6 +8,17 @@
 # Test binary, built with `go test -c`
 *.test
 
+# `go build ./...` writes one executable per main package into the directory it
+# is run from, named after the package. Those names have no extension, so none
+# of the rules above match them, and a 26 MiB Mach-O binary was committed that
+# way once. These are every main package in the two example modules.
+/e2e/basic
+/e2e/retrieval
+/e2e/sparse
+/e2e/structured
+/e2e/tools
+/e2e/localinference/sparse
+
 # Output of the go coverage tool
 *.out
 *.coverprofile

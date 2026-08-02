@@ -40,11 +40,11 @@ lint:
 	cd harness && GOWORK=off $(GOLANGCI_LINT) run ./...
 	cd e2e && GOWORK=off $(GOLANGCI_LINT) run --build-tags=e2e ./...
 
-# The two CGO modules are linted apart from the others, not forgotten by them:
-# linting
-# it compiles cgo against ONNX Runtime and libtokenizers.a, and requiring those
-# for `make lint` would make the ordinary contributor loop depend on the one
-# thing this repository deliberately keeps optional. CI runs it as its own job.
+# The two CGO modules are linted apart from the others, not forgotten by them.
+# Linting compiles, and compiling these means linking cgo against ONNX Runtime
+# and libtokenizers.a; requiring those for `make lint` would make the ordinary
+# contributor loop depend on the one thing this repository deliberately keeps
+# optional. CI runs them as its own job, so they are gated, just not here.
 # See provider/local/onnx/README.md for the two downloads.
 lint-cgo:
 	cd provider/local/onnx && GOWORK=off $(GOLANGCI_LINT) run ./...

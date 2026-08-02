@@ -150,7 +150,10 @@ type DepsToolHandler[TInput any, TOutput any, DepsT any] = agentictool.DepsToolH
 type ToolOption = agentictool.ToolOption
 type AutoToolOption = agentictool.AutoToolOption
 
-// Channel-backed and approval tool types (from tool/).
+// ---------------------------------------------------------------------------
+// Channel-backed and approval tool types (from tool/)
+// ---------------------------------------------------------------------------
+
 type ApprovalFunc = agentictool.ApprovalFunc
 type ChannelToolOption = agentictool.ChannelToolOption
 

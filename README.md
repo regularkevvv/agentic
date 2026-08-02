@@ -453,30 +453,37 @@ perRun := agent.BindProvider(func(ctx context.Context) (*MyDeps, error) {
 
 ## Project Layout
 
+Agentic solves two problems that share providers and nothing else. **Chat** is
+the agent loop — model, tools, streaming, handoffs. **Retrieval** is turning text
+into vectors and ordering results — `Embedder`, `RepresentationEncoder`,
+`Reranker`. Neither half references the other, and a test enforces it.
+
 ```
-agentic/
-  go.work             # Local workspace: root + nested harness and e2e
-  agent.go            # Core agent orchestration
-  agent_options.go    # Configuration options
-  driver.go           # Start/continue/resume execution capability
-  execution_loop.go   # Shared blocking and streaming execution fold
-  events.go           # Canonical execution events
-  stream.go           # Streaming support
-  typed_agent.go      # TypedAgent for structured output
-  handoff.go          # Agent-to-agent delegation
-  tool/channel.go     # Channel-backed and approval-gated tools
-  history_processor.go # Message history transforms
-  tool/               # Tool builders, registry, toolsets
-  representation.go   # Multi-representation encoding helpers and adapters
-  provider/           # LLM, embedding, reranking, and encoding providers
-  internal/core/      # Chat primitives (Message, Tool, Model, Stream)
-  internal/retrieval/ # Vector primitives (Embedder, Encoder, Reranker, spaces)
-  mcp/                # Model Context Protocol integration
-  harness/            # Nested module: experimental durable sessions
-  e2e/                # Nested module: live provider tests and examples
-  provider/local/onnx/  # Nested module: in-process sparse encoding (CGO)
-  e2e/localinference/   # Nested module: the example that uses it
+agentic/            the library: one import path, both halves
+  tool/             tool builders, registry, toolsets
+  mcp/              Model Context Protocol client and toolset
+  provider/         every provider, flat — see the table above
+    test/           the one exception: doubles and the contract suite
+  internal/
+    core/           chat primitives
+    retrieval/      vector primitives
+    providerhttp/   HTTP retry and bounded reads, shared by providers
+    testutil/       doubles for this repository's own tests
+  harness/          nested module: durable sessions (experimental)
+  e2e/              nested module: live tests and runnable examples
+    localinference/ nested module: the example that runs a model in-process
+  provider/local/onnx/  nested module: that model's encoder (CGO)
+  docs/             what exists; docs/design/ records why
 ```
+
+A nested module exists to keep something out of the dependency graph of `go get
+agentic`, and for no other reason. The two CGO modules are also absent from
+`go.work`, so `go build ./...` works without a native ONNX Runtime installed;
+CI gates them in a separate job.
+
+**[ARCHITECTURE.md](ARCHITECTURE.md)** is the full map, including a table of
+where each kind of new code goes and which rules are enforced by tests rather
+than by convention.
 
 ## Examples
 

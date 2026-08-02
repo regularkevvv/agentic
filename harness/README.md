@@ -176,7 +176,7 @@ cross-session memory, skills, and evals without changing `harness.Default`.
 Out-of-process workers, topology presets, automatic suspended-child
 orchestration, a bundled interpreter, vector database, provider-specific
 evaluator, CLI, TUI, and hosted service remain deferred to later work described in
-[`../docs/spike-harness-framework.md`](../docs/spike-harness-framework.md).
+[`../docs/design/spike-harness-framework.md`](../docs/design/spike-harness-framework.md).
 
 The module requires the released root module:
 
