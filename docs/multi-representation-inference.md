@@ -296,11 +296,34 @@ term and a stopword, and nothing reports an error. They share a coordinate
 space, which is what makes a query comparable to an indexed passage, so the
 role is not part of the space identity.
 
-**This model does not expand.** Learned sparse encoders are often described as
-weighting synonyms the text never contained. Measured against
-`pinecone-sparse-english-v0`, this one does not: `"automobile"` returns exactly
-one coordinate, `automobile`, and a ten-word sentence returns ten coordinates
-with no term that was not typed. It is a term weighter.
+**This model does not expand, and it matches exactly.** Learned sparse
+encoders are often described as weighting synonyms the text never contained.
+Measured against `pinecone-sparse-english-v0`, this one does not:
+`"automobile"` returns exactly one coordinate, `automobile`, and a ten-word
+sentence returns ten coordinates with no term that was not typed.
+
+Nor does it normalize beyond case. Two words share a coordinate only when they
+are the same word:
+
+| pair | same coordinate |
+| --- | --- |
+| `Automobile` / `automobile` | yes |
+| `car` / `cars` | no |
+| `run` / `running` | no |
+| `recalibrated` / `recalibration` | no |
+| `organize` / `organise` | no |
+| `car` / `automobile` | no |
+
+This is worth internalizing before choosing the model. In this repository's own
+e2e test the query `"quensel actuator recalibration"` scores 10.9102 against a
+document reading `"The quensel actuator must be recalibrated..."` — and that
+score is exactly `quensel` (5.9883) plus `actuator` (4.9219). The term
+`recalibration` contributed nothing, because the document says `recalibrated`.
+
+What the model adds over plain keyword search is learned per-term weights, not
+generalization: closer to BM25 with better weights than to a semantic matcher.
+Generalization is the dense encoder's job, which is the whole argument for
+running both.
 
 `WithReturnTokens` plus `EncodeWithTokens` expose the token behind each
 coordinate so you can check that against whatever model you deploy rather than

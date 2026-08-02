@@ -44,12 +44,27 @@
 // one coordinate, "automobile", and a ten-word sentence returns ten
 // coordinates with no term that was not typed.
 //
-// It is a term weighter, not an expander. [WithReturnTokens] and
-// [Encoder.EncodeWithTokens] expose the token behind each coordinate so you
-// can verify that for yourself against whatever model you deploy, rather than
-// trusting this comment or a model card. Treat the strings as diagnostics: the
-// stable storage identity is the index and the model revision, not the token
-// text.
+// It matches exactly, and the only normalization is case. Measured the same
+// day, two words share a coordinate only when they are the same word:
+//
+//	Automobile / automobile    same coordinate
+//	car        / cars          different
+//	run        / running       different
+//	recalibrated / recalibration   different
+//	organize   / organise      different
+//	car        / automobile    different
+//
+// So a query for "cars" earns nothing from a document that says "car". What
+// this model brings over plain keyword matching is learned per-term weights,
+// not generalization: it is closer to BM25 with better weights than to a
+// semantic matcher. Pair it with a dense encoder, which is what covers the
+// paraphrases and inflections it cannot.
+//
+// [WithReturnTokens] and [Encoder.EncodeWithTokens] expose the token behind
+// each coordinate so you can verify all of this against whatever model you
+// deploy, rather than trusting this comment or a model card. Treat the strings
+// as diagnostics: the stable storage identity is the index and the model
+// revision, not the token text.
 package pinecone
 
 import (
