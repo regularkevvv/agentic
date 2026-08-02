@@ -62,6 +62,10 @@ func (r *Runner[I, O]) Run(
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
+			if cause := ctx.Err(); cause != nil {
+				perTask[task.index] = unavailableResults(task, evaluators, cause)
+				return
+			}
 			select {
 			case semaphore <- struct{}{}:
 				defer func() { <-semaphore }()

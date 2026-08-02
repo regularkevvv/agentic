@@ -90,9 +90,14 @@ func TestRunnerCancellationTimeoutAndEvaluatorErrorsAreHonest(t *testing.T) {
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	report, err = runner.Run(canceled, []Case[string]{{ID: "canceled", Samples: 2}}, []NamedEvaluator[string, string]{{ID: "score", Evaluator: ExpectError[string, string](true)}})
-	if err != nil || len(report.Results) != 2 || report.Results[0].Outcome.ErrorMessage != context.Canceled.Error() {
-		t.Fatalf("canceled report = %#v, %v", report, err)
+	var canceledSubjectCalls atomic.Int32
+	canceledRunner, _ := NewRunner(SubjectFunc[string, string](func(context.Context, Case[string]) Outcome[string] {
+		canceledSubjectCalls.Add(1)
+		return Outcome[string]{Output: "should not run"}
+	}), Config{Concurrency: 1})
+	report, err = canceledRunner.Run(canceled, []Case[string]{{ID: "canceled", Samples: 2}}, []NamedEvaluator[string, string]{{ID: "score", Evaluator: ExpectError[string, string](true)}})
+	if err != nil || len(report.Results) != 2 || report.Results[0].Outcome.ErrorMessage != context.Canceled.Error() || canceledSubjectCalls.Load() != 0 {
+		t.Fatalf("canceled report = %#v, %v; subject calls = %d", report, err, canceledSubjectCalls.Load())
 	}
 }
 
