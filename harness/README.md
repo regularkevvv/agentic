@@ -26,7 +26,7 @@ Agentic `v0.5.1`. It currently provides:
   and bounded UTF-8 child summaries;
 - an opt-in code-execution capability over a generic checkpointed `Executor`,
   with selected-tool hiding, durable nested calls, exact approval resume, and
-  a fixed-binary subprocess protocol adapter;
+  fixed-binary subprocess and GoMonty adapters;
 - bounded, host-scoped cross-session memory ports with in-memory and durable
   JSONL adapters, optimistic concurrency, idempotent mutation, on-demand tools,
   and optional ephemeral prompt injection;
@@ -88,6 +88,42 @@ assembles the same public capabilities over Local, JSONL, file-artifact, and
 in-process adapters. Local permission policy is governance around ordinary host
 execution; it does not create an OS sandbox.
 
+GoMonty is an optional adapter; the codemode core still depends only on its
+generic `Executor` port. The adapter pins the source-only
+`github.com/regularkevvv/gomonty` `v0.0.15` release. Importing it never
+downloads, builds, or loads native code. Applications explicitly prepare the
+runtime once with the matching `gomonty prepare download` command or with
+`monty.Prepare` before constructing work that can execute code:
+
+```go
+import (
+    monty "github.com/regularkevvv/gomonty"
+    "github.com/regularkevvv/agentic/harness/codemode"
+    montyexecutor "github.com/regularkevvv/agentic/harness/codemode/gomonty"
+)
+
+_, err := monty.Prepare(ctx, monty.PrepareOptions{Mode: monty.PrepareDownload})
+executor := montyexecutor.New(montyexecutor.Config{})
+code := codemode.New(codemode.Config{
+    Executor:      executor,
+    SelectedTools: []string{"search"},
+})
+```
+
+`PrepareDownload` installs the matching
+[`runtime-monty-v0.0.19-1`](https://github.com/regularkevvv/gomonty/releases/tag/runtime-monty-v0.0.19-1)
+asset only after verifying the committed archive and inner-file SHA-256 hashes.
+Applications can explicitly select `PrepareBuild` instead; a missing or
+mismatched release asset fails closed.
+
+The prepared shared library is verified before loading, and Monty owns the
+worker subprocess lifecycle. That subprocess is crash isolation, not an OS
+sandbox. Selected host tools are still evaluated by the existing harness gate;
+the adapter does not gain filesystem or network access on their behalf.
+Monty expression results are returned as JSON-shaped values. The current
+low-level snapshot API does not expose captured `print()` chunks across durable
+resume, so this adapter currently leaves `Result.Stdout` empty.
+
 Subagents are ordinary optional capabilities and are not installed by
 `harness.Default`:
 
@@ -146,6 +182,12 @@ The module requires the released root module:
 
 ```text
 github.com/regularkevvv/agentic v0.5.1
+```
+
+Its optional GoMonty adapter pins:
+
+```text
+github.com/regularkevvv/gomonty v0.0.15
 ```
 
 Local development uses the committed repository `go.work`; the module does not
