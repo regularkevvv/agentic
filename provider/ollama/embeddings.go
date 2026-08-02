@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	oaiProvider "github.com/regularkevvv/agentic/provider/openai"
 )
 
@@ -80,5 +80,5 @@ func MustNewEmbedder(model string, opts ...Option) *Embedder {
 	return e
 }
 
-// Compile-time check that Embedder implements core.Embedder.
-var _ core.Embedder = (*Embedder)(nil)
+// Compile-time check that Embedder implements retrieval.Embedder.
+var _ retrieval.Embedder = (*Embedder)(nil)

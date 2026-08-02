@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 const rerankFixture = `{
@@ -65,7 +65,7 @@ func TestRerankRequestAndResponse(t *testing.T) {
 	})
 
 	docs := []string{"alpha", "bravo", "charlie"}
-	resp, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	resp, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "which one",
 		Documents: docs,
 	})
@@ -99,7 +99,7 @@ func TestRerankRequestAndResponse(t *testing.T) {
 	}
 
 	// Fixture is out of score order: results must come back sorted descending.
-	want := []core.RerankResult{
+	want := []retrieval.RerankResult{
 		{Index: 2, Score: 0.9, Document: "charlie"},
 		{Index: 1, Score: 0.5, Document: "bravo"},
 		{Index: 0, Score: 0.1, Document: "alpha"},
@@ -142,7 +142,7 @@ func TestRerankTopNMapsToTopK(t *testing.T) {
 			var gotBody map[string]any
 			reranker := newTestReranker(t, jsonHandler(t, rerankFixture, &gotBody))
 
-			if _, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+			if _, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 				Query:     "q",
 				Documents: []string{"alpha", "bravo", "charlie"},
 				TopN:      tt.topN,
@@ -166,7 +166,7 @@ func TestRerankTopNMapsToTopK(t *testing.T) {
 func TestRerankTrimsToTopN(t *testing.T) {
 	reranker := newTestReranker(t, jsonHandler(t, rerankFixture, nil))
 
-	resp, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	resp, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha", "bravo", "charlie"},
 		TopN:      2,
@@ -186,7 +186,7 @@ func TestRerankSendsTruncation(t *testing.T) {
 	var gotBody map[string]any
 	reranker := newTestReranker(t, jsonHandler(t, rerankFixture, &gotBody), WithRerankerTruncation(false))
 
-	if _, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	if _, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha", "bravo", "charlie"},
 	}); err != nil {
@@ -210,7 +210,7 @@ func TestRerankTieBreaksByIndex(t *testing.T) {
 		"usage":{"total_tokens":3}
 	}`, nil))
 
-	resp, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	resp, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha", "bravo", "charlie"},
 	})
@@ -232,7 +232,7 @@ func TestRerankModelFallback(t *testing.T) {
 		"usage":{"total_tokens":2}
 	}`, nil))
 
-	resp, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	resp, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha"},
 	})
@@ -285,7 +285,7 @@ func TestRerankMalformedResponses(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			reranker := newTestReranker(t, jsonHandler(t, tt.body, nil))
 
-			_, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+			_, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 				Query:     "q",
 				Documents: []string{"alpha", "bravo", "charlie"},
 			})
@@ -304,7 +304,7 @@ func TestRerankRejectsInvalidRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReranker: %v", err)
 	}
-	if _, err := reranker.Rerank(context.Background(), &core.RerankRequest{}); err == nil {
+	if _, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{}); err == nil {
 		t.Fatal("Rerank should reject an empty request")
 	}
 }
@@ -320,7 +320,7 @@ func TestRerankRetriesTransientStatus(t *testing.T) {
 		jsonHandler(t, rerankFixture, nil)(w, r)
 	})
 
-	if _, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	if _, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha", "bravo", "charlie"},
 	}); err != nil {
@@ -338,7 +338,7 @@ func TestRerankDoesNotRetryClientError(t *testing.T) {
 		http.Error(w, `{"detail":"model not found"}`, http.StatusBadRequest)
 	})
 
-	_, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	_, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha"},
 	})
@@ -403,7 +403,7 @@ func TestNewRerankerHonorsMaxRetries(t *testing.T) {
 		http.Error(w, "temporary upstream failure", http.StatusServiceUnavailable)
 	}, WithRerankerMaxRetries(0))
 
-	if _, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	if _, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha"},
 	}); err == nil {

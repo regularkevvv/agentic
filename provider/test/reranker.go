@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // TestReranker is a mock Reranker implementation for testing without API
@@ -15,7 +15,7 @@ import (
 // ordering is meaningful rather than arbitrary. Ties break deterministically.
 type TestReranker struct {
 	name  string
-	calls []core.RerankRequest
+	calls []retrieval.RerankRequest
 }
 
 // NewTestReranker creates a TestReranker.
@@ -23,8 +23,8 @@ func NewTestReranker() *TestReranker {
 	return &TestReranker{name: "test:reranker"}
 }
 
-// Rerank implements core.Reranker.
-func (r *TestReranker) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+// Rerank implements retrieval.Reranker.
+func (r *TestReranker) Rerank(ctx context.Context, req *retrieval.RerankRequest) (*retrieval.RerankResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -32,7 +32,7 @@ func (r *TestReranker) Rerank(ctx context.Context, req *core.RerankRequest) (*co
 
 	queryTerms := strings.Fields(strings.ToLower(req.Query))
 
-	results := make([]core.RerankResult, len(req.Documents))
+	results := make([]retrieval.RerankResult, len(req.Documents))
 	for i, doc := range req.Documents {
 		lower := strings.ToLower(doc)
 		overlap := 0
@@ -41,7 +41,7 @@ func (r *TestReranker) Rerank(ctx context.Context, req *core.RerankRequest) (*co
 				overlap++
 			}
 		}
-		results[i] = core.RerankResult{
+		results[i] = retrieval.RerankResult{
 			Index: i,
 			// Term overlap dominates; the hash only breaks ties, keeping the
 			// order stable without making it look arbitrary.
@@ -63,20 +63,20 @@ func (r *TestReranker) Rerank(ctx context.Context, req *core.RerankRequest) (*co
 		totalTokens += len(strings.Fields(doc))
 	}
 
-	return &core.RerankResponse{
+	return &retrieval.RerankResponse{
 		Results: results,
 		Model:   r.name,
-		Usage:   core.RerankUsage{TotalTokens: totalTokens, SearchUnits: 1},
+		Usage:   retrieval.RerankUsage{TotalTokens: totalTokens, SearchUnits: 1},
 	}, nil
 }
 
-// Name implements core.Reranker.
+// Name implements retrieval.Reranker.
 func (r *TestReranker) Name() string {
 	return r.name
 }
 
 // Calls returns all requests received.
-func (r *TestReranker) Calls() []core.RerankRequest {
+func (r *TestReranker) Calls() []retrieval.RerankRequest {
 	return r.calls
 }
 

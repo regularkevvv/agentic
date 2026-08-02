@@ -4,17 +4,17 @@ import (
 	"context"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 func TestTestEmbedderDeterministic(t *testing.T) {
 	embedder := NewTestEmbedder(4)
 
-	first, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello", "world"}})
+	first, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello", "world"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
-	second, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+	second, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -35,14 +35,14 @@ func TestTestEmbedderDeterministic(t *testing.T) {
 func TestTestEmbedderInputTypeChangesVector(t *testing.T) {
 	embedder := NewTestEmbedder(4)
 
-	query, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
-		Input: []string{"hello"}, InputType: core.EmbeddingInputQuery,
+	query, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
+		Input: []string{"hello"}, InputType: retrieval.EmbeddingInputQuery,
 	})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
-	document, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
-		Input: []string{"hello"}, InputType: core.EmbeddingInputDocument,
+	document, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
+		Input: []string{"hello"}, InputType: retrieval.EmbeddingInputDocument,
 	})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -63,7 +63,7 @@ func TestTestEmbedderInputTypeChangesVector(t *testing.T) {
 func TestTestEmbedderDimensionsOverride(t *testing.T) {
 	embedder := NewTestEmbedder(4)
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input: []string{"hello"}, Dimensions: 16,
 	})
 	if err != nil {
@@ -77,8 +77,8 @@ func TestTestEmbedderDimensionsOverride(t *testing.T) {
 func TestTestEmbedderRecordsCalls(t *testing.T) {
 	embedder := NewTestEmbedder(0)
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
-		Input: []string{"a"}, InputType: core.EmbeddingInputQuery,
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
+		Input: []string{"a"}, InputType: retrieval.EmbeddingInputQuery,
 	}); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestTestEmbedderRecordsCalls(t *testing.T) {
 	if embedder.Name() != "test:embedder" {
 		t.Errorf("Name = %q, want test:embedder", embedder.Name())
 	}
-	if got := embedder.Calls()[0].InputType; got != core.EmbeddingInputQuery {
+	if got := embedder.Calls()[0].InputType; got != retrieval.EmbeddingInputQuery {
 		t.Errorf("recorded input type = %q, want query", got)
 	}
 
@@ -101,7 +101,7 @@ func TestTestEmbedderRecordsCalls(t *testing.T) {
 
 func TestTestEmbedderRejectsInvalidRequest(t *testing.T) {
 	embedder := NewTestEmbedder(4)
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{}); err == nil {
 		t.Fatal("Embed should reject an empty request")
 	}
 	if embedder.CallCount() != 0 {

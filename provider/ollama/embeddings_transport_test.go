@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/ollama"
 )
 
@@ -79,7 +79,7 @@ func TestEmbedderSchemelessHostReachesServer(t *testing.T) {
 				t.Fatalf("NewEmbedder(%q) unexpected error: %v", host, err)
 			}
 
-			resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+			resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 				Input: []string{"hello", "world"},
 			})
 			if err != nil {
@@ -129,7 +129,7 @@ func TestEmbedderSendsModelAndDimensions(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:      []string{"hello", "world"},
 		Dimensions: 256,
 	}); err != nil {
@@ -168,7 +168,7 @@ func TestEmbedderOpenAICompatibleServerOverride(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input: []string{"hello", "world"},
 	}); err != nil {
 		t.Fatalf("Embed unexpected error: %v", err)
@@ -233,7 +233,7 @@ func TestEmbedderSendsAuthorizationHeader(t *testing.T) {
 				t.Fatalf("NewEmbedder unexpected error: %v", err)
 			}
 
-			if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+			if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 				Input: []string{"hello", "world"},
 			}); err != nil {
 				t.Fatalf("Embed unexpected error: %v", err)

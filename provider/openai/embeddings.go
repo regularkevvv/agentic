@@ -5,13 +5,13 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/regularkevvv/agentic/internal/core"
-
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
+
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
-// Embedder implements core.Embedder using the OpenAI Embeddings API. It
+// Embedder implements retrieval.Embedder using the OpenAI Embeddings API. It
 // supports both the official OpenAI API and OpenAI-compatible providers via
 // the WithBaseURL option.
 type Embedder struct {
@@ -67,7 +67,7 @@ func MustNewEmbedder(model string, opts ...Option) *Embedder {
 	return e
 }
 
-// Embed implements core.Embedder. The request's InputType is ignored: the
+// Embed implements retrieval.Embedder. The request's InputType is ignored: the
 // OpenAI embeddings API has no input-type parameter.
 //
 // Truncate: the API has no truncation parameter and never truncates — an input
@@ -75,7 +75,7 @@ func MustNewEmbedder(model string, opts ...Option) *Embedder {
 // and Truncate=nil therefore both match the API's own behavior, while
 // Truncate=true cannot be honored and is refused here rather than silently
 // ignored, which would store a vector covering only part of the input.
-func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+func (e *Embedder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -123,20 +123,20 @@ func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core
 		vectors[item.Index] = vector
 	}
 
-	return &core.EmbeddingResponse{
+	return &retrieval.EmbeddingResponse{
 		Vectors: vectors,
 		Model:   resp.Model,
-		Usage: core.EmbeddingUsage{
+		Usage: retrieval.EmbeddingUsage{
 			PromptTokens: int(resp.Usage.PromptTokens),
 			TotalTokens:  int(resp.Usage.TotalTokens),
 		},
 	}, nil
 }
 
-// Name implements core.Embedder.
+// Name implements retrieval.Embedder.
 func (e *Embedder) Name() string {
 	return e.model
 }
 
-// Compile-time check that Embedder implements core.Embedder.
-var _ core.Embedder = (*Embedder)(nil)
+// Compile-time check that Embedder implements retrieval.Embedder.
+var _ retrieval.Embedder = (*Embedder)(nil)

@@ -10,7 +10,7 @@ import (
 
 	"github.com/openai/openai-go/option"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 func TestEmbedderWithLocalServer(t *testing.T) {
@@ -48,9 +48,9 @@ func TestEmbedderWithLocalServer(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:     []string{"first", "second"},
-		InputType: core.EmbeddingInputQuery,
+		InputType: retrieval.EmbeddingInputQuery,
 	})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -113,7 +113,7 @@ func TestEmbedderSendsDimensions(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:      []string{"text"},
 		Dimensions: 256,
 	}); err != nil {
@@ -147,7 +147,7 @@ func TestEmbedderVectorCountMismatch(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input: []string{"first", "second"},
 	}); err == nil {
 		t.Fatal("Embed should fail when the vector count does not match the input count")
@@ -159,7 +159,7 @@ func TestEmbedderRejectsInvalidRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{}); err == nil {
 		t.Fatal("Embed should reject an empty request")
 	}
 }
@@ -191,7 +191,7 @@ func TestEmbedderSurfacesAPIError(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}}); err == nil {
 		t.Fatal("Embed should surface the API error")
 	}
 }
@@ -218,7 +218,7 @@ func TestEmbedderVectorIndexOutOfRange(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}}); err == nil {
 		t.Fatal("Embed should reject an out-of-range vector index")
 	}
 }
@@ -254,7 +254,7 @@ func TestEmbedderVectorDuplicateIndex(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	_, err = embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a", "b"}})
+	_, err = embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a", "b"}})
 	if err == nil {
 		t.Fatal("Embed should reject a response with a duplicate vector index rather than return a nil slot")
 	}
@@ -285,7 +285,7 @@ func TestEmbedderVectorElementType(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"one"}})
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"one"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestEmbedderTruncate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			before := requests
-			_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+			_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 				Input:    []string{"one"},
 				Truncate: tt.truncate,
 			})

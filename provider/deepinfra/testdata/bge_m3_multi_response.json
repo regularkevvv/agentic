@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Golden response for BAAI/bge-m3-multi. The field names, nesting, and types",
+    "below were verified against a live response on 2026-08-01; the values are",
+    "synthetic, so this file carries no account identifiers and no real",
+    "document text.",
+    "",
+    "Verified live shape, for one input:",
+    "  embeddings  [input][1024] floats",
+    "  sparse      [input][250002] floats — the FULL vocabulary row, mostly",
+    "              zeros, not a coordinate map. Its length is what reveals the",
+    "              vocabulary size, which is why WithSparseVocabulary is not",
+    "              needed against this model.",
+    "  colbert     [input][token][1024] floats",
+    "  input_tokens, request_id, inference_status{status, tokens_input, ...}",
+    "",
+    "The live response also carries embedding_jsons: the dense vectors a second",
+    "time as JSON strings. It is ignored, and it is why a dense response is",
+    "39 KB per input rather than 20 KB.",
+    "",
+    "Sizes measured the same day, per input: dense 39 KB, sparse 977 KB,",
+    "colbert ~34 KB per token, all three 1185 KB. See defaultBatchSize.",
+    "",
+    "Vectors here are truncated to 4 dimensions and the sparse rows to an",
+    "8-token vocabulary so the fixture stays readable.",
+    "Inputs: [\"sparse vectors\", \"dense vectors\"]"
+  ],
+  "embeddings": [
+    [0.12, -0.03, 0.44, 0.9],
+    [0.08, 0.22, -0.51, 0.13]
+  ],
+  "sparse": [
+    [0.0, 0.91, 0.0, 0.0, 0.37, 0.0, 0.0, 0.0],
+    [0.63, 0.0, 0.0, 0.11, 0.0, 0.0, 0.24, 0.0]
+  ],
+  "colbert": [
+    [[0.5, 0.1, 1.0, 0.2], [0.3, 0.6, 0.5, 0.4]],
+    [[0.9, 0.2, 0.1, 0.7]]
+  ],
+  "input_tokens": 6,
+  "request_id": "req_redacted",
+  "inference_status": {
+    "status": "unknown",
+    "runtime_ms": 41,
+    "cost": 0.0,
+    "tokens_input": 6,
+    "tokens_generated": 0
+  }
+}

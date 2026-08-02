@@ -13,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/bedrock"
 )
 
@@ -94,7 +94,7 @@ func TestTransportTitanSumsUsageFromResponseHeader(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input: []string{"first", "second"},
 	})
 	if err != nil {
@@ -133,7 +133,7 @@ func TestTransportTitanFallsBackToBodyTokenCount(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -155,9 +155,9 @@ func TestTransportCohereSendsBatchAndReadsHeaderUsage(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:     []string{"first", "second"},
-		InputType: core.EmbeddingInputQuery,
+		InputType: retrieval.EmbeddingInputQuery,
 	})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -204,7 +204,7 @@ func TestTransportEmbedPropagatesAPIError(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
 		t.Fatal("expected an error status to be reported")
 	}
 }

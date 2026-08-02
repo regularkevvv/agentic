@@ -8,10 +8,10 @@ import (
 	"net/http"
 	"slices"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
-// Reranker implements core.Reranker using the Voyage AI rerank API.
+// Reranker implements retrieval.Reranker using the Voyage AI rerank API.
 //
 // A reranker is a cross-encoder: it reads the query and each document together
 // rather than comparing independently computed vectors, which is far more
@@ -67,7 +67,7 @@ func WithRerankerMaxRetries(retries int) RerankerOption {
 // request with an error.
 //
 // Unlike the Embedder's WithTruncation this has no per-call override, because
-// core.RerankRequest carries no truncation field. If it is not set the Voyage
+// retrieval.RerankRequest carries no truncation field. If it is not set the Voyage
 // API's own default applies, which is to truncate. Scoring a clipped document
 // is less costly than indexing one — the mistake is discarded after the call
 // rather than stored — but it still silently ranks on partial text.
@@ -111,13 +111,13 @@ func MustNewReranker(model string, opts ...RerankerOption) *Reranker {
 // rerankRequest is the Voyage AI rerank wire request.
 //
 // Note the field name: Voyage calls the result cap top_k, not the top_n used
-// by core.RerankRequest and by Cohere. This is verified against the live API —
+// by retrieval.RerankRequest and by Cohere. This is verified against the live API —
 // sending top_n is rejected outright with "Argument 'top_n' is not supported by
 // our API" — so do not "correct" it to match the core field or Cohere.
 //
 // return_documents is deliberately never sent: echoing every document back
 // doubles the response size to restate what the caller already holds, and
-// core.RerankResult.Document is filled from the request slice regardless.
+// retrieval.RerankResult.Document is filled from the request slice regardless.
 type rerankRequest struct {
 	Query      string   `json:"query"`
 	Documents  []string `json:"documents"`
@@ -137,8 +137,8 @@ type rerankResponse struct {
 	} `json:"usage"`
 }
 
-// Rerank implements core.Reranker.
-func (r *Reranker) Rerank(ctx context.Context, req *core.RerankRequest) (*core.RerankResponse, error) {
+// Rerank implements retrieval.Reranker.
+func (r *Reranker) Rerank(ctx context.Context, req *retrieval.RerankRequest) (*retrieval.RerankResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -171,7 +171,7 @@ func (r *Reranker) Rerank(ctx context.Context, req *core.RerankRequest) (*core.R
 	// before it is used to read from that slice: a malformed or proxied
 	// response must surface as an error, never as a panic or as a document
 	// paired with the wrong score.
-	results := make([]core.RerankResult, 0, len(resp.Data))
+	results := make([]retrieval.RerankResult, 0, len(resp.Data))
 	seen := make(map[int]struct{}, len(resp.Data))
 	for _, item := range resp.Data {
 		if item.Index < 0 || item.Index >= len(req.Documents) {
@@ -182,7 +182,7 @@ func (r *Reranker) Rerank(ctx context.Context, req *core.RerankRequest) (*core.R
 		}
 		seen[item.Index] = struct{}{}
 
-		results = append(results, core.RerankResult{
+		results = append(results, retrieval.RerankResult{
 			Index:    item.Index,
 			Score:    item.RelevanceScore,
 			Document: req.Documents[item.Index],
@@ -192,7 +192,7 @@ func (r *Reranker) Rerank(ctx context.Context, req *core.RerankRequest) (*core.R
 	// Voyage returns results already sorted, but the contract is ours to keep,
 	// so sort rather than trust: descending score, ties broken by ascending
 	// request position to make the order total and reproducible.
-	slices.SortStableFunc(results, func(a, b core.RerankResult) int {
+	slices.SortStableFunc(results, func(a, b retrieval.RerankResult) int {
 		if c := cmp.Compare(b.Score, a.Score); c != 0 {
 			return c
 		}
@@ -211,17 +211,17 @@ func (r *Reranker) Rerank(ctx context.Context, req *core.RerankRequest) (*core.R
 		model = r.model
 	}
 
-	return &core.RerankResponse{
+	return &retrieval.RerankResponse{
 		Results: results,
 		Model:   model,
-		Usage:   core.RerankUsage{TotalTokens: resp.Usage.TotalTokens},
+		Usage:   retrieval.RerankUsage{TotalTokens: resp.Usage.TotalTokens},
 	}, nil
 }
 
-// Name implements core.Reranker.
+// Name implements retrieval.Reranker.
 func (r *Reranker) Name() string {
 	return r.model
 }
 
-// Compile-time check that Reranker implements core.Reranker.
-var _ core.Reranker = (*Reranker)(nil)
+// Compile-time check that Reranker implements retrieval.Reranker.
+var _ retrieval.Reranker = (*Reranker)(nil)

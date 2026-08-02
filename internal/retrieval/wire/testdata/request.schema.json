@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/regularkevvv/agentic/deploy/representations/schema/request.schema.json",
+  "title": "agentic.representations.v1 request",
+  "description": "Body sent to a self-operated representation endpoint. Additive fields are permitted and ignored by older clients; a change that is not additive requires a new major version.",
+  "type": "object",
+  "required": ["version", "inputs", "outputs"],
+  "additionalProperties": true,
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Protocol version. The major number is binding; a minor or patch suffix marks additive changes.",
+      "pattern": "^agentic\\.representations\\.v1(\\.[0-9]+)*$"
+    },
+    "inputs": {
+      "type": "array",
+      "description": "Texts to encode. The response carries exactly one item per entry, in this order.",
+      "minItems": 1,
+      "items": {"type": "string"}
+    },
+    "input_type": {
+      "description": "Which side of a retrieval task the inputs sit on. Omitted or empty means neither.",
+      "enum": ["", "query", "document"]
+    },
+    "outputs": {
+      "type": "array",
+      "description": "Representations to compute. Explicit because a multi-vector response is orders of magnitude larger than a dense one, and no caller should pay for one by accident.",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"enum": ["dense", "sparse", "multi_vector"]}
+    },
+    "truncate": {
+      "type": "boolean",
+      "description": "True clips an over-long input to the model's context window; false rejects it."
+    }
+  }
+}

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/voyageai"
 )
 
@@ -42,9 +42,9 @@ func newHandlerReranker(t *testing.T, handler http.HandlerFunc, opts ...voyageai
 	return reranker
 }
 
-func rerank(t *testing.T, r *voyageai.Reranker) (*core.RerankResponse, error) {
+func rerank(t *testing.T, r *voyageai.Reranker) (*retrieval.RerankResponse, error) {
 	t.Helper()
-	return r.Rerank(context.Background(), &core.RerankRequest{
+	return r.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "which one",
 		Documents: rerankDocs,
 	})
@@ -113,7 +113,7 @@ func TestRerankOutOfOrderIndexes(t *testing.T) {
 		t.Fatalf("Rerank: %v", err)
 	}
 
-	want := []core.RerankResult{
+	want := []retrieval.RerankResult{
 		{Index: 2, Score: 0.97, Document: "charlie"},
 		{Index: 0, Score: 0.61, Document: "alpha"},
 		{Index: 1, Score: 0.25, Document: "bravo"},
@@ -208,7 +208,7 @@ func TestEmbedHonorsRetryAfter(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}}); err != nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}}); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
 	if calls != 2 {
@@ -239,7 +239,7 @@ func TestRerankCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := reranker.Rerank(ctx, &core.RerankRequest{
+	if _, err := reranker.Rerank(ctx, &retrieval.RerankRequest{
 		Query:     "which one",
 		Documents: rerankDocs,
 	}); err == nil {

@@ -18,8 +18,13 @@ linters:
       # Correcting the spelling would change a wire-format string constant and
       # silently break finish-reason mapping, so it is exempt here rather than
       # suppressed line by line in provider/grok.
+      #
+      # "organise" appears in provider/pinecone as measured evidence that the
+      # sparse model treats US and UK spellings as different terms. Correcting
+      # it would delete the finding it documents.
       ignore-rules:
         - cancelled
+        - organise
   exclusions:
     rules:
       - path: _test\.go

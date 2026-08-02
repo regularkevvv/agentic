@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/cohere"
 )
 
@@ -93,7 +93,7 @@ const threeVectorResponse = `{
 func TestEmbedPreservesPositionalOrder(t *testing.T) {
 	embedder := newEmbedServer(t, threeVectorResponse, nil)
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input: []string{"first", "second", "third"},
 	})
 	if err != nil {
@@ -137,7 +137,7 @@ func TestEmbedCountMismatch(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			embedder := newEmbedServer(t, tt.body, nil)
 
-			_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+			_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 				Input: []string{"a", "b"},
 			})
 			if err == nil {
@@ -155,34 +155,34 @@ func TestEmbedCountMismatch(t *testing.T) {
 func TestEmbedInputTypeMapping(t *testing.T) {
 	tests := []struct {
 		name      string
-		inputType core.EmbeddingInputType
+		inputType retrieval.EmbeddingInputType
 		opts      []cohere.Option
 		want      string
 	}{
 		{
 			name:      "query",
-			inputType: core.EmbeddingInputQuery,
+			inputType: retrieval.EmbeddingInputQuery,
 			want:      "search_query",
 		},
 		{
 			name:      "document",
-			inputType: core.EmbeddingInputDocument,
+			inputType: retrieval.EmbeddingInputDocument,
 			want:      "search_document",
 		},
 		{
 			name:      "none defaults to search_document",
-			inputType: core.EmbeddingInputNone,
+			inputType: retrieval.EmbeddingInputNone,
 			want:      "search_document",
 		},
 		{
 			name:      "none honors the configured default",
-			inputType: core.EmbeddingInputNone,
+			inputType: retrieval.EmbeddingInputNone,
 			opts:      []cohere.Option{cohere.WithDefaultInputType(cohere.InputTypeClustering)},
 			want:      "clustering",
 		},
 		{
 			name:      "an explicit type ignores the configured default",
-			inputType: core.EmbeddingInputQuery,
+			inputType: retrieval.EmbeddingInputQuery,
 			opts:      []cohere.Option{cohere.WithDefaultInputType(cohere.InputTypeClassification)},
 			want:      "search_query",
 		},
@@ -193,7 +193,7 @@ func TestEmbedInputTypeMapping(t *testing.T) {
 			var gotBody map[string]any
 			embedder := newEmbedServer(t, `{"embeddings":{"float":[[1]]},"meta":{}}`, &gotBody, tt.opts...)
 
-			if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+			if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 				Input:     []string{"text"},
 				InputType: tt.inputType,
 			}); err != nil {
@@ -214,7 +214,7 @@ func TestEmbedAlwaysRequestsFloatEmbeddings(t *testing.T) {
 	var gotBody map[string]any
 	embedder := newEmbedServer(t, `{"embeddings":{"float":[[1]]},"meta":{}}`, &gotBody)
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}}); err != nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}}); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
 
@@ -262,7 +262,7 @@ func TestEmbedSendsDimensionsAndTruncate(t *testing.T) {
 			var gotBody map[string]any
 			embedder := newEmbedServer(t, `{"embeddings":{"float":[[1]]},"meta":{}}`, &gotBody, tt.opts...)
 
-			if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+			if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 				Input:      []string{"text"},
 				Dimensions: tt.dimensions,
 				Truncate:   tt.truncate,
@@ -289,7 +289,7 @@ func TestEmbedSendsDimensionsAndTruncate(t *testing.T) {
 func TestEmbedUsageFallsBackToTokens(t *testing.T) {
 	embedder := newEmbedServer(t, `{"embeddings":{"float":[[1]]},"meta":{"tokens":{"input_tokens":7}}}`, nil)
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}})
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -348,7 +348,7 @@ func TestErrorEnvelopeSurfacesMessage(t *testing.T) {
 				t.Fatalf("New: %v", err)
 			}
 
-			_, err = embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}})
+			_, err = embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}})
 			if err == nil {
 				t.Fatal("Embed should fail on a non-200 response")
 			}
@@ -386,7 +386,7 @@ func TestEmbedRetriesRateLimit(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}})
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -418,7 +418,7 @@ func TestEmbedDoesNotRetryClientError(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}}); err == nil {
 		t.Fatal("Embed should fail on a 400")
 	}
 	if calls != 1 {
@@ -447,7 +447,7 @@ func TestEmbedRetriesExhausted(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	_, err = embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}})
+	_, err = embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}})
 	if err == nil || !strings.Contains(err.Error(), "upstream unavailable") {
 		t.Fatalf("error = %v, want the last attempt's message", err)
 	}
@@ -461,7 +461,7 @@ func TestEmbedRetriesExhausted(t *testing.T) {
 func TestEmbedMalformedJSON(t *testing.T) {
 	embedder := newEmbedServer(t, `{"embeddings":`, nil)
 
-	_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}})
+	_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}})
 	if err == nil || !strings.Contains(err.Error(), "decode response") {
 		t.Fatalf("error = %v, want a decode failure", err)
 	}
@@ -484,7 +484,7 @@ func TestEmbedValidatesRequest(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{}); err == nil {
 		t.Fatal("Embed should reject an empty input list")
 	}
 	if calls != 0 {
@@ -508,7 +508,7 @@ func TestRerankSortsByDescendingScore(t *testing.T) {
 	reranker := newRerankServer(t, body, nil)
 
 	docs := []string{"alpha", "bravo", "charlie"}
-	resp, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	resp, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "which one",
 		Documents: docs,
 	})
@@ -549,7 +549,7 @@ func TestRerankUsageIsSearchUnits(t *testing.T) {
 	}`
 	reranker := newRerankServer(t, body, nil)
 
-	resp, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	resp, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha"},
 	})
@@ -581,7 +581,7 @@ func TestRerankBoundsChecksIndex(t *testing.T) {
 			body := `{"id":"r3","results":[{"index":` + tt.index + `,"relevance_score":0.5}],"meta":{}}`
 			reranker := newRerankServer(t, body, nil)
 
-			_, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+			_, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 				Query:     "q",
 				Documents: []string{"alpha", "bravo"},
 			})
@@ -614,7 +614,7 @@ func TestRerankWireBody(t *testing.T) {
 			var gotBody map[string]any
 			reranker := newRerankServer(t, `{"results":[],"meta":{}}`, &gotBody)
 
-			if _, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+			if _, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 				Query:     "which one",
 				Documents: []string{"alpha", "bravo", "charlie"},
 				TopN:      tt.topN,
@@ -666,7 +666,7 @@ func TestRerankRetriesRateLimit(t *testing.T) {
 		t.Fatalf("NewReranker: %v", err)
 	}
 
-	resp, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	resp, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha"},
 	})
@@ -700,7 +700,7 @@ func TestRerankSurfacesErrorEnvelope(t *testing.T) {
 		t.Fatalf("NewReranker: %v", err)
 	}
 
-	resp, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	resp, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha"},
 	})
@@ -719,7 +719,7 @@ func TestRerankSurfacesErrorEnvelope(t *testing.T) {
 func TestRerankMalformedJSON(t *testing.T) {
 	reranker := newRerankServer(t, `{"results":`, nil)
 
-	_, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	_, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha"},
 	})
@@ -745,7 +745,7 @@ func TestRerankValidatesRequest(t *testing.T) {
 		t.Fatalf("NewReranker: %v", err)
 	}
 
-	if _, err := reranker.Rerank(context.Background(), &core.RerankRequest{Documents: []string{"a"}}); err == nil {
+	if _, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{Documents: []string{"a"}}); err == nil {
 		t.Fatal("Rerank should reject an empty query")
 	}
 	if calls != 0 {
@@ -774,7 +774,7 @@ func TestAuthHeaderIsSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}}); err != nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}}); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
 	if gotAuth != "Bearer embed-key" {
@@ -789,7 +789,7 @@ func TestAuthHeaderIsSent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReranker: %v", err)
 	}
-	if _, err := reranker.Rerank(context.Background(), &core.RerankRequest{
+	if _, err := reranker.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query:     "q",
 		Documents: []string{"alpha"},
 	}); err != nil {
@@ -832,7 +832,7 @@ func TestEmbedInvalidBaseURL(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}}); err == nil {
 		t.Fatal("Embed should fail when the base URL cannot form a request")
 	}
 }
@@ -858,7 +858,7 @@ func TestEmbedRetriesNetworkError(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}})
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -884,7 +884,7 @@ func TestEmbedNetworkErrorExhausted(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	_, err = embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}})
+	_, err = embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}})
 	if err == nil || !strings.Contains(err.Error(), "connection reset") {
 		t.Fatalf("error = %v, want the transport failure", err)
 	}
@@ -914,7 +914,7 @@ func TestEmbedBodyFailures(t *testing.T) {
 				t.Fatalf("New: %v", err)
 			}
 
-			_, err = embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}})
+			_, err = embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}})
 			if err == nil {
 				t.Fatalf("Embed should fail on a %s", tt.name)
 			}
@@ -967,7 +967,7 @@ func TestEmbedDeadlineDuringBackoff(t *testing.T) {
 				t.Fatalf("New: %v", err)
 			}
 
-			_, err = embedder.Embed(ctx, &core.EmbeddingRequest{Input: []string{"text"}})
+			_, err = embedder.Embed(ctx, &retrieval.EmbeddingRequest{Input: []string{"text"}})
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("error = %v, want context.DeadlineExceeded", err)
 			}

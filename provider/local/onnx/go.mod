@@ -1,0 +1,33 @@
+module github.com/regularkevvv/agentic/provider/local/onnx
+
+go 1.25.4
+
+require (
+	github.com/daulet/tokenizers v1.27.0
+	github.com/regularkevvv/agentic v0.5.1
+	github.com/yalue/onnxruntime_go v1.31.0
+)
+
+require (
+	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
+	github.com/go-playground/locales v0.14.1 // indirect
+	github.com/go-playground/universal-translator v0.18.1 // indirect
+	github.com/go-playground/validator/v10 v10.30.1 // indirect
+	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/swaggest/jsonschema-go v0.3.79 // indirect
+	github.com/swaggest/refl v1.4.0 // indirect
+	golang.org/x/crypto v0.46.0 // indirect
+	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/text v0.32.0 // indirect
+)
+
+// The replace is not a stopgap for a stale pin: RepresentationEncoder does not
+// exist in v0.5.1, and no released version carries it, so there is nothing this
+// module could require and still compile. The require line above exists only
+// because a module path needs a version; the replace decides what is built.
+//
+// It goes away when a release carries RepresentationEncoder, at which point
+// this module should pin that version the way harness/ pins its own — a nested
+// module that resolves to the checkout proves the working tree, and one that
+// pins a tag proves the published library. Both claims are worth having.
+replace github.com/regularkevvv/agentic => ../../..

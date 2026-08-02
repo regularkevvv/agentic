@@ -4,14 +4,14 @@ import (
 	"context"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/test"
 )
 
 func TestTestRerankerRanksByTermOverlap(t *testing.T) {
 	r := test.NewTestReranker()
 
-	resp, err := r.Rerank(context.Background(), &core.RerankRequest{
+	resp, err := r.Rerank(context.Background(), &retrieval.RerankRequest{
 		Query: "go concurrency channels",
 		Documents: []string{
 			"a recipe for sourdough bread",
@@ -47,7 +47,7 @@ func TestTestRerankerDocumentMatchesIndex(t *testing.T) {
 	r := test.NewTestReranker()
 	docs := []string{"alpha", "beta gamma", "gamma"}
 
-	resp, err := r.Rerank(context.Background(), &core.RerankRequest{Query: "gamma", Documents: docs})
+	resp, err := r.Rerank(context.Background(), &retrieval.RerankRequest{Query: "gamma", Documents: docs})
 	if err != nil {
 		t.Fatalf("Rerank() = %v, want nil", err)
 	}
@@ -77,7 +77,7 @@ func TestTestRerankerHonorsTopN(t *testing.T) {
 		{topN: 4, want: 4},
 		{topN: 10, want: 4},
 	} {
-		resp, err := r.Rerank(context.Background(), &core.RerankRequest{
+		resp, err := r.Rerank(context.Background(), &retrieval.RerankRequest{
 			Query: "alpha", Documents: docs, TopN: tt.topN,
 		})
 		if err != nil {
@@ -92,10 +92,10 @@ func TestTestRerankerHonorsTopN(t *testing.T) {
 func TestTestRerankerValidatesRequest(t *testing.T) {
 	r := test.NewTestReranker()
 
-	if _, err := r.Rerank(context.Background(), &core.RerankRequest{Documents: []string{"a"}}); err == nil {
+	if _, err := r.Rerank(context.Background(), &retrieval.RerankRequest{Documents: []string{"a"}}); err == nil {
 		t.Error("Rerank() with an empty query = nil error, want a validation error")
 	}
-	if _, err := r.Rerank(context.Background(), &core.RerankRequest{Query: "q"}); err == nil {
+	if _, err := r.Rerank(context.Background(), &retrieval.RerankRequest{Query: "q"}); err == nil {
 		t.Error("Rerank() with no documents = nil error, want a validation error")
 	}
 	if r.CallCount() != 0 {
@@ -111,7 +111,7 @@ func TestTestRerankerRecordsCalls(t *testing.T) {
 	}
 
 	for range 3 {
-		if _, err := r.Rerank(context.Background(), &core.RerankRequest{
+		if _, err := r.Rerank(context.Background(), &retrieval.RerankRequest{
 			Query: "q", Documents: []string{"a", "b"},
 		}); err != nil {
 			t.Fatalf("Rerank() = %v, want nil", err)

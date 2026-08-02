@@ -5,6 +5,109 @@ All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the major version is 0, breaking changes may appear in minor releases.
 
+## [Unreleased]
+
+Adds multi-representation inference: a batch-first `RepresentationEncoder`
+beside the existing dense-only `Embedder`, so a model that produces dense,
+learned sparse, and token-level output from one forward pass can return all
+three without flattening them into `[][]float32` or inventing a vendor
+interface per application.
+
+Agentic normalizes inference and stops there. Indexing, BM25, candidate fusion,
+and final ranking belong to the consuming retrieval system, which is why
+nothing added here returns a score.
+
+This is additive. Existing `Embedder` users compile and behave as before.
+
+### Added
+
+- **`RepresentationEncoder`** — returns one `Representation` per input, in
+  input order, carrying exactly the requested kinds: `RepresentationDense`,
+  `RepresentationSparse`, and `RepresentationMultiVector`. Root helpers
+  `EncodeQueries` and `EncodeDocuments` set the retrieval role and nothing
+  else.
+- **Vector-space identity** — every output carries a `VectorSpace` whose ID is
+  a deterministic, inspectable hash of the fields that make values comparable.
+  A revision, tokenizer, dimension, or metric change lands in a new space
+  instead of silently corrupting an existing index.
+- **Typed errors** — `ErrUnsupportedRepresentation`,
+  `ErrInvalidRepresentationRequest`, and `ErrInvalidRepresentationResponse`,
+  matched by `errors.Is` from the concrete error types. They carry positions,
+  shapes, and provider names, never credentials, raw bodies, or input text.
+- **Compatibility adapters** — `EmbedderAsRepresentationEncoder` and
+  `RepresentationEncoderAsEmbedder`, so adopting the new interface is not a
+  flag day and sparse output can be turned on when an index is ready for it.
+- **`provider/deepinfra`** — native BGE-M3, the reference multi-output
+  provider: dense, learned sparse, and ColBERT token vectors from one call,
+  plus dense `Embedder` compatibility.
+- **`provider/endpoint`** — the versioned protocol against any host running the
+  handler: a Hugging Face Inference Endpoint, a container, or a Python process
+  on a laptop. The token comes from `WithToken` or `AGENTIC_ENDPOINT_TOKEN`,
+  never from a hosting provider's own variable, and `WithoutAuthentication`
+  covers a handler that checks no credential without inventing one.
+- **`provider/huggingface`** — `NewShared` calls the Inference Providers
+  router's feature-extraction task and advertises dense only, because that
+  route returns dense vectors and nothing else.
+- **`provider/sagemaker`** — the same protocol through SageMaker Runtime,
+  behind a one-method interface so transport is testable without an AWS
+  account.
+- **`provider/pinecone`** — the standalone Inference API, dense or learned
+  sparse. `EncodeWithTokens` makes a sparse model's query expansion observable
+  as diagnostics.
+- **`agentic.representations.v1`** — a versioned JSON contract for endpoints
+  you operate, with JSON Schemas and golden fixtures in
+  `internal/retrieval/wire/testdata`.
+- **Test doubles** — `provider/test.NewTestRepresentationEncoder`, a
+  deterministic fake, and `provider/test/conformance.RunRepresentation`, the
+  shared contract suite that providers here and downstream retrieval systems
+  are both checked against.
+- **`provider/local/onnx`** — learned sparse encoding in the calling process, through
+  ONNX Runtime, with no server and no network. It is a **nested module** and the
+  one directory under `provider/` the root module does not contain, because it
+  needs CGO, a native ONNX Runtime, and a statically linked tokenizer; `go get
+  github.com/regularkevvv/agentic` does not pull it and the root build does not
+  reach it. Sparse only — dense and multi-vector requests return
+  `ErrUnsupportedRepresentation` rather than an answer from the wrong reduction.
+  Measured against the PyTorch reference on 2026-08-01, it reproduces every
+  coordinate index and every weight to 4.56e-06.
+- **`DefaultRepresentationLimits`** — the ceilings every encoder here applies,
+  now reachable from the public package. `RepresentationValidator` was already
+  exported; without this an encoder compiled outside the root module had to
+  invent its own numbers or run with every bound disabled, which would make a
+  consumer's error behavior depend on where its provider was built.
+- **`provider/local/onnx/export_onnx.py`** — the one-time export that
+  produces the ONNX graph `provider/local/onnx` runs, and the PyTorch reference its
+  tests assert against. Pooling is deliberately left outside the graph, and the
+  script refuses to write a graph whose batch axis `torch.export` specialized.
+
+### Changed
+
+- **The examples moved to `e2e/examples/`** and the live provider tests to
+  `e2e/providers/`, both inside a new `e2e` module. Nothing they import can
+  reach an application that imports Agentic. Run them from the repository root,
+  where the committed `go.work` resolves the module:
+
+  ```bash
+  go run ./e2e/examples/basic      # was ./examples/basic
+  go run ./e2e/examples/retrieval  # was ./examples/retrieval
+  go run ./e2e/examples/sparse     # was ./examples/sparse
+  ```
+
+  `make test-e2e` is unchanged. No import path a consumer uses moved.
+
+### Safety
+
+- Requests are validated before transport and responses after decoding; a
+  response that fails is discarded whole, because a partially valid batch
+  written into an index is worse than an error.
+- Sparse output is canonicalized to strictly increasing coordinates with
+  duplicates rejected rather than resolved to whichever weight came last.
+- Request items, bytes, response bytes, sparse nonzero counts, and token-vector
+  counts are all bounded, so a large or malformed response cannot exhaust
+  memory before validation runs.
+- Cancellation keeps its own cause through every provider, so a caller's
+  shutdown is not indistinguishable from a transient outage.
+
 ## [0.5.1] — 2026-08-01
 
 ### Fixed

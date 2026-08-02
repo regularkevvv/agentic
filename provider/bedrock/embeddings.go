@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/regularkevvv/agentic/internal/core"
-	"github.com/regularkevvv/agentic/internal/embedbatch"
+	"github.com/regularkevvv/agentic/internal/retrieval"
+	"github.com/regularkevvv/agentic/internal/retrieval/embedbatch"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
@@ -68,7 +68,7 @@ const (
 	familyCohere
 )
 
-// Embedder implements core.Embedder using the Bedrock Runtime InvokeModel API.
+// Embedder implements retrieval.Embedder using the Bedrock Runtime InvokeModel API.
 //
 // Bedrock exposes each embedding vendor's native request and response body
 // rather than a unified schema, so this type dispatches on the model family
@@ -220,19 +220,19 @@ func detectEmbeddingFamily(modelID string) (embeddingFamily, int, error) {
 	}
 }
 
-// Embed implements core.Embedder, dispatching on the model family detected at
+// Embed implements retrieval.Embedder, dispatching on the model family detected at
 // construction.
 //
 // Model is reported as the configured model ID: Bedrock embedding responses do
 // not echo one back.
-func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+func (e *Embedder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
 
 	var (
 		vectors [][]float32
-		usage   core.EmbeddingUsage
+		usage   retrieval.EmbeddingUsage
 		err     error
 	)
 
@@ -252,14 +252,14 @@ func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core
 		return nil, fmt.Errorf("bedrock embeddings: got %d vectors for %d inputs", len(vectors), len(req.Input))
 	}
 
-	return &core.EmbeddingResponse{
+	return &retrieval.EmbeddingResponse{
 		Vectors: vectors,
 		Model:   e.modelID,
 		Usage:   usage,
 	}, nil
 }
 
-// Name implements core.Embedder.
+// Name implements retrieval.Embedder.
 func (e *Embedder) Name() string {
 	return e.modelID
 }
@@ -282,20 +282,20 @@ type titanResponse struct {
 // accepts a single text per request, and reassembles them in input order.
 //
 // InputType is ignored: Titan has no notion of query versus document text.
-func (e *Embedder) embedTitan(ctx context.Context, req *core.EmbeddingRequest) ([][]float32, core.EmbeddingUsage, error) {
+func (e *Embedder) embedTitan(ctx context.Context, req *retrieval.EmbeddingRequest) ([][]float32, retrieval.EmbeddingUsage, error) {
 	// Titan has no truncation parameter and rejects over-length input rather
 	// than clipping it, so Truncate=false and Truncate=nil both already match
 	// the model's behavior. Truncate=true cannot be honored, and silently
 	// ignoring it would store a vector covering only part of the input.
 	if req.Truncate != nil && *req.Truncate {
-		return nil, core.EmbeddingUsage{}, errors.New("bedrock embeddings: Titan does not support truncation; the model rejects over-length input instead of truncating it")
+		return nil, retrieval.EmbeddingUsage{}, errors.New("bedrock embeddings: Titan does not support truncation; the model rejects over-length input instead of truncating it")
 	}
 	if req.Dimensions > 0 && e.version < 2 {
-		return nil, core.EmbeddingUsage{}, fmt.Errorf("bedrock embeddings: %q has a fixed output dimension and does not accept the dimensions parameter", e.modelID)
+		return nil, retrieval.EmbeddingUsage{}, fmt.Errorf("bedrock embeddings: %q has a fixed output dimension and does not accept the dimensions parameter", e.modelID)
 	}
 
 	return embedbatch.FanOut(ctx, req.Input, e.concurrency,
-		func(ctx context.Context, text string) ([]float32, core.EmbeddingUsage, error) {
+		func(ctx context.Context, text string) ([]float32, retrieval.EmbeddingUsage, error) {
 			body := titanRequest{InputText: text}
 			if e.version >= 2 {
 				body.Dimensions = req.Dimensions
@@ -311,15 +311,15 @@ func (e *Embedder) embedTitan(ctx context.Context, req *core.EmbeddingRequest) (
 
 			out, err := e.invoke(ctx, body)
 			if err != nil {
-				return nil, core.EmbeddingUsage{}, err
+				return nil, retrieval.EmbeddingUsage{}, err
 			}
 
 			var resp titanResponse
 			if err := json.Unmarshal(out.Body, &resp); err != nil {
-				return nil, core.EmbeddingUsage{}, fmt.Errorf("bedrock embeddings: decode Titan response: %w", err)
+				return nil, retrieval.EmbeddingUsage{}, fmt.Errorf("bedrock embeddings: decode Titan response: %w", err)
 			}
 			if len(resp.Embedding) == 0 {
-				return nil, core.EmbeddingUsage{}, errors.New("bedrock embeddings: Titan response carried no embedding")
+				return nil, retrieval.EmbeddingUsage{}, errors.New("bedrock embeddings: Titan response carried no embedding")
 			}
 
 			// Titan is the one family that also reports its token count in the
@@ -330,7 +330,7 @@ func (e *Embedder) embedTitan(ctx context.Context, req *core.EmbeddingRequest) (
 				tokens = resp.InputTextTokenCount
 			}
 
-			return resp.Embedding, core.EmbeddingUsage{PromptTokens: tokens, TotalTokens: tokens}, nil
+			return resp.Embedding, retrieval.EmbeddingUsage{PromptTokens: tokens, TotalTokens: tokens}, nil
 		})
 }
 
@@ -377,16 +377,16 @@ func (r *cohereResponse) vectors() ([][]float32, error) {
 
 // embedCohere embeds inputs in batches, splitting anything over the model's
 // per-call limit.
-func (e *Embedder) embedCohere(ctx context.Context, req *core.EmbeddingRequest) ([][]float32, core.EmbeddingUsage, error) {
+func (e *Embedder) embedCohere(ctx context.Context, req *retrieval.EmbeddingRequest) ([][]float32, retrieval.EmbeddingUsage, error) {
 	if req.Dimensions > 0 && e.version < 4 {
-		return nil, core.EmbeddingUsage{}, fmt.Errorf("bedrock embeddings: %q has a fixed output dimension and does not accept the dimensions parameter", e.modelID)
+		return nil, retrieval.EmbeddingUsage{}, fmt.Errorf("bedrock embeddings: %q has a fixed output dimension and does not accept the dimensions parameter", e.modelID)
 	}
 
 	inputType := cohereInputType(req.InputType)
 	truncate := cohereTruncate(req.Truncate)
 
 	return embedbatch.Chunked(ctx, req.Input, cohereBatchLimit,
-		func(ctx context.Context, chunk []string) ([][]float32, core.EmbeddingUsage, error) {
+		func(ctx context.Context, chunk []string) ([][]float32, retrieval.EmbeddingUsage, error) {
 			body := cohereRequest{
 				Texts:     chunk,
 				InputType: inputType,
@@ -398,24 +398,24 @@ func (e *Embedder) embedCohere(ctx context.Context, req *core.EmbeddingRequest) 
 
 			out, err := e.invoke(ctx, body)
 			if err != nil {
-				return nil, core.EmbeddingUsage{}, err
+				return nil, retrieval.EmbeddingUsage{}, err
 			}
 
 			var resp cohereResponse
 			if err := json.Unmarshal(out.Body, &resp); err != nil {
-				return nil, core.EmbeddingUsage{}, fmt.Errorf("bedrock embeddings: decode Cohere response: %w", err)
+				return nil, retrieval.EmbeddingUsage{}, fmt.Errorf("bedrock embeddings: decode Cohere response: %w", err)
 			}
 
 			vectors, err := resp.vectors()
 			if err != nil {
-				return nil, core.EmbeddingUsage{}, err
+				return nil, retrieval.EmbeddingUsage{}, err
 			}
 			if len(vectors) != len(chunk) {
-				return nil, core.EmbeddingUsage{}, fmt.Errorf("bedrock embeddings: got %d vectors for %d inputs", len(vectors), len(chunk))
+				return nil, retrieval.EmbeddingUsage{}, fmt.Errorf("bedrock embeddings: got %d vectors for %d inputs", len(vectors), len(chunk))
 			}
 
 			tokens := inputTokenCount(out)
-			return vectors, core.EmbeddingUsage{PromptTokens: tokens, TotalTokens: tokens}, nil
+			return vectors, retrieval.EmbeddingUsage{PromptTokens: tokens, TotalTokens: tokens}, nil
 		})
 }
 
@@ -423,8 +423,8 @@ func (e *Embedder) embedCohere(ctx context.Context, req *core.EmbeddingRequest) 
 // makes the field mandatory, so the no-preference case has to pick something:
 // it picks search_document, which is the neutral choice for the indexing side
 // of a retrieval task and the more common bulk operation.
-func cohereInputType(t core.EmbeddingInputType) string {
-	if t == core.EmbeddingInputQuery {
+func cohereInputType(t retrieval.EmbeddingInputType) string {
+	if t == retrieval.EmbeddingInputQuery {
 		return "search_query"
 	}
 	return "search_document"
@@ -491,5 +491,5 @@ func inputTokenCountFrom(raw any) int {
 	return count
 }
 
-// Compile-time check that Embedder implements core.Embedder.
-var _ core.Embedder = (*Embedder)(nil)
+// Compile-time check that Embedder implements retrieval.Embedder.
+var _ retrieval.Embedder = (*Embedder)(nil)

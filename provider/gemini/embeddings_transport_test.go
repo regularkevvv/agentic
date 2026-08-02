@@ -10,7 +10,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // embedServer starts an httptest server on the embeddings route and points the
@@ -55,9 +55,9 @@ func TestEmbedSuccess(t *testing.T) {
 		t.Fatalf("NewEmbedder: %v", err)
 	}
 
-	resp, err := e.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:     []string{"first", "second"},
-		InputType: core.EmbeddingInputDocument,
+		InputType: retrieval.EmbeddingInputDocument,
 	})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -92,9 +92,9 @@ func TestEmbedSendsQueryTaskTypeAndDimensions(t *testing.T) {
 	})
 
 	e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
-	if _, err := e.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:      []string{"a query"},
-		InputType:  core.EmbeddingInputQuery,
+		InputType:  retrieval.EmbeddingInputQuery,
 		Dimensions: 768,
 	}); err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -113,7 +113,7 @@ func TestEmbedOmitsTaskTypeForInputTypeNone(t *testing.T) {
 	})
 
 	e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
-	if _, err := e.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"plain"}}); err != nil {
+	if _, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"plain"}}); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
 
@@ -128,7 +128,7 @@ func TestEmbedSendsConfiguredTaskType(t *testing.T) {
 	})
 
 	e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"), WithEmbeddingTaskType(TaskTypeClustering))
-	if _, err := e.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"plain"}}); err != nil {
+	if _, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"plain"}}); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
 
@@ -143,7 +143,7 @@ func TestEmbedRejectsVectorCountMismatch(t *testing.T) {
 	})
 
 	e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
-	_, err := e.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a", "b"}})
+	_, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a", "b"}})
 	if err == nil {
 		t.Fatal("expected an error for a short response")
 	}
@@ -168,7 +168,7 @@ func TestEmbedRejectsMissingVectorValues(t *testing.T) {
 			})
 
 			e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
-			_, err := e.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a", "b"}})
+			_, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a", "b"}})
 			if err == nil {
 				t.Fatal("expected an error for a missing vector")
 			}
@@ -186,7 +186,7 @@ func TestEmbedPropagatesAPIError(t *testing.T) {
 	})
 
 	e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
-	_, err := e.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a"}})
+	_, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a"}})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -205,7 +205,7 @@ func TestEmbedSumsVertexTokenStatistics(t *testing.T) {
 	})
 
 	e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
-	resp, err := e.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a", "b"}})
+	resp, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a", "b"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -237,7 +237,7 @@ func TestEmbedFansOutForSingleInputBackends(t *testing.T) {
 	e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
 	e.singleInput = true
 
-	resp, err := e.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a", "b", "c"}})
+	resp, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a", "b", "c"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -263,7 +263,7 @@ func TestEmbedFanOutPropagatesError(t *testing.T) {
 	e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
 	e.singleInput = true
 
-	if _, err := e.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a", "b"}}); err == nil {
+	if _, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a", "b"}}); err == nil {
 		t.Fatal("expected the fan-out to surface the request error")
 	}
 }
@@ -277,7 +277,7 @@ func TestEmbedSingleInputBackendWithOneInput(t *testing.T) {
 	e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
 	e.singleInput = true
 
-	resp, err := e.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"only"}})
+	resp, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"only"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
