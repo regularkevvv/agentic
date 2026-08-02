@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -406,5 +407,26 @@ func TestCapabilityValidation(t *testing.T) {
 				t.Fatal("invalid codemode config succeeded")
 			}
 		})
+	}
+}
+
+func TestRestoreInlineContentPreservesShapeButNotTransformations(t *testing.T) {
+	t.Parallel()
+	original := agentic.ToolExecutionResult{
+		ToolUseID: "nested",
+		ToolName:  "selected_tool",
+		Content:   map[string]int{"value": 40},
+	}
+	inline := original
+	inline.Content = `{"value":40}`
+	restored := restoreInlineContent(original, inline)
+	if !reflect.DeepEqual(restored.Content, original.Content) {
+		t.Fatalf("restored inline content = %#v", restored.Content)
+	}
+
+	transformed := original
+	transformed.Content = "[harness artifact opaque]"
+	if got := restoreInlineContent(original, transformed).Content; got != transformed.Content {
+		t.Fatalf("transformed content = %#v", got)
 	}
 }

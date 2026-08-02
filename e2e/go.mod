@@ -2,7 +2,11 @@ module github.com/regularkevvv/agentic/e2e
 
 go 1.25.4
 
-require github.com/regularkevvv/agentic v0.5.1
+require (
+	github.com/regularkevvv/agentic v0.5.1
+	github.com/regularkevvv/agentic/harness v0.1.0
+	github.com/regularkevvv/gomonty v0.0.15
+)
 
 require (
 	cloud.google.com/go v0.116.0 // indirect
@@ -26,6 +30,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssooidc v1.35.17 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.41.9 // indirect
 	github.com/aws/smithy-go v1.27.6 // indirect
+	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
 	github.com/go-playground/locales v0.14.1 // indirect
 	github.com/go-playground/universal-translator v0.18.1 // indirect
@@ -43,11 +48,13 @@ require (
 	github.com/tidwall/match v1.1.1 // indirect
 	github.com/tidwall/pretty v1.2.1 // indirect
 	github.com/tidwall/sjson v1.2.5 // indirect
+	github.com/vmihailenco/msgpack/v5 v5.4.1 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.opencensus.io v0.24.0 // indirect
 	golang.org/x/crypto v0.46.0 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.32.0 // indirect
 	google.golang.org/genai v1.51.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20240903143218-8af14fe29dc1 // indirect
@@ -55,11 +62,11 @@ require (
 	google.golang.org/protobuf v1.34.2 // indirect
 )
 
-// The replace is the whole point of this module and must not be removed to
-// match harness/, which deliberately does the opposite. harness/ pins a
-// released version because its job is to prove the published library works.
-// This module's job is to prove the working tree works, so it must resolve to
-// the checkout rather than to whatever was last tagged. The require line above
-// exists only because a module path needs a version; the replace decides what
-// is actually built.
+// These replaces are the point of this module. The e2e programs prove the
+// current checkout across both local modules, while harness/ separately proves
+// its published root dependency with GOWORK=off. GoMonty deliberately has no
+// replace: the codemode e2e must exercise the exact published source module and
+// its release-manifest-backed native runtime.
 replace github.com/regularkevvv/agentic => ..
+
+replace github.com/regularkevvv/agentic/harness => ../harness

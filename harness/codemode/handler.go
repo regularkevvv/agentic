@@ -240,6 +240,7 @@ func (h *runCodeHandler) completeBatch(
 		if projected.ToolUseID != hostCall.ID || projected.ToolName != hostCall.Name {
 			return nil, fmt.Errorf("codemode projected result changed nested call identity %q", call.ID)
 		}
+		projected = restoreInlineContent(result, projected)
 		wire, err := toWireResult(projected, h.limits.MaxValueBytes)
 		if err != nil {
 			return nil, err
@@ -258,6 +259,19 @@ func (h *runCodeHandler) completeBatch(
 		return nil, errors.New("codemode resume payload contains unknown resolutions")
 	}
 	return results, nil
+}
+
+// The default result processor canonicalizes even a small structured value to
+// the exact JSON string that the model would see. A codemode executor is a
+// typed execution host, so retain the original JSON shape when projection did
+// not actually change those bytes. Spill previews, redactions, and every other
+// transformation differ from the canonical value and remain authoritative.
+func restoreInlineContent(original, projected agentic.ToolExecutionResult) agentic.ToolExecutionResult {
+	formatted, ok := projected.Content.(string)
+	if ok && formatted == agentic.FormatToolResult(original.Content) {
+		projected.Content = original.Content
+	}
+	return projected
 }
 
 func (h *runCodeHandler) executeSelected(ctx context.Context, deps any, call agentic.ToolUse) agentic.ToolExecutionResult {

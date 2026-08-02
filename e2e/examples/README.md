@@ -14,6 +14,7 @@ The commands below are run from the repository root, where the committed
 | `structured/` | Typed agent with validated structured output |
 | `retrieval/` | Hybrid retrieval: dense and learned sparse from one call |
 | `sparse/` | What a learned sparse vector is, and what it costs |
+| `codemode/` | Full Harness session through Codemode, GoMonty, a Monty worker, and a nested Go tool |
 
 ## Setup
 
@@ -29,7 +30,35 @@ go run ./e2e/examples/tools
 go run ./e2e/examples/structured
 go run ./e2e/examples/retrieval  # needs DEEPINFRA_TOKEN
 go run ./e2e/examples/sparse     # needs DEEPINFRA_TOKEN
+go run ./e2e/examples/codemode   # no credential; explicitly downloads and verifies GoMonty
 ```
+
+The Codemode example is deterministic and does not call an LLM provider. Its
+scripted model requests `run_code`; the downloaded GoMonty runtime starts a real
+Monty worker, the Monty program calls a selected Go tool, and the restored
+program returns `42` through the durable Harness session. No native binary is
+stored in this repository. GoMonty verifies the release archive, shared library,
+and worker against hashes in its published source module before execution.
+
+Download is the default. To build the same manifest-pinned runtime from the
+reviewed Rust source instead, use:
+
+```bash
+go run ./e2e/examples/codemode -prepare=build -timeout=15m
+```
+
+The opt-in test runs the same shared scenario as the example:
+
+```bash
+cd e2e
+GOMONTY_CACHE_DIR="$(mktemp -d)" GOMONTY_E2E=1 GOWORK=off \
+  go test -race -count=1 -timeout=3m ./codemode
+```
+
+`GOMONTY_CACHE_DIR` is optional. Giving it an empty temporary directory makes
+the command prove a fresh download; GoMonty still rechecks cached files before
+every load when its normal user cache is used. The worker subprocess provides
+crash isolation and timeout enforcement, not an OS security sandbox.
 
 Pass a custom prompt as an argument:
 

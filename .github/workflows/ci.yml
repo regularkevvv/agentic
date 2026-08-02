@@ -128,6 +128,31 @@ jobs:
           working-directory: e2e
           args: --build-tags=e2e
 
+  # Unlike the provider-tagged tests, this credential-free e2e is safe to run
+  # on every change. It downloads the exact GoMonty release asset selected by
+  # the source module's committed manifest, verifies all hashes, starts the real
+  # Monty worker, and crosses the complete Harness Codemode path. The ordinary
+  # e2e-module job remains offline because the test is explicitly gated.
+  gomonty-e2e:
+    name: Harness Codemode (GoMonty)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: e2e
+    env:
+      GOMONTY_E2E: "1"
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: e2e/go.mod
+      - name: Run the full Harness Codemode path
+        env:
+          GOMONTY_CACHE_DIR: ${{ runner.temp }}/gomonty-runtime
+        run: go test -race -count=1 -timeout 3m ./codemode
+
   # provider/local/onnx is a nested module that needs CGO, a native ONNX Runtime, and a
   # statically linked tokenizer. It is invisible to every job above and gates
   # none of them, but it gates itself: this job fails the workflow, because the
