@@ -4,7 +4,7 @@ import (
 	"context"
 	"hash/fnv"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // TestEmbedder is a mock Embedder implementation for testing without API
@@ -13,7 +13,7 @@ import (
 type TestEmbedder struct {
 	name  string
 	dims  int
-	calls []core.EmbeddingRequest
+	calls []retrieval.EmbeddingRequest
 }
 
 // NewTestEmbedder creates a TestEmbedder producing vectors of the given
@@ -28,8 +28,8 @@ func NewTestEmbedder(dims int) *TestEmbedder {
 	}
 }
 
-// Embed implements core.Embedder.
-func (e *TestEmbedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+// Embed implements retrieval.Embedder.
+func (e *TestEmbedder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -47,20 +47,20 @@ func (e *TestEmbedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*
 		totalTokens += len(text)
 	}
 
-	return &core.EmbeddingResponse{
+	return &retrieval.EmbeddingResponse{
 		Vectors: vectors,
 		Model:   e.name,
-		Usage:   core.EmbeddingUsage{PromptTokens: totalTokens, TotalTokens: totalTokens},
+		Usage:   retrieval.EmbeddingUsage{PromptTokens: totalTokens, TotalTokens: totalTokens},
 	}, nil
 }
 
-// Name implements core.Embedder.
+// Name implements retrieval.Embedder.
 func (e *TestEmbedder) Name() string {
 	return e.name
 }
 
 // Calls returns all requests received.
-func (e *TestEmbedder) Calls() []core.EmbeddingRequest {
+func (e *TestEmbedder) Calls() []retrieval.EmbeddingRequest {
 	return e.calls
 }
 
@@ -90,5 +90,5 @@ func deterministicVector(text, inputType string, dims int) []float32 {
 	return vec
 }
 
-// Compile-time check that TestEmbedder implements core.Embedder.
-var _ core.Embedder = (*TestEmbedder)(nil)
+// Compile-time check that TestEmbedder implements retrieval.Embedder.
+var _ retrieval.Embedder = (*TestEmbedder)(nil)

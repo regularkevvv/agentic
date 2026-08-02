@@ -6,7 +6,7 @@ reference Python handler and its `deploy/representations` directory were removed
 in favour of a Go-only repository, and the ONNX provider ships as the nested
 nested `provider/local/onnx` module. The protocol itself is
 unchanged; its JSON Schemas and golden fixtures live in
-`internal/representationwire/testdata`, and writing a handler is now the
+`internal/retrieval/wire/testdata`, and writing a handler is now the
 deployment's job in whatever language its platform runs.
 
 Date: 2026-08-01

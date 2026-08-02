@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 const testDenseResponse = `{"embeddings": [[0.1, 0.2]], "input_tokens": 3}`
@@ -33,16 +33,16 @@ func newRetryEncoder(t *testing.T, handler http.HandlerFunc, opts ...Option) *En
 	return encoder
 }
 
-func denseOnly() *core.RepresentationRequest {
-	return &core.RepresentationRequest{
+func denseOnly() *retrieval.RepresentationRequest {
+	return &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{RepresentationDenseForTest},
+		Outputs: []retrieval.RepresentationKind{RepresentationDenseForTest},
 	}
 }
 
 // RepresentationDenseForTest keeps the request builder above readable without
 // importing the core constant at every call site.
-const RepresentationDenseForTest = core.RepresentationDense
+const RepresentationDenseForTest = retrieval.RepresentationDense
 
 func TestRetriesRateLimitThenSucceeds(t *testing.T) {
 	var calls atomic.Int32
@@ -396,16 +396,16 @@ func TestBaseURLTrailingSlashIsNormalized(t *testing.T) {
 func TestWithLimitsIsApplied(t *testing.T) {
 	encoder, err := New(BGEM3Model,
 		WithAPIToken("t"),
-		WithLimits(core.RepresentationLimits{MaxInputs: 1}),
+		WithLimits(retrieval.RepresentationLimits{MaxInputs: 1}),
 	)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err = encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"a", "b"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	})
-	if !errors.Is(err, core.ErrInvalidRepresentationRequest) {
+	if !errors.Is(err, retrieval.ErrInvalidRepresentationRequest) {
 		t.Fatalf("got %v, want the configured limit to be enforced", err)
 	}
 }

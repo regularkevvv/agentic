@@ -74,7 +74,7 @@ func TestEveryProviderDeclaresItsCapabilities(t *testing.T) {
 		}
 		if len(declared) == 0 {
 			t.Errorf("provider/%s declares no capability: add a compile-time "+
-				"assertion such as `var _ core.Embedder = (*Embedder)(nil)` so "+
+				"assertion such as `var _ retrieval.Embedder = (*Embedder)(nil)` so "+
 				"what this package implements is checkable rather than folklore",
 				entry.Name())
 			continue
@@ -141,7 +141,7 @@ func declaredCapabilities(dir string) (map[string]bool, error) {
 				if !ok || value.Type == nil {
 					continue
 				}
-				// Only the blank identifier: `var _ core.Embedder = ...` is an
+				// Only the blank identifier: `var _ retrieval.Embedder = ...` is an
 				// assertion, whereas a named variable of that type is a field.
 				if len(value.Names) != 1 || value.Names[0].Name != "_" {
 					continue

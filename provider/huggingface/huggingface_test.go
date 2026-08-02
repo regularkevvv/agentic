@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/huggingface"
 	"github.com/regularkevvv/agentic/provider/test/conformance"
 )
@@ -40,10 +40,10 @@ func respondWith(body string) http.HandlerFunc {
 	}
 }
 
-func denseRequest(inputs ...string) *core.RepresentationRequest {
-	return &core.RepresentationRequest{
+func denseRequest(inputs ...string) *retrieval.RepresentationRequest {
+	return &retrieval.RepresentationRequest{
 		Input:   inputs,
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
 }
 
@@ -146,8 +146,8 @@ func TestSharedCallsFeatureExtraction(t *testing.T) {
 	if len(resp.Data) != 2 || resp.Data[1].Dense[1] != 0.4 {
 		t.Errorf("data = %v", resp.Data)
 	}
-	space := resp.Spaces[core.RepresentationDense]
-	if space.Dimensions != 2 || space.Metric != core.SimilarityCosine {
+	space := resp.Spaces[retrieval.RepresentationDense]
+	if space.Dimensions != 2 || space.Metric != retrieval.SimilarityCosine {
 		t.Errorf("space = %+v", space)
 	}
 	if resp.Usage.RequestCount != 1 || resp.Usage.OutputBytes == 0 {
@@ -165,17 +165,17 @@ func TestSharedAdvertisesDenseOnly(t *testing.T) {
 	encoder := newShared(t, respondWith(`[[0.1, 0.2]]`))
 	caps := encoder.Capabilities()
 
-	if len(caps.Outputs) != 1 || caps.Outputs[0] != core.RepresentationDense {
+	if len(caps.Outputs) != 1 || caps.Outputs[0] != retrieval.RepresentationDense {
 		t.Fatalf("outputs = %v, want dense only", caps.Outputs)
 	}
 	if caps.SupportsMultiOutput {
 		t.Error("a dense-only encoder cannot support multi-output")
 	}
-	_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationSparse},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationSparse},
 	})
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
 }
@@ -187,15 +187,15 @@ func TestSharedInputRolesRequirePromptNames(t *testing.T) {
 	t.Run("without prompts", func(t *testing.T) {
 		encoder := newShared(t, respondWith(`[[0.1, 0.2]]`))
 		caps := encoder.Capabilities()
-		if caps.SupportsInputType(core.EmbeddingInputQuery) {
+		if caps.SupportsInputType(retrieval.EmbeddingInputQuery) {
 			t.Error("query should not be advertised without a configured prompt")
 		}
-		_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+		_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 			Input:     []string{"a"},
-			InputType: core.EmbeddingInputQuery,
-			Outputs:   []core.RepresentationKind{core.RepresentationDense},
+			InputType: retrieval.EmbeddingInputQuery,
+			Outputs:   []retrieval.RepresentationKind{retrieval.RepresentationDense},
 		})
-		if !errors.Is(err, core.ErrInvalidRepresentationRequest) {
+		if !errors.Is(err, retrieval.ErrInvalidRepresentationRequest) {
 			t.Fatalf("got %v, want the unsupported role to be rejected", err)
 		}
 	})
@@ -207,10 +207,10 @@ func TestSharedInputRolesRequirePromptNames(t *testing.T) {
 			fmt.Fprint(w, `[[0.1, 0.2]]`)
 		}, huggingface.WithPromptNames("query", "passage"))
 
-		if _, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+		if _, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 			Input:     []string{"a"},
-			InputType: core.EmbeddingInputQuery,
-			Outputs:   []core.RepresentationKind{core.RepresentationDense},
+			InputType: retrieval.EmbeddingInputQuery,
+			Outputs:   []retrieval.RepresentationKind{retrieval.RepresentationDense},
 		}); err != nil {
 			t.Fatalf("Encode: %v", err)
 		}
@@ -228,9 +228,9 @@ func TestSharedSendsOptions(t *testing.T) {
 	}, huggingface.WithNormalize(true), huggingface.WithInferenceProvider("together"))
 
 	truncate := false
-	if _, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	if _, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:    []string{"a"},
-		Outputs:  []core.RepresentationKind{core.RepresentationDense},
+		Outputs:  []retrieval.RepresentationKind{retrieval.RepresentationDense},
 		Truncate: &truncate,
 	}); err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -277,14 +277,14 @@ func TestSharedRejectsOversizedResponses(t *testing.T) {
 func TestSharedPinnedRevisionChangesSpace(t *testing.T) {
 	plain := newShared(t, respondWith(`[[0.1, 0.2]]`))
 	pinned := newShared(t, respondWith(`[[0.1, 0.2]]`),
-		huggingface.WithSharedVectorSpace(core.VectorSpace{Revision: "rev-1", Tokenizer: "tok-1"}))
+		huggingface.WithSharedVectorSpace(retrieval.VectorSpace{Revision: "rev-1", Tokenizer: "tok-1"}))
 
 	spaceID := func(encoder *huggingface.SharedEncoder) string {
 		resp, err := encoder.Encode(context.Background(), denseRequest("a"))
 		if err != nil {
 			t.Fatalf("Encode: %v", err)
 		}
-		return resp.Spaces[core.RepresentationDense].ID
+		return resp.Spaces[retrieval.RepresentationDense].ID
 	}
 	if spaceID(plain) == spaceID(pinned) {
 		t.Fatal("recording a revision did not change the space ID")
@@ -293,7 +293,7 @@ func TestSharedPinnedRevisionChangesSpace(t *testing.T) {
 
 func TestSharedEmbedProjectsDense(t *testing.T) {
 	encoder := newShared(t, respondWith(`[[0.1, 0.2], [0.3, 0.4]]`))
-	resp, err := encoder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a", "b"}})
+	resp, err := encoder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a", "b"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -334,11 +334,11 @@ func TestSharedBatchesLargeRequests(t *testing.T) {
 
 func TestSharedConfiguredLimitsAreEnforced(t *testing.T) {
 	encoder, err := huggingface.NewShared("m", huggingface.WithSharedToken("t"),
-		huggingface.WithSharedLimits(core.RepresentationLimits{MaxInputs: 1}))
+		huggingface.WithSharedLimits(retrieval.RepresentationLimits{MaxInputs: 1}))
 	if err != nil {
 		t.Fatalf("NewShared: %v", err)
 	}
-	if _, err := encoder.Encode(context.Background(), denseRequest("a", "b")); !errors.Is(err, core.ErrInvalidRepresentationRequest) {
+	if _, err := encoder.Encode(context.Background(), denseRequest("a", "b")); !errors.Is(err, retrieval.ErrInvalidRepresentationRequest) {
 		t.Fatalf("got %v, want the configured limit to be enforced", err)
 	}
 }
@@ -410,7 +410,7 @@ func TestEncodeHonorsCancellation(t *testing.T) {
 
 func TestSharedConformance(t *testing.T) {
 	conformance.RunRepresentation(t, conformance.RepresentationOptions{
-		NewEncoder: func(t *testing.T) core.RepresentationEncoder {
+		NewEncoder: func(t *testing.T) retrieval.RepresentationEncoder {
 			return newShared(t, func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
 					Inputs []string `json:"inputs"`

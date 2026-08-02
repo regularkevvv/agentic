@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // Defaults for a TestRepresentationEncoder built without options.
@@ -20,7 +20,7 @@ const (
 	defaultMaxTokenVectors = 512
 )
 
-// TestRepresentationEncoder is a deterministic core.RepresentationEncoder for
+// TestRepresentationEncoder is a deterministic retrieval.RepresentationEncoder for
 // testing without API calls.
 //
 // Every output is a pure function of the input text, the input type, and the
@@ -32,15 +32,15 @@ const (
 // The zero value is not usable; call NewTestRepresentationEncoder.
 type TestRepresentationEncoder struct {
 	mu    sync.Mutex
-	calls []core.RepresentationRequest
+	calls []retrieval.RepresentationRequest
 
 	name       string
 	dims       int
 	vocabulary int
-	caps       core.RepresentationCapabilities
+	caps       retrieval.RepresentationCapabilities
 	revision   string
 	tokenizer  string
-	failure    func(call int, req *core.RepresentationRequest) error
+	failure    func(call int, req *retrieval.RepresentationRequest) error
 }
 
 // RepresentationOption configures a TestRepresentationEncoder.
@@ -71,17 +71,17 @@ func WithRepresentationVocabulary(size int) RepresentationOption {
 }
 
 // WithRepresentationOutputs restricts which kinds the encoder produces.
-// Requesting an omitted kind returns core.UnsupportedRepresentationError.
-func WithRepresentationOutputs(kinds ...core.RepresentationKind) RepresentationOption {
+// Requesting an omitted kind returns retrieval.UnsupportedRepresentationError.
+func WithRepresentationOutputs(kinds ...retrieval.RepresentationKind) RepresentationOption {
 	return func(e *TestRepresentationEncoder) {
-		e.caps.Outputs = append([]core.RepresentationKind(nil), kinds...)
+		e.caps.Outputs = append([]retrieval.RepresentationKind(nil), kinds...)
 	}
 }
 
 // WithRepresentationInputTypes restricts which input types the encoder accepts.
-func WithRepresentationInputTypes(types ...core.EmbeddingInputType) RepresentationOption {
+func WithRepresentationInputTypes(types ...retrieval.EmbeddingInputType) RepresentationOption {
 	return func(e *TestRepresentationEncoder) {
-		e.caps.InputTypes = append([]core.EmbeddingInputType(nil), types...)
+		e.caps.InputTypes = append([]retrieval.EmbeddingInputType(nil), types...)
 	}
 }
 
@@ -124,14 +124,14 @@ func WithRepresentationRevision(model, tokenizer string) RepresentationOption {
 
 // WithRepresentationError makes every Encode call fail with err.
 func WithRepresentationError(err error) RepresentationOption {
-	return WithRepresentationFailure(func(int, *core.RepresentationRequest) error { return err })
+	return WithRepresentationFailure(func(int, *retrieval.RepresentationRequest) error { return err })
 }
 
 // WithRepresentationFailure installs a hook consulted before each Encode call,
 // receiving the zero-based call index and the request. A non-nil return
 // becomes the call's error, which is how a test drives a failure at a chosen
 // point in a chunked batch.
-func WithRepresentationFailure(fn func(call int, req *core.RepresentationRequest) error) RepresentationOption {
+func WithRepresentationFailure(fn func(call int, req *retrieval.RepresentationRequest) error) RepresentationOption {
 	return func(e *TestRepresentationEncoder) { e.failure = fn }
 }
 
@@ -145,16 +145,16 @@ func NewTestRepresentationEncoder(opts ...RepresentationOption) *TestRepresentat
 		vocabulary: defaultRepresentationVocab,
 		revision:   "test-revision-1",
 		tokenizer:  "test-tokenizer-1",
-		caps: core.RepresentationCapabilities{
-			Outputs: []core.RepresentationKind{
-				core.RepresentationDense,
-				core.RepresentationSparse,
-				core.RepresentationMultiVector,
+		caps: retrieval.RepresentationCapabilities{
+			Outputs: []retrieval.RepresentationKind{
+				retrieval.RepresentationDense,
+				retrieval.RepresentationSparse,
+				retrieval.RepresentationMultiVector,
 			},
-			InputTypes: []core.EmbeddingInputType{
-				core.EmbeddingInputNone,
-				core.EmbeddingInputQuery,
-				core.EmbeddingInputDocument,
+			InputTypes: []retrieval.EmbeddingInputType{
+				retrieval.EmbeddingInputNone,
+				retrieval.EmbeddingInputQuery,
+				retrieval.EmbeddingInputDocument,
 			},
 			SupportsTruncation:  true,
 			SupportsMultiOutput: true,
@@ -166,41 +166,41 @@ func NewTestRepresentationEncoder(opts ...RepresentationOption) *TestRepresentat
 	return e
 }
 
-// Name implements core.RepresentationEncoder.
+// Name implements retrieval.RepresentationEncoder.
 func (e *TestRepresentationEncoder) Name() string { return e.name }
 
-// Capabilities implements core.RepresentationEncoder.
-func (e *TestRepresentationEncoder) Capabilities() core.RepresentationCapabilities {
+// Capabilities implements retrieval.RepresentationEncoder.
+func (e *TestRepresentationEncoder) Capabilities() retrieval.RepresentationCapabilities {
 	caps := e.caps
-	caps.Outputs = append([]core.RepresentationKind(nil), e.caps.Outputs...)
-	caps.InputTypes = append([]core.EmbeddingInputType(nil), e.caps.InputTypes...)
+	caps.Outputs = append([]retrieval.RepresentationKind(nil), e.caps.Outputs...)
+	caps.InputTypes = append([]retrieval.EmbeddingInputType(nil), e.caps.InputTypes...)
 	return caps
 }
 
 // Space returns the vector space this encoder reports for kind.
-func (e *TestRepresentationEncoder) Space(kind core.RepresentationKind) core.VectorSpace {
-	space := core.VectorSpace{
+func (e *TestRepresentationEncoder) Space(kind retrieval.RepresentationKind) retrieval.VectorSpace {
+	space := retrieval.VectorSpace{
 		Provider:   "test",
 		Model:      e.name,
 		Revision:   e.revision,
 		Tokenizer:  e.tokenizer,
 		Kind:       kind,
 		Dimensions: e.dims,
-		Metric:     core.SimilarityCosine,
+		Metric:     retrieval.SimilarityCosine,
 	}
-	if kind == core.RepresentationSparse {
+	if kind == retrieval.RepresentationSparse {
 		space.Dimensions = e.vocabulary
-		space.Metric = core.SimilarityDotProduct
+		space.Metric = retrieval.SimilarityDotProduct
 	}
 	return space.WithCanonicalID()
 }
 
-// Encode implements core.RepresentationEncoder.
-func (e *TestRepresentationEncoder) Encode(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
-	validator := core.RepresentationValidator{
+// Encode implements retrieval.RepresentationEncoder.
+func (e *TestRepresentationEncoder) Encode(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
+	validator := retrieval.RepresentationValidator{
 		Provider:     e.name,
 		Capabilities: e.Capabilities(),
-		Limits:       core.DefaultRepresentationLimits(),
+		Limits:       retrieval.DefaultRepresentationLimits(),
 	}
 	if err := validator.ValidateRequest(req); err != nil {
 		return nil, err
@@ -221,32 +221,32 @@ func (e *TestRepresentationEncoder) Encode(ctx context.Context, req *core.Repres
 		}
 	}
 
-	spaces := make(map[core.RepresentationKind]core.VectorSpace, len(req.Outputs))
+	spaces := make(map[retrieval.RepresentationKind]retrieval.VectorSpace, len(req.Outputs))
 	for _, kind := range req.Outputs {
 		spaces[kind] = e.Space(kind)
 	}
 
-	data := make([]core.Representation, len(req.Input))
+	data := make([]retrieval.Representation, len(req.Input))
 	inputBytes := 0
 	for i, text := range req.Input {
 		inputBytes += len(text)
 		for _, kind := range req.Outputs {
 			switch kind {
-			case core.RepresentationDense:
+			case retrieval.RepresentationDense:
 				data[i].Dense = deterministicVector(text, string(req.InputType), e.dims)
-			case core.RepresentationSparse:
+			case retrieval.RepresentationSparse:
 				data[i].Sparse = e.sparseVector(text, req.InputType)
-			case core.RepresentationMultiVector:
+			case retrieval.RepresentationMultiVector:
 				data[i].MultiVector = e.tokenVectors(text, req.InputType)
 			}
 		}
 	}
 
-	resp := &core.RepresentationResponse{
+	resp := &retrieval.RepresentationResponse{
 		Data:   data,
 		Spaces: spaces,
 		Model:  e.name,
-		Usage: core.RepresentationUsage{
+		Usage: retrieval.RepresentationUsage{
 			InputTokens:  inputBytes,
 			RequestCount: 1,
 			InputBytes:   inputBytes,
@@ -260,10 +260,10 @@ func (e *TestRepresentationEncoder) Encode(ctx context.Context, req *core.Repres
 
 // Calls returns deep copies of all requests received, so that inspecting the
 // history cannot rewrite it.
-func (e *TestRepresentationEncoder) Calls() []core.RepresentationRequest {
+func (e *TestRepresentationEncoder) Calls() []retrieval.RepresentationRequest {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	out := make([]core.RepresentationRequest, len(e.calls))
+	out := make([]retrieval.RepresentationRequest, len(e.calls))
 	for i := range e.calls {
 		out[i] = *e.calls[i].Clone()
 	}
@@ -292,7 +292,7 @@ func (e *TestRepresentationEncoder) Reset() {
 // a rare word share a coordinate, and an input repeating it weighs it higher.
 // Two words that collide onto one coordinate combine by taking the larger
 // weight, so the result stays strictly increasing and duplicate-free.
-func (e *TestRepresentationEncoder) sparseVector(text string, inputType core.EmbeddingInputType) *core.SparseVector {
+func (e *TestRepresentationEncoder) sparseVector(text string, inputType retrieval.EmbeddingInputType) *retrieval.SparseVector {
 	counts := make(map[uint32]float32)
 	words := strings.Fields(strings.ToLower(text))
 	for _, word := range words {
@@ -306,7 +306,7 @@ func (e *TestRepresentationEncoder) sparseVector(text string, inputType core.Emb
 	}
 	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
 
-	vec := &core.SparseVector{
+	vec := &retrieval.SparseVector{
 		Indices: indices,
 		Values:  make([]float32, len(indices)),
 	}
@@ -319,7 +319,7 @@ func (e *TestRepresentationEncoder) sparseVector(text string, inputType core.Emb
 // tokenVectors derives one vector per word, for late-interaction scoring. An
 // input with no words yields a single vector for the input as a whole, because
 // an empty multi-vector is not a valid representation.
-func (e *TestRepresentationEncoder) tokenVectors(text string, inputType core.EmbeddingInputType) [][]float32 {
+func (e *TestRepresentationEncoder) tokenVectors(text string, inputType retrieval.EmbeddingInputType) [][]float32 {
 	words := strings.Fields(strings.ToLower(text))
 	if len(words) == 0 {
 		words = []string{text}
@@ -344,4 +344,4 @@ func hashString(parts ...string) uint64 {
 }
 
 // Compile-time check that TestRepresentationEncoder implements the contract.
-var _ core.RepresentationEncoder = (*TestRepresentationEncoder)(nil)
+var _ retrieval.RepresentationEncoder = (*TestRepresentationEncoder)(nil)

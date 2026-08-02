@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 const embedFixture = `{
@@ -54,9 +54,9 @@ func TestEmbedRequestAndResponse(t *testing.T) {
 		_, _ = io.WriteString(w, embedFixture)
 	})
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:     []string{"first", "second"},
-		InputType: core.EmbeddingInputQuery,
+		InputType: retrieval.EmbeddingInputQuery,
 	})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -99,12 +99,12 @@ func TestEmbedRequestAndResponse(t *testing.T) {
 func TestEmbedInputTypeMapping(t *testing.T) {
 	tests := []struct {
 		name      string
-		inputType core.EmbeddingInputType
+		inputType retrieval.EmbeddingInputType
 		want      string // "" means the field must be absent
 	}{
-		{name: "query", inputType: core.EmbeddingInputQuery, want: "query"},
-		{name: "document", inputType: core.EmbeddingInputDocument, want: "document"},
-		{name: "none omits the field", inputType: core.EmbeddingInputNone, want: ""},
+		{name: "query", inputType: retrieval.EmbeddingInputQuery, want: "query"},
+		{name: "document", inputType: retrieval.EmbeddingInputDocument, want: "document"},
+		{name: "none omits the field", inputType: retrieval.EmbeddingInputNone, want: ""},
 	}
 
 	for _, tt := range tests {
@@ -123,7 +123,7 @@ func TestEmbedInputTypeMapping(t *testing.T) {
 				}`)
 			})
 
-			if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+			if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 				Input:     []string{"a", "b"},
 				InputType: tt.inputType,
 			}); err != nil {
@@ -159,7 +159,7 @@ func TestEmbedSendsTruncationAndDimensions(t *testing.T) {
 		}`)
 	}, WithTruncation(false))
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:      []string{"text"},
 		Dimensions: 512,
 	}); err != nil {
@@ -191,7 +191,7 @@ func TestEmbedRetriesTransientStatus(t *testing.T) {
 		}`)
 	})
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestEmbedDoesNotRetryClientError(t *testing.T) {
 		http.Error(w, `{"detail":"model not found"}`, http.StatusBadRequest)
 	})
 
-	_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+	_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 	if err == nil {
 		t.Fatal("Embed should fail on 400")
 	}
@@ -233,7 +233,7 @@ func TestEmbedVectorCountMismatch(t *testing.T) {
 		}`)
 	})
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input: []string{"first", "second"},
 	}); err == nil {
 		t.Fatal("Embed should fail when the vector count does not match the input count")
@@ -317,7 +317,7 @@ func TestEmbedZeroRetriesFailsImmediately(t *testing.T) {
 		http.Error(w, "temporary upstream failure", http.StatusServiceUnavailable)
 	}, WithMaxRetries(0))
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
 		t.Fatal("Embed should fail on 503 with zero retries")
 	}
 	if calls != 1 {
@@ -341,7 +341,7 @@ func TestEmbedNetworkErrorZeroRetries(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
 		t.Fatal("Embed should surface the network error")
 	}
 }
@@ -355,7 +355,7 @@ func TestEmbedCanceledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	if _, err := embedder.Embed(ctx, &core.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
+	if _, err := embedder.Embed(ctx, &retrieval.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
 		t.Fatal("Embed should fail with a canceled context")
 	}
 }
@@ -366,7 +366,7 @@ func TestEmbedDecodeError(t *testing.T) {
 		_, _ = io.WriteString(w, "not json")
 	})
 
-	_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+	_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 	if err == nil || !strings.Contains(err.Error(), "decode response") {
 		t.Fatalf("error = %v, want decode response error", err)
 	}
@@ -383,7 +383,7 @@ func TestEmbedVectorIndexOutOfRange(t *testing.T) {
 		}`)
 	})
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
 		t.Fatal("Embed should reject an out-of-range vector index")
 	}
 }
@@ -393,7 +393,7 @@ func TestEmbedRejectsInvalidRequest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{}); err == nil {
 		t.Fatal("Embed should reject an empty request")
 	}
 }

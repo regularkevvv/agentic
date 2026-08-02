@@ -1,5 +1,5 @@
 // Package pinecone provides a Pinecone Inference implementation of
-// core.RepresentationEncoder, and of core.Embedder for its dense models.
+// retrieval.RepresentationEncoder, and of retrieval.Embedder for its dense models.
 //
 // The scope is encoding only. Pinecone's standalone /embed endpoint is a
 // hosted model API and belongs here; Pinecone indexes, namespaces, and search
@@ -70,7 +70,7 @@ package pinecone
 import (
 	"net/http"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // providerName identifies this package in vector spaces and errors.
@@ -96,20 +96,20 @@ const SparseEnglishModel = "pinecone-sparse-english-v0"
 // The value exceeds a 32-bit int, so it requires a 64-bit build.
 const SparseEnglishIndexSpace = 1 << 32
 
-// Encoder implements core.RepresentationEncoder against Pinecone Inference.
+// Encoder implements retrieval.RepresentationEncoder against Pinecone Inference.
 type Encoder struct {
 	*client
 
 	model            string
-	kind             core.RepresentationKind
+	kind             retrieval.RepresentationKind
 	dimensions       int
 	sparseIndexSpace int
 	revision         string
 	tokenizer        string
 	returnTokens     bool
 	batchSize        int
-	limits           core.RepresentationLimits
-	embedder         *core.EncoderEmbedder
+	limits           retrieval.RepresentationLimits
+	embedder         *retrieval.EncoderEmbedder
 }
 
 // Option configures the Encoder.
@@ -118,14 +118,14 @@ type Option func(*config)
 type config struct {
 	transportConfig
 
-	kind             core.RepresentationKind
+	kind             retrieval.RepresentationKind
 	dimensions       int
 	sparseIndexSpace int
 	revision         string
 	tokenizer        string
 	returnTokens     bool
 	batchSize        int
-	limits           *core.RepresentationLimits
+	limits           *retrieval.RepresentationLimits
 }
 
 // WithAPIKey sets the API key. If not set, the PINECONE_API_KEY env var is
@@ -163,7 +163,7 @@ func WithMaxResponseBytes(limit int64) Option {
 // WithOutputs declares the representation kind this model produces. Exactly
 // one kind may be declared, because one Pinecone model returns one vector
 // type. The default is dense.
-func WithOutputs(kinds ...core.RepresentationKind) Option {
+func WithOutputs(kinds ...retrieval.RepresentationKind) Option {
 	return func(c *config) {
 		if len(kinds) == 1 {
 			c.kind = kinds[0]
@@ -171,7 +171,7 @@ func WithOutputs(kinds ...core.RepresentationKind) Option {
 		}
 		// Recorded as an invalid kind so New reports it rather than silently
 		// keeping the default.
-		c.kind = core.RepresentationKind("multiple")
+		c.kind = retrieval.RepresentationKind("multiple")
 	}
 }
 
@@ -228,7 +228,7 @@ func WithBatchSize(size int) Option {
 }
 
 // WithLimits overrides the request and response size ceilings.
-func WithLimits(limits core.RepresentationLimits) Option {
+func WithLimits(limits retrieval.RepresentationLimits) Option {
 	return func(c *config) { c.limits = &limits }
 }
 
@@ -244,37 +244,37 @@ func WithLimits(limits core.RepresentationLimits) Option {
 //	)
 func New(model string, opts ...Option) (*Encoder, error) {
 	if model == "" {
-		return nil, &core.InvalidRepresentationRequestError{
+		return nil, &retrieval.InvalidRepresentationRequestError{
 			Invariant: "model.empty",
 			Detail:    "pinecone: model cannot be empty",
 		}
 	}
 
-	cfg := &config{kind: core.RepresentationDense}
+	cfg := &config{kind: retrieval.RepresentationDense}
 	for _, opt := range opts {
 		opt(cfg)
 	}
 
 	switch cfg.kind {
-	case core.RepresentationDense, core.RepresentationSparse:
-	case core.RepresentationMultiVector:
-		return nil, &core.UnsupportedRepresentationError{
+	case retrieval.RepresentationDense, retrieval.RepresentationSparse:
+	case retrieval.RepresentationMultiVector:
+		return nil, &retrieval.UnsupportedRepresentationError{
 			Provider: providerName,
-			Kind:     core.RepresentationMultiVector,
-			Supported: []core.RepresentationKind{
-				core.RepresentationDense, core.RepresentationSparse,
+			Kind:     retrieval.RepresentationMultiVector,
+			Supported: []retrieval.RepresentationKind{
+				retrieval.RepresentationDense, retrieval.RepresentationSparse,
 			},
 		}
 	default:
-		return nil, &core.InvalidRepresentationRequestError{
+		return nil, &retrieval.InvalidRepresentationRequestError{
 			Invariant: "outputs.single",
 			Detail: "pinecone: a model returns one vector type; declare exactly one of " +
 				"dense or sparse with WithOutputs",
 		}
 	}
 
-	if cfg.kind == core.RepresentationSparse && cfg.sparseIndexSpace <= 0 {
-		return nil, &core.InvalidRepresentationRequestError{
+	if cfg.kind == retrieval.RepresentationSparse && cfg.sparseIndexSpace <= 0 {
+		return nil, &retrieval.InvalidRepresentationRequestError{
 			Invariant: "sparse_index_space.missing",
 			Detail: "pinecone: a sparse model needs its coordinate bound; Pinecone reports " +
 				"none, so pass WithSparseIndexSpace (SparseEnglishIndexSpace for the " +
@@ -282,13 +282,13 @@ func New(model string, opts ...Option) (*Encoder, error) {
 		}
 	}
 	if cfg.dimensions < 0 {
-		return nil, &core.InvalidRepresentationRequestError{
+		return nil, &retrieval.InvalidRepresentationRequestError{
 			Invariant: "dimensions.negative",
 			Detail:    "pinecone: dimensions cannot be negative",
 		}
 	}
 	if cfg.batchSize < 0 {
-		return nil, &core.InvalidRepresentationRequestError{
+		return nil, &retrieval.InvalidRepresentationRequestError{
 			Invariant: "batch_size.negative",
 			Detail:    "pinecone: batch size cannot be negative",
 		}
@@ -299,7 +299,7 @@ func New(model string, opts ...Option) (*Encoder, error) {
 		return nil, err
 	}
 
-	limits := core.DefaultRepresentationLimits()
+	limits := retrieval.DefaultRepresentationLimits()
 	if cfg.limits != nil {
 		limits = *cfg.limits
 	}
@@ -316,8 +316,8 @@ func New(model string, opts ...Option) (*Encoder, error) {
 		batchSize:        cfg.batchSize,
 		limits:           limits,
 	}
-	if cfg.kind == core.RepresentationDense {
-		encoder.embedder, err = core.NewEncoderEmbedder(encoder)
+	if cfg.kind == retrieval.RepresentationDense {
+		encoder.embedder, err = retrieval.NewEncoderEmbedder(encoder)
 		if err != nil {
 			return nil, err
 		}
@@ -334,28 +334,28 @@ func MustNew(model string, opts ...Option) *Encoder {
 	return e
 }
 
-// Name implements core.RepresentationEncoder and core.Embedder.
+// Name implements retrieval.RepresentationEncoder and retrieval.Embedder.
 func (e *Encoder) Name() string { return e.model }
 
-// Capabilities implements core.RepresentationEncoder.
+// Capabilities implements retrieval.RepresentationEncoder.
 //
 // Multi-output is not supported: one Pinecone model returns one vector type,
 // so a caller asking for two kinds is asking for two models.
-func (e *Encoder) Capabilities() core.RepresentationCapabilities {
-	return core.RepresentationCapabilities{
-		Outputs: []core.RepresentationKind{e.kind},
-		InputTypes: []core.EmbeddingInputType{
-			core.EmbeddingInputNone,
-			core.EmbeddingInputQuery,
-			core.EmbeddingInputDocument,
+func (e *Encoder) Capabilities() retrieval.RepresentationCapabilities {
+	return retrieval.RepresentationCapabilities{
+		Outputs: []retrieval.RepresentationKind{e.kind},
+		InputTypes: []retrieval.EmbeddingInputType{
+			retrieval.EmbeddingInputNone,
+			retrieval.EmbeddingInputQuery,
+			retrieval.EmbeddingInputDocument,
 		},
 		SupportsTruncation:  true,
 		SupportsMultiOutput: false,
 	}
 }
 
-func (e *Encoder) validator() core.RepresentationValidator {
-	return core.RepresentationValidator{
+func (e *Encoder) validator() retrieval.RepresentationValidator {
+	return retrieval.RepresentationValidator{
 		Provider:     providerName,
 		Capabilities: e.Capabilities(),
 		Limits:       e.limits,
@@ -363,13 +363,13 @@ func (e *Encoder) validator() core.RepresentationValidator {
 }
 
 // space builds the descriptor at the observed or declared width.
-func (e *Encoder) space(dimensions int) core.VectorSpace {
-	metric := core.SimilarityCosine
-	if e.kind == core.RepresentationSparse {
-		metric = core.SimilarityDotProduct
+func (e *Encoder) space(dimensions int) retrieval.VectorSpace {
+	metric := retrieval.SimilarityCosine
+	if e.kind == retrieval.RepresentationSparse {
+		metric = retrieval.SimilarityDotProduct
 		dimensions = e.sparseIndexSpace
 	}
-	return core.VectorSpace{
+	return retrieval.VectorSpace{
 		Provider:   providerName,
 		Model:      e.model,
 		Revision:   e.revision,
@@ -383,6 +383,6 @@ func (e *Encoder) space(dimensions int) core.VectorSpace {
 // Compile-time check that Encoder satisfies the encoder contract. Embedder is
 // satisfied too, but only a dense-configured encoder answers it.
 var (
-	_ core.RepresentationEncoder = (*Encoder)(nil)
-	_ core.Embedder              = (*Encoder)(nil)
+	_ retrieval.RepresentationEncoder = (*Encoder)(nil)
+	_ retrieval.Embedder              = (*Encoder)(nil)
 )

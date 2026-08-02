@@ -13,7 +13,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // RepresentationOptions configures [RunRepresentation].
@@ -21,7 +21,7 @@ type RepresentationOptions struct {
 	// NewEncoder returns the encoder under test. It is called once per
 	// subtest, so an encoder that records calls starts each check clean.
 	// Required.
-	NewEncoder func(t *testing.T) core.RepresentationEncoder
+	NewEncoder func(t *testing.T) retrieval.RepresentationEncoder
 
 	// Corpus is the text encoded by the shape checks. It defaults to a short
 	// multilingual set; keep any override small, because a live provider runs
@@ -105,7 +105,7 @@ func RunRepresentation(t *testing.T, opts RepresentationOptions) {
 	})
 }
 
-func checkCapabilities(t *testing.T, encoder core.RepresentationEncoder) {
+func checkCapabilities(t *testing.T, encoder retrieval.RepresentationEncoder) {
 	t.Helper()
 	if encoder.Name() == "" {
 		t.Error("Name() is empty")
@@ -114,7 +114,7 @@ func checkCapabilities(t *testing.T, encoder core.RepresentationEncoder) {
 	if len(caps.Outputs) == 0 {
 		t.Fatal("Capabilities().Outputs is empty; an encoder must produce something")
 	}
-	seen := make(map[core.RepresentationKind]bool, len(caps.Outputs))
+	seen := make(map[retrieval.RepresentationKind]bool, len(caps.Outputs))
 	for _, kind := range caps.Outputs {
 		if !kind.Valid() {
 			t.Errorf("Capabilities().Outputs contains unknown kind %q", string(kind))
@@ -126,7 +126,7 @@ func checkCapabilities(t *testing.T, encoder core.RepresentationEncoder) {
 	}
 	for _, inputType := range caps.InputTypes {
 		switch inputType {
-		case core.EmbeddingInputNone, core.EmbeddingInputQuery, core.EmbeddingInputDocument:
+		case retrieval.EmbeddingInputNone, retrieval.EmbeddingInputQuery, retrieval.EmbeddingInputDocument:
 		default:
 			t.Errorf("Capabilities().InputTypes contains unknown type %q", string(inputType))
 		}
@@ -141,10 +141,10 @@ func checkSingleOutputs(t *testing.T, opts RepresentationOptions, corpus []strin
 	for _, kind := range opts.NewEncoder(t).Capabilities().Outputs {
 		t.Run(string(kind), func(t *testing.T) {
 			encoder := opts.NewEncoder(t)
-			req := &core.RepresentationRequest{
+			req := &retrieval.RepresentationRequest{
 				Input:     corpus,
 				InputType: preferredInputType(encoder.Capabilities()),
-				Outputs:   []core.RepresentationKind{kind},
+				Outputs:   []retrieval.RepresentationKind{kind},
 			}
 			resp, err := encoder.Encode(context.Background(), req)
 			if err != nil {
@@ -162,10 +162,10 @@ func checkCombinedOutputs(t *testing.T, opts RepresentationOptions, corpus []str
 	if !caps.SupportsMultiOutput || len(caps.Outputs) < 2 {
 		t.Skip("encoder returns one representation kind per request")
 	}
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:     corpus,
 		InputType: preferredInputType(caps),
-		Outputs:   append([]core.RepresentationKind(nil), caps.Outputs...),
+		Outputs:   append([]retrieval.RepresentationKind(nil), caps.Outputs...),
 	}
 	resp, err := encoder.Encode(context.Background(), req)
 	if err != nil {
@@ -181,20 +181,20 @@ func checkCombinedOutputs(t *testing.T, opts RepresentationOptions, corpus []str
 func checkInputRoles(t *testing.T, opts RepresentationOptions, corpus []string) {
 	t.Helper()
 	caps := opts.NewEncoder(t).Capabilities()
-	for _, inputType := range []core.EmbeddingInputType{
-		core.EmbeddingInputNone,
-		core.EmbeddingInputQuery,
-		core.EmbeddingInputDocument,
+	for _, inputType := range []retrieval.EmbeddingInputType{
+		retrieval.EmbeddingInputNone,
+		retrieval.EmbeddingInputQuery,
+		retrieval.EmbeddingInputDocument,
 	} {
 		if !caps.SupportsInputType(inputType) {
 			continue
 		}
 		t.Run(inputTypeName(inputType), func(t *testing.T) {
 			encoder := opts.NewEncoder(t)
-			req := &core.RepresentationRequest{
+			req := &retrieval.RepresentationRequest{
 				Input:     corpus[:1],
 				InputType: inputType,
-				Outputs:   []core.RepresentationKind{caps.Outputs[0]},
+				Outputs:   []retrieval.RepresentationKind{caps.Outputs[0]},
 			}
 			resp, err := encoder.Encode(context.Background(), req)
 			if err != nil {
@@ -221,10 +221,10 @@ func checkOrder(t *testing.T, opts RepresentationOptions, corpus []string) {
 	caps := encoder.Capabilities()
 	kind := caps.Outputs[0]
 
-	forward, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	forward, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:     corpus,
 		InputType: preferredInputType(caps),
-		Outputs:   []core.RepresentationKind{kind},
+		Outputs:   []retrieval.RepresentationKind{kind},
 	})
 	if err != nil {
 		t.Fatalf("Encode(forward): %v", err)
@@ -233,10 +233,10 @@ func checkOrder(t *testing.T, opts RepresentationOptions, corpus []string) {
 	for i, text := range corpus {
 		reversed[len(corpus)-1-i] = text
 	}
-	backward, err := opts.NewEncoder(t).Encode(context.Background(), &core.RepresentationRequest{
+	backward, err := opts.NewEncoder(t).Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:     reversed,
 		InputType: preferredInputType(caps),
-		Outputs:   []core.RepresentationKind{kind},
+		Outputs:   []retrieval.RepresentationKind{kind},
 	})
 	if err != nil {
 		t.Fatalf("Encode(reversed): %v", err)
@@ -254,11 +254,11 @@ func checkUnsupportedOutput(t *testing.T, opts RepresentationOptions, corpus []s
 	t.Helper()
 	encoder := opts.NewEncoder(t)
 	caps := encoder.Capabilities()
-	var missing core.RepresentationKind
-	for _, kind := range []core.RepresentationKind{
-		core.RepresentationMultiVector,
-		core.RepresentationSparse,
-		core.RepresentationDense,
+	var missing retrieval.RepresentationKind
+	for _, kind := range []retrieval.RepresentationKind{
+		retrieval.RepresentationMultiVector,
+		retrieval.RepresentationSparse,
+		retrieval.RepresentationDense,
 	} {
 		if !caps.Supports(kind) {
 			missing = kind
@@ -269,15 +269,15 @@ func checkUnsupportedOutput(t *testing.T, opts RepresentationOptions, corpus []s
 		t.Skip("encoder supports every representation kind")
 	}
 
-	_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:     corpus[:1],
 		InputType: preferredInputType(caps),
-		Outputs:   []core.RepresentationKind{missing},
+		Outputs:   []retrieval.RepresentationKind{missing},
 	})
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("requesting unsupported %s: got %v, want ErrUnsupportedRepresentation", missing, err)
 	}
-	var typed *core.UnsupportedRepresentationError
+	var typed *retrieval.UnsupportedRepresentationError
 	if !errors.As(err, &typed) {
 		t.Fatalf("requesting unsupported %s: error is not *UnsupportedRepresentationError", missing)
 	}
@@ -298,49 +298,49 @@ func checkInvalidRequests(t *testing.T, opts RepresentationOptions, corpus []str
 
 	cases := []struct {
 		name string
-		req  *core.RepresentationRequest
+		req  *retrieval.RepresentationRequest
 	}{
 		{"nil request", nil},
-		{"no inputs", &core.RepresentationRequest{
+		{"no inputs", &retrieval.RepresentationRequest{
 			InputType: inputType,
-			Outputs:   []core.RepresentationKind{kind},
+			Outputs:   []retrieval.RepresentationKind{kind},
 		}},
-		{"no outputs", &core.RepresentationRequest{
+		{"no outputs", &retrieval.RepresentationRequest{
 			Input:     corpus[:1],
 			InputType: inputType,
 		}},
-		{"duplicate outputs", &core.RepresentationRequest{
+		{"duplicate outputs", &retrieval.RepresentationRequest{
 			Input:     corpus[:1],
 			InputType: inputType,
-			Outputs:   []core.RepresentationKind{kind, kind},
+			Outputs:   []retrieval.RepresentationKind{kind, kind},
 		}},
-		{"unknown output kind", &core.RepresentationRequest{
+		{"unknown output kind", &retrieval.RepresentationRequest{
 			Input:     corpus[:1],
 			InputType: inputType,
-			Outputs:   []core.RepresentationKind{"colbert"},
+			Outputs:   []retrieval.RepresentationKind{"colbert"},
 		}},
-		{"unknown input type", &core.RepresentationRequest{
+		{"unknown input type", &retrieval.RepresentationRequest{
 			Input:     corpus[:1],
-			InputType: core.EmbeddingInputType("passage"),
-			Outputs:   []core.RepresentationKind{kind},
+			InputType: retrieval.EmbeddingInputType("passage"),
+			Outputs:   []retrieval.RepresentationKind{kind},
 		}},
 	}
 	if !caps.AllowsEmptyInput {
 		cases = append(cases, struct {
 			name string
-			req  *core.RepresentationRequest
-		}{"empty input string", &core.RepresentationRequest{
+			req  *retrieval.RepresentationRequest
+		}{"empty input string", &retrieval.RepresentationRequest{
 			Input:     []string{""},
 			InputType: inputType,
-			Outputs:   []core.RepresentationKind{kind},
+			Outputs:   []retrieval.RepresentationKind{kind},
 		}})
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := encoder.Encode(context.Background(), tc.req)
-			if !errors.Is(err, core.ErrInvalidRepresentationRequest) &&
-				!errors.Is(err, core.ErrUnsupportedRepresentation) {
+			if !errors.Is(err, retrieval.ErrInvalidRepresentationRequest) &&
+				!errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 				t.Fatalf("got %v, want a representation request error", err)
 			}
 			// The same invalid request must fail the same way every time:
@@ -358,16 +358,16 @@ func checkNoMutation(t *testing.T, opts RepresentationOptions, corpus []string) 
 	encoder := opts.NewEncoder(t)
 	caps := encoder.Capabilities()
 
-	outputs := append([]core.RepresentationKind(nil), caps.Outputs[:1]...)
+	outputs := append([]retrieval.RepresentationKind(nil), caps.Outputs[:1]...)
 	if caps.SupportsMultiOutput {
-		outputs = append([]core.RepresentationKind(nil), caps.Outputs...)
+		outputs = append([]retrieval.RepresentationKind(nil), caps.Outputs...)
 	}
 	input := append([]string(nil), corpus...)
 
 	inputBefore := append([]string(nil), input...)
-	outputsBefore := append([]core.RepresentationKind(nil), outputs...)
+	outputsBefore := append([]retrieval.RepresentationKind(nil), outputs...)
 
-	if _, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	if _, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:     input,
 		InputType: preferredInputType(caps),
 		Outputs:   outputs,
@@ -403,12 +403,12 @@ func checkBatchLimit(t *testing.T, opts RepresentationOptions) {
 	for i := range input {
 		input[i] = "batch limit probe"
 	}
-	_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:     input,
 		InputType: preferredInputType(caps),
-		Outputs:   []core.RepresentationKind{caps.Outputs[0]},
+		Outputs:   []retrieval.RepresentationKind{caps.Outputs[0]},
 	})
-	if !errors.Is(err, core.ErrInvalidRepresentationRequest) {
+	if !errors.Is(err, retrieval.ErrInvalidRepresentationRequest) {
 		t.Fatalf("%d inputs against a limit of %d: got %v, want ErrInvalidRepresentationRequest",
 			limit+1, limit, err)
 	}
@@ -429,10 +429,10 @@ func checkCancellation(t *testing.T, opts RepresentationOptions, corpus []string
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := encoder.Encode(ctx, &core.RepresentationRequest{
+	_, err := encoder.Encode(ctx, &retrieval.RepresentationRequest{
 		Input:     corpus[:1],
 		InputType: preferredInputType(caps),
-		Outputs:   []core.RepresentationKind{caps.Outputs[0]},
+		Outputs:   []retrieval.RepresentationKind{caps.Outputs[0]},
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled context: got %v, want context.Canceled", err)
@@ -442,14 +442,14 @@ func checkCancellation(t *testing.T, opts RepresentationOptions, corpus []string
 func checkEmbedderProjection(t *testing.T, opts RepresentationOptions, corpus []string) {
 	t.Helper()
 	encoder := opts.NewEncoder(t)
-	if !encoder.Capabilities().Supports(core.RepresentationDense) {
+	if !encoder.Capabilities().Supports(retrieval.RepresentationDense) {
 		t.Skip("encoder produces no dense output")
 	}
-	embedder, err := core.NewEncoderEmbedder(encoder)
+	embedder, err := retrieval.NewEncoderEmbedder(encoder)
 	if err != nil {
 		t.Fatalf("NewEncoderEmbedder: %v", err)
 	}
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:     corpus,
 		InputType: preferredInputType(encoder.Capabilities()),
 	})
@@ -472,7 +472,7 @@ func checkEmbedderProjection(t *testing.T, opts RepresentationOptions, corpus []
 
 // checkResponse asserts the invariants a caller relies on for every response,
 // independently of whether the provider validated its own output.
-func checkResponse(t *testing.T, req *core.RepresentationRequest, resp *core.RepresentationResponse) {
+func checkResponse(t *testing.T, req *retrieval.RepresentationRequest, resp *retrieval.RepresentationResponse) {
 	t.Helper()
 	if resp == nil {
 		t.Fatal("response is nil")
@@ -522,15 +522,15 @@ func checkResponse(t *testing.T, req *core.RepresentationRequest, resp *core.Rep
 	}
 }
 
-func checkShape(t *testing.T, item int, kind core.RepresentationKind, rep core.Representation, space core.VectorSpace) {
+func checkShape(t *testing.T, item int, kind retrieval.RepresentationKind, rep retrieval.Representation, space retrieval.VectorSpace) {
 	t.Helper()
 	switch kind {
-	case core.RepresentationDense:
+	case retrieval.RepresentationDense:
 		if len(rep.Dense) != space.Dimensions {
 			t.Errorf("item %d dense width %d, space declares %d", item, len(rep.Dense), space.Dimensions)
 		}
 		checkFinite(t, item, "dense", rep.Dense)
-	case core.RepresentationSparse:
+	case retrieval.RepresentationSparse:
 		if len(rep.Sparse.Indices) != len(rep.Sparse.Values) {
 			t.Errorf("item %d sparse has %d indices and %d values",
 				item, len(rep.Sparse.Indices), len(rep.Sparse.Values))
@@ -546,7 +546,7 @@ func checkShape(t *testing.T, item int, kind core.RepresentationKind, rep core.R
 			}
 		}
 		checkFinite(t, item, "sparse", rep.Sparse.Values)
-	case core.RepresentationMultiVector:
+	case retrieval.RepresentationMultiVector:
 		for token, vec := range rep.MultiVector {
 			if len(vec) != space.Dimensions {
 				t.Errorf("item %d token vector %d width %d, space declares %d",
@@ -568,7 +568,7 @@ func checkFinite(t *testing.T, item int, kind string, values []float32) {
 	}
 }
 
-func checkUsage(t *testing.T, usage core.RepresentationUsage) {
+func checkUsage(t *testing.T, usage retrieval.RepresentationUsage) {
 	t.Helper()
 	if usage.InputTokens < 0 || usage.InputBytes < 0 || usage.OutputBytes < 0 {
 		t.Errorf("usage has a negative measurement: %+v", usage)
@@ -580,21 +580,21 @@ func checkUsage(t *testing.T, usage core.RepresentationUsage) {
 
 // preferredInputType picks a role the encoder accepts, favoring document
 // because that is the side an index is built from.
-func preferredInputType(caps core.RepresentationCapabilities) core.EmbeddingInputType {
-	for _, inputType := range []core.EmbeddingInputType{
-		core.EmbeddingInputDocument,
-		core.EmbeddingInputNone,
-		core.EmbeddingInputQuery,
+func preferredInputType(caps retrieval.RepresentationCapabilities) retrieval.EmbeddingInputType {
+	for _, inputType := range []retrieval.EmbeddingInputType{
+		retrieval.EmbeddingInputDocument,
+		retrieval.EmbeddingInputNone,
+		retrieval.EmbeddingInputQuery,
 	} {
 		if caps.SupportsInputType(inputType) {
 			return inputType
 		}
 	}
-	return core.EmbeddingInputNone
+	return retrieval.EmbeddingInputNone
 }
 
-func inputTypeName(inputType core.EmbeddingInputType) string {
-	if inputType == core.EmbeddingInputNone {
+func inputTypeName(inputType retrieval.EmbeddingInputType) string {
+	if inputType == retrieval.EmbeddingInputNone {
 		return "none"
 	}
 	return string(inputType)
@@ -602,11 +602,11 @@ func inputTypeName(inputType core.EmbeddingInputType) string {
 
 // sameRepresentation compares two representations of one kind exactly. It is
 // only used when the caller declares the encoder deterministic.
-func sameRepresentation(kind core.RepresentationKind, a, b core.Representation) bool {
+func sameRepresentation(kind retrieval.RepresentationKind, a, b retrieval.Representation) bool {
 	switch kind {
-	case core.RepresentationDense:
+	case retrieval.RepresentationDense:
 		return equalFloats(a.Dense, b.Dense)
-	case core.RepresentationSparse:
+	case retrieval.RepresentationSparse:
 		if a.Sparse.Len() != b.Sparse.Len() {
 			return false
 		}
@@ -616,7 +616,7 @@ func sameRepresentation(kind core.RepresentationKind, a, b core.Representation) 
 			}
 		}
 		return equalFloats(a.Sparse.Values, b.Sparse.Values)
-	case core.RepresentationMultiVector:
+	case retrieval.RepresentationMultiVector:
 		if len(a.MultiVector) != len(b.MultiVector) {
 			return false
 		}

@@ -1,5 +1,5 @@
 // Package deepinfra provides a DeepInfra implementation of
-// core.RepresentationEncoder, and of core.Embedder for its dense output.
+// retrieval.RepresentationEncoder, and of retrieval.Embedder for its dense output.
 //
 // It targets DeepInfra's native inference API at /v1/inference/{model}, which
 // is the only route that exposes a multi-representation model's full output.
@@ -30,7 +30,7 @@ package deepinfra
 import (
 	"net/http"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // providerName identifies this package in vector spaces and errors.
@@ -67,7 +67,7 @@ const BGEM3SparseVocabulary = 250002
 // 34 KB per token per input and set WithBatchSize accordingly.
 const defaultBatchSize = 32
 
-// Encoder implements core.RepresentationEncoder and core.Embedder against
+// Encoder implements retrieval.RepresentationEncoder and retrieval.Embedder against
 // DeepInfra's native inference API.
 type Encoder struct {
 	*client
@@ -78,12 +78,12 @@ type Encoder struct {
 	sparseVocabulary int
 	revision         string
 	tokenizer        string
-	outputs          []core.RepresentationKind
-	limits           core.RepresentationLimits
+	outputs          []retrieval.RepresentationKind
+	limits           retrieval.RepresentationLimits
 
-	// embedder projects this encoder onto core.Embedder. It is nil when the
+	// embedder projects this encoder onto retrieval.Embedder. It is nil when the
 	// encoder does not advertise dense output.
-	embedder *core.EncoderEmbedder
+	embedder *retrieval.EncoderEmbedder
 }
 
 // Option configures the Encoder.
@@ -97,8 +97,8 @@ type config struct {
 	sparseVocabulary int
 	revision         string
 	tokenizer        string
-	outputs          []core.RepresentationKind
-	limits           *core.RepresentationLimits
+	outputs          []retrieval.RepresentationKind
+	limits           *retrieval.RepresentationLimits
 }
 
 // WithAPIToken sets the API token. If not set, the DEEPINFRA_TOKEN env var is
@@ -186,12 +186,12 @@ func WithModelRevision(model, tokenizer string) Option {
 // The default is all three, which is what BAAI/bge-m3-multi produces. Narrow
 // it when pointing this package at a DeepInfra model that produces fewer, so
 // that Capabilities() describes the deployment rather than the package.
-func WithOutputs(kinds ...core.RepresentationKind) Option {
-	return func(c *config) { c.outputs = append([]core.RepresentationKind(nil), kinds...) }
+func WithOutputs(kinds ...retrieval.RepresentationKind) Option {
+	return func(c *config) { c.outputs = append([]retrieval.RepresentationKind(nil), kinds...) }
 }
 
 // WithLimits overrides the request and response size ceilings.
-func WithLimits(limits core.RepresentationLimits) Option {
+func WithLimits(limits retrieval.RepresentationLimits) Option {
 	return func(c *config) { c.limits = &limits }
 }
 
@@ -207,7 +207,7 @@ func WithLimits(limits core.RepresentationLimits) Option {
 //	)
 func New(model string, opts ...Option) (*Encoder, error) {
 	if model == "" {
-		return nil, &core.InvalidRepresentationRequestError{
+		return nil, &retrieval.InvalidRepresentationRequestError{
 			Invariant: "model.empty",
 			Detail:    "deepinfra: model cannot be empty",
 		}
@@ -220,7 +220,7 @@ func New(model string, opts ...Option) (*Encoder, error) {
 	batchSize := defaultBatchSize
 	if cfg.batchSize != nil {
 		if *cfg.batchSize < 0 {
-			return nil, &core.InvalidRepresentationRequestError{
+			return nil, &retrieval.InvalidRepresentationRequestError{
 				Invariant: "batch_size.negative",
 				Detail:    "deepinfra: batch size cannot be negative",
 			}
@@ -228,7 +228,7 @@ func New(model string, opts ...Option) (*Encoder, error) {
 		batchSize = *cfg.batchSize
 	}
 	if cfg.sparseVocabulary < 0 {
-		return nil, &core.InvalidRepresentationRequestError{
+		return nil, &retrieval.InvalidRepresentationRequestError{
 			Invariant: "sparse_vocabulary.negative",
 			Detail:    "deepinfra: sparse vocabulary cannot be negative",
 		}
@@ -241,22 +241,22 @@ func New(model string, opts ...Option) (*Encoder, error) {
 
 	outputs := cfg.outputs
 	if outputs == nil {
-		outputs = []core.RepresentationKind{
-			core.RepresentationDense,
-			core.RepresentationSparse,
-			core.RepresentationMultiVector,
+		outputs = []retrieval.RepresentationKind{
+			retrieval.RepresentationDense,
+			retrieval.RepresentationSparse,
+			retrieval.RepresentationMultiVector,
 		}
 	}
 	for _, kind := range outputs {
 		if !kind.Valid() {
-			return nil, &core.InvalidRepresentationRequestError{
+			return nil, &retrieval.InvalidRepresentationRequestError{
 				Invariant: "outputs.unknown",
 				Detail:    "deepinfra: output kind " + string(kind) + " is not dense, sparse, or multi_vector",
 			}
 		}
 	}
 
-	limits := core.DefaultRepresentationLimits()
+	limits := retrieval.DefaultRepresentationLimits()
 	if cfg.limits != nil {
 		limits = *cfg.limits
 	}
@@ -275,8 +275,8 @@ func New(model string, opts ...Option) (*Encoder, error) {
 	// Built once here rather than per call, and left nil when the encoder was
 	// narrowed to non-dense outputs, so Embed fails with the same typed error
 	// a dense request would.
-	if encoder.Capabilities().Supports(core.RepresentationDense) {
-		encoder.embedder, err = core.NewEncoderEmbedder(encoder)
+	if encoder.Capabilities().Supports(retrieval.RepresentationDense) {
+		encoder.embedder, err = retrieval.NewEncoderEmbedder(encoder)
 		if err != nil {
 			return nil, err
 		}
@@ -293,22 +293,22 @@ func MustNew(model string, opts ...Option) *Encoder {
 	return e
 }
 
-// Name implements core.RepresentationEncoder and core.Embedder.
+// Name implements retrieval.RepresentationEncoder and retrieval.Embedder.
 func (e *Encoder) Name() string { return e.model }
 
-// Capabilities implements core.RepresentationEncoder.
+// Capabilities implements retrieval.RepresentationEncoder.
 //
 // Truncation is not offered: DeepInfra's native inference API has no truncate
 // parameter, and accepting the option while ignoring it would let a caller
 // believe an over-long document had been rejected when it was silently
 // clipped.
-func (e *Encoder) Capabilities() core.RepresentationCapabilities {
-	return core.RepresentationCapabilities{
-		Outputs: append([]core.RepresentationKind(nil), e.outputs...),
-		InputTypes: []core.EmbeddingInputType{
-			core.EmbeddingInputNone,
-			core.EmbeddingInputQuery,
-			core.EmbeddingInputDocument,
+func (e *Encoder) Capabilities() retrieval.RepresentationCapabilities {
+	return retrieval.RepresentationCapabilities{
+		Outputs: append([]retrieval.RepresentationKind(nil), e.outputs...),
+		InputTypes: []retrieval.EmbeddingInputType{
+			retrieval.EmbeddingInputNone,
+			retrieval.EmbeddingInputQuery,
+			retrieval.EmbeddingInputDocument,
 		},
 		SupportsTruncation:  false,
 		SupportsMultiOutput: true,
@@ -316,8 +316,8 @@ func (e *Encoder) Capabilities() core.RepresentationCapabilities {
 }
 
 // validator returns the contract checker used on both sides of a call.
-func (e *Encoder) validator() core.RepresentationValidator {
-	return core.RepresentationValidator{
+func (e *Encoder) validator() retrieval.RepresentationValidator {
+	return retrieval.RepresentationValidator{
 		Provider:     providerName,
 		Capabilities: e.Capabilities(),
 		Limits:       e.limits,
@@ -325,12 +325,12 @@ func (e *Encoder) validator() core.RepresentationValidator {
 }
 
 // space builds the descriptor for one kind at the observed width.
-func (e *Encoder) space(kind core.RepresentationKind, dimensions int) core.VectorSpace {
-	metric := core.SimilarityCosine
-	if kind == core.RepresentationSparse {
-		metric = core.SimilarityDotProduct
+func (e *Encoder) space(kind retrieval.RepresentationKind, dimensions int) retrieval.VectorSpace {
+	metric := retrieval.SimilarityCosine
+	if kind == retrieval.RepresentationSparse {
+		metric = retrieval.SimilarityDotProduct
 	}
-	return core.VectorSpace{
+	return retrieval.VectorSpace{
 		Provider:   providerName,
 		Model:      e.model,
 		Revision:   e.revision,
@@ -343,6 +343,6 @@ func (e *Encoder) space(kind core.RepresentationKind, dimensions int) core.Vecto
 
 // Compile-time checks that Encoder satisfies both contracts.
 var (
-	_ core.RepresentationEncoder = (*Encoder)(nil)
-	_ core.Embedder              = (*Encoder)(nil)
+	_ retrieval.RepresentationEncoder = (*Encoder)(nil)
+	_ retrieval.Embedder              = (*Encoder)(nil)
 )

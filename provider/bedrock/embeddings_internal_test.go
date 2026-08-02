@@ -13,7 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // mockInvokeClient records every InvokeModel body it is handed and replies with
@@ -196,14 +196,14 @@ func TestDetectEmbeddingFamilyRejectsUnknown(t *testing.T) {
 
 func TestCohereInputType(t *testing.T) {
 	tests := []struct {
-		in   core.EmbeddingInputType
+		in   retrieval.EmbeddingInputType
 		want string
 	}{
-		{core.EmbeddingInputQuery, "search_query"},
-		{core.EmbeddingInputDocument, "search_document"},
+		{retrieval.EmbeddingInputQuery, "search_query"},
+		{retrieval.EmbeddingInputDocument, "search_document"},
 		// Cohere requires the field, so the no-preference case still has to
 		// send something.
-		{core.EmbeddingInputNone, "search_document"},
+		{retrieval.EmbeddingInputNone, "search_document"},
 	}
 
 	for _, tt := range tests {
@@ -275,7 +275,7 @@ func TestEmbedTitanSendsOneCallPerInput(t *testing.T) {
 	}}
 	embedder := titanEmbedder("amazon.titan-embed-text-v2:0", client)
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input: []string{"first", "second"},
 	})
 	if err != nil {
@@ -306,7 +306,7 @@ func TestEmbedTitanV2SendsDimensionsAndNormalize(t *testing.T) {
 	client := &mockInvokeClient{responses: []string{`{"embedding": [0.1], "inputTextTokenCount": 1}`}}
 	embedder := titanEmbedder("amazon.titan-embed-text-v2:0", client)
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:      []string{"hello"},
 		Dimensions: 512,
 	}); err != nil {
@@ -335,7 +335,7 @@ func TestEmbedTitanHonorsNormalizeOption(t *testing.T) {
 	normalize := false
 	embedder.normalize = &normalize
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input: []string{"hello"},
 	}); err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -351,7 +351,7 @@ func TestEmbedTitanV1OmitsDimensionsAndNormalize(t *testing.T) {
 	client := &mockInvokeClient{responses: []string{`{"embedding": [0.1], "inputTextTokenCount": 1}`}}
 	embedder := titanEmbedder("amazon.titan-embed-text-v1", client)
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input: []string{"hello"},
 	}); err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -370,7 +370,7 @@ func TestEmbedTitanV1RejectsDimensions(t *testing.T) {
 	client := &mockInvokeClient{responses: []string{`{"embedding": [0.1]}`}}
 	embedder := titanEmbedder("amazon.titan-embed-text-v1", client)
 
-	_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:      []string{"hello"},
 		Dimensions: 512,
 	})
@@ -387,7 +387,7 @@ func TestEmbedTitanRejectsTruncation(t *testing.T) {
 	embedder := titanEmbedder("amazon.titan-embed-text-v2:0", client)
 	truncate := true
 
-	_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:    []string{"hello"},
 		Truncate: &truncate,
 	})
@@ -405,7 +405,7 @@ func TestEmbedTitanAcceptsTruncateFalse(t *testing.T) {
 	embedder := titanEmbedder("amazon.titan-embed-text-v2:0", client)
 	truncate := false
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:    []string{"hello"},
 		Truncate: &truncate,
 	}); err != nil {
@@ -429,7 +429,7 @@ func TestEmbedTitanErrors(t *testing.T) {
 			client := &mockInvokeClient{responses: []string{tt.response}}
 			embedder := titanEmbedder("amazon.titan-embed-text-v2:0", client)
 
-			_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+			_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
 				t.Fatalf("expected an error containing %q, got %v", tt.wantErr, err)
 			}
@@ -441,7 +441,7 @@ func TestEmbedTitanPropagatesInvokeError(t *testing.T) {
 	client := &mockInvokeClient{err: errors.New("throttled")}
 	embedder := titanEmbedder("amazon.titan-embed-text-v2:0", client)
 
-	_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+	_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 	if err == nil || !strings.Contains(err.Error(), "throttled") {
 		t.Fatalf("expected the underlying error to surface, got %v", err)
 	}
@@ -453,9 +453,9 @@ func TestEmbedCohereSendsOneBatchedCall(t *testing.T) {
 	}}
 	embedder := titanEmbedder("cohere.embed-english-v3", client)
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:     []string{"first", "second"},
-		InputType: core.EmbeddingInputQuery,
+		InputType: retrieval.EmbeddingInputQuery,
 	})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -483,19 +483,19 @@ func TestEmbedCohereSendsOneBatchedCall(t *testing.T) {
 
 func TestEmbedCohereInputTypeMapping(t *testing.T) {
 	tests := []struct {
-		inputType core.EmbeddingInputType
+		inputType retrieval.EmbeddingInputType
 		want      string
 	}{
-		{core.EmbeddingInputQuery, "search_query"},
-		{core.EmbeddingInputDocument, "search_document"},
-		{core.EmbeddingInputNone, "search_document"},
+		{retrieval.EmbeddingInputQuery, "search_query"},
+		{retrieval.EmbeddingInputDocument, "search_document"},
+		{retrieval.EmbeddingInputNone, "search_document"},
 	}
 
 	for _, tt := range tests {
 		client := &mockInvokeClient{responses: []string{`{"embeddings": [[0.1]]}`}}
 		embedder := titanEmbedder("cohere.embed-english-v3", client)
 
-		if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+		if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 			Input:     []string{"hello"},
 			InputType: tt.inputType,
 		}); err != nil {
@@ -517,7 +517,7 @@ func TestEmbedCohereTruncateMapping(t *testing.T) {
 		client := &mockInvokeClient{responses: []string{`{"embeddings": [[0.1]]}`}}
 		embedder := titanEmbedder("cohere.embed-english-v3", client)
 
-		if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+		if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 			Input:    []string{"hello"},
 			Truncate: tt.truncate,
 		}); err != nil {
@@ -533,7 +533,7 @@ func TestEmbedCohereV4SendsOutputDimension(t *testing.T) {
 	client := &mockInvokeClient{responses: []string{`{"embeddings": [[0.1]]}`}}
 	embedder := titanEmbedder("cohere.embed-v4:0", client)
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:      []string{"hello"},
 		Dimensions: 512,
 	}); err != nil {
@@ -554,7 +554,7 @@ func TestEmbedCohereV3RejectsDimensions(t *testing.T) {
 	client := &mockInvokeClient{responses: []string{`{"embeddings": [[0.1]]}`}}
 	embedder := titanEmbedder("cohere.embed-english-v3", client)
 
-	_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:      []string{"hello"},
 		Dimensions: 512,
 	})
@@ -574,7 +574,7 @@ func TestEmbedCohereEmbeddingsByType(t *testing.T) {
 	}}
 	embedder := titanEmbedder("cohere.embed-v4:0", client)
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -604,7 +604,7 @@ func TestEmbedCohereErrors(t *testing.T) {
 			client := &mockInvokeClient{responses: []string{tt.response}}
 			embedder := titanEmbedder("cohere.embed-english-v3", client)
 
-			_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+			_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 				Input: []string{"first", "second"},
 			})
 			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
@@ -618,7 +618,7 @@ func TestEmbedCoherePropagatesInvokeError(t *testing.T) {
 	client := &mockInvokeClient{err: errors.New("throttled")}
 	embedder := titanEmbedder("cohere.embed-english-v3", client)
 
-	_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+	_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 	if err == nil || !strings.Contains(err.Error(), "throttled") {
 		t.Fatalf("expected the underlying error to surface, got %v", err)
 	}
@@ -641,7 +641,7 @@ func TestEmbedCohereSplitsOversizeBatch(t *testing.T) {
 		inputs[i] = fmt.Sprintf("text-%d", i)
 	}
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: inputs})
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: inputs})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -668,7 +668,7 @@ func TestEmbedValidatesRequest(t *testing.T) {
 	client := &mockInvokeClient{responses: []string{`{"embedding": [0.1]}`}}
 	embedder := titanEmbedder("amazon.titan-embed-text-v2:0", client)
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: nil}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: nil}); err == nil {
 		t.Fatal("expected an empty input to be rejected")
 	}
 	if client.calls() != 0 {
@@ -682,7 +682,7 @@ func TestEmbedSendsPrefixedModelIDUnchanged(t *testing.T) {
 	client := &mockInvokeClient{responses: []string{`{"embeddings": [[0.1]]}`}}
 	embedder := titanEmbedder("us.cohere.embed-v4:0", client)
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}}); err != nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}}); err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
 	if client.modelID != "us.cohere.embed-v4:0" {

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	agentictool "github.com/regularkevvv/agentic/tool"
 )
 
@@ -53,42 +54,42 @@ type ExecutionStatus = core.ExecutionStatus
 type Suspension = core.Suspension
 type ExecutionSnapshot = core.ExecutionSnapshot
 type OutputMode = core.OutputMode
-type Embedder = core.Embedder
-type EmbeddingRequest = core.EmbeddingRequest
-type EmbeddingResponse = core.EmbeddingResponse
-type EmbeddingUsage = core.EmbeddingUsage
-type EmbeddingInputType = core.EmbeddingInputType
-type Reranker = core.Reranker
-type RerankRequest = core.RerankRequest
-type RerankResponse = core.RerankResponse
-type RerankResult = core.RerankResult
-type RerankUsage = core.RerankUsage
-type RepresentationEncoder = core.RepresentationEncoder
-type RepresentationKind = core.RepresentationKind
-type RepresentationRequest = core.RepresentationRequest
-type RepresentationResponse = core.RepresentationResponse
-type Representation = core.Representation
-type RepresentationUsage = core.RepresentationUsage
-type RepresentationCapabilities = core.RepresentationCapabilities
-type RepresentationLimits = core.RepresentationLimits
-type RepresentationValidator = core.RepresentationValidator
-type SparseVector = core.SparseVector
-type VectorSpace = core.VectorSpace
-type SimilarityMetric = core.SimilarityMetric
-type UnsupportedRepresentationError = core.UnsupportedRepresentationError
-type InvalidRepresentationRequestError = core.InvalidRepresentationRequestError
-type InvalidRepresentationResponseError = core.InvalidRepresentationResponseError
+type Embedder = retrieval.Embedder
+type EmbeddingRequest = retrieval.EmbeddingRequest
+type EmbeddingResponse = retrieval.EmbeddingResponse
+type EmbeddingUsage = retrieval.EmbeddingUsage
+type EmbeddingInputType = retrieval.EmbeddingInputType
+type Reranker = retrieval.Reranker
+type RerankRequest = retrieval.RerankRequest
+type RerankResponse = retrieval.RerankResponse
+type RerankResult = retrieval.RerankResult
+type RerankUsage = retrieval.RerankUsage
+type RepresentationEncoder = retrieval.RepresentationEncoder
+type RepresentationKind = retrieval.RepresentationKind
+type RepresentationRequest = retrieval.RepresentationRequest
+type RepresentationResponse = retrieval.RepresentationResponse
+type Representation = retrieval.Representation
+type RepresentationUsage = retrieval.RepresentationUsage
+type RepresentationCapabilities = retrieval.RepresentationCapabilities
+type RepresentationLimits = retrieval.RepresentationLimits
+type RepresentationValidator = retrieval.RepresentationValidator
+type SparseVector = retrieval.SparseVector
+type VectorSpace = retrieval.VectorSpace
+type SimilarityMetric = retrieval.SimilarityMetric
+type UnsupportedRepresentationError = retrieval.UnsupportedRepresentationError
+type InvalidRepresentationRequestError = retrieval.InvalidRepresentationRequestError
+type InvalidRepresentationResponseError = retrieval.InvalidRepresentationResponseError
 
 // Domain constants (from core)
 const (
-	EmbeddingInputNone        = core.EmbeddingInputNone
-	EmbeddingInputQuery       = core.EmbeddingInputQuery
-	EmbeddingInputDocument    = core.EmbeddingInputDocument
-	RepresentationDense       = core.RepresentationDense
-	RepresentationSparse      = core.RepresentationSparse
-	RepresentationMultiVector = core.RepresentationMultiVector
-	SimilarityCosine          = core.SimilarityCosine
-	SimilarityDotProduct      = core.SimilarityDotProduct
+	EmbeddingInputNone        = retrieval.EmbeddingInputNone
+	EmbeddingInputQuery       = retrieval.EmbeddingInputQuery
+	EmbeddingInputDocument    = retrieval.EmbeddingInputDocument
+	RepresentationDense       = retrieval.RepresentationDense
+	RepresentationSparse      = retrieval.RepresentationSparse
+	RepresentationMultiVector = retrieval.RepresentationMultiVector
+	SimilarityCosine          = retrieval.SimilarityCosine
+	SimilarityDotProduct      = retrieval.SimilarityDotProduct
 	ToolTypeFunction          = core.ToolTypeFunction
 	ToolChoiceNone            = core.ToolChoiceNone
 	ToolChoiceAuto            = core.ToolChoiceAuto

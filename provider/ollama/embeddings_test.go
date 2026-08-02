@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/ollama"
 )
 
@@ -109,7 +109,7 @@ func TestNewEmbedderSchemelessHost(t *testing.T) {
 				t.Fatalf("NewEmbedder with host %q (useEnv=%v): unexpected error: %v", host, tt.useEnv, err)
 			}
 
-			if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+			if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 				Input: []string{"hello", "world"},
 			}); err != nil {
 				t.Fatalf("Embed unexpected error: %v", err)
@@ -215,5 +215,5 @@ func TestEmbedderImplementsInterface(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var _ core.Embedder = embedder
+	var _ retrieval.Embedder = embedder
 }

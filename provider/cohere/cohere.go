@@ -3,7 +3,7 @@
 //
 // Cohere offers retrieval-tuned embedding models with a required input-type
 // parameter, and a cross-encoder reranking model. This package implements
-// core.Embedder (POST /v2/embed) and core.Reranker (POST /v2/rerank). It does
+// retrieval.Embedder (POST /v2/embed) and retrieval.Reranker (POST /v2/rerank). It does
 // not implement a chat model.
 //
 // The HTTP client is hand-rolled rather than taken from the Cohere Go SDK, so

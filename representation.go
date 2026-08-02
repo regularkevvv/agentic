@@ -3,7 +3,7 @@ package agentic
 import (
 	"context"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // EncodeQueries encodes texts as search queries, returning the requested
@@ -69,7 +69,7 @@ func encode(
 // either invent its own numbers or run with every bound disabled — which would
 // make a consumer's error behavior depend on where the encoder was compiled.
 func DefaultRepresentationLimits() RepresentationLimits {
-	return core.DefaultRepresentationLimits()
+	return retrieval.DefaultRepresentationLimits()
 }
 
 // EmbedderAsRepresentationEncoder presents an existing dense [Embedder] as a
@@ -82,7 +82,7 @@ func DefaultRepresentationLimits() RepresentationLimits {
 // name, Kind to dense, Metric to cosine, Dimensions to the width observed in
 // the first response, and ID to the canonical hash of those fields.
 func EmbedderAsRepresentationEncoder(embedder Embedder, space VectorSpace) (RepresentationEncoder, error) {
-	return core.NewEmbedderEncoder(embedder, space)
+	return retrieval.NewEmbedderEncoder(embedder, space)
 }
 
 // RepresentationEncoderAsEmbedder projects a [RepresentationEncoder] onto the
@@ -93,5 +93,5 @@ func EmbedderAsRepresentationEncoder(embedder Embedder, space VectorSpace) (Repr
 // It fails at construction, not at first call, when the encoder produces no
 // dense output.
 func RepresentationEncoderAsEmbedder(encoder RepresentationEncoder) (Embedder, error) {
-	return core.NewEncoderEmbedder(encoder)
+	return retrieval.NewEncoderEmbedder(encoder)
 }

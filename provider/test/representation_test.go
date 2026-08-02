@@ -6,16 +6,16 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	testprovider "github.com/regularkevvv/agentic/provider/test"
 	"github.com/regularkevvv/agentic/provider/test/conformance"
 )
 
-func allOutputs() []core.RepresentationKind {
-	return []core.RepresentationKind{
-		core.RepresentationDense,
-		core.RepresentationSparse,
-		core.RepresentationMultiVector,
+func allOutputs() []retrieval.RepresentationKind {
+	return []retrieval.RepresentationKind{
+		retrieval.RepresentationDense,
+		retrieval.RepresentationSparse,
+		retrieval.RepresentationMultiVector,
 	}
 }
 
@@ -26,13 +26,13 @@ func TestRepresentationConformance(t *testing.T) {
 	}{
 		{"all outputs", nil},
 		{"dense only", []testprovider.RepresentationOption{
-			testprovider.WithRepresentationOutputs(core.RepresentationDense),
+			testprovider.WithRepresentationOutputs(retrieval.RepresentationDense),
 		}},
 		{"sparse only", []testprovider.RepresentationOption{
-			testprovider.WithRepresentationOutputs(core.RepresentationSparse),
+			testprovider.WithRepresentationOutputs(retrieval.RepresentationSparse),
 		}},
 		{"multi vector only", []testprovider.RepresentationOption{
-			testprovider.WithRepresentationOutputs(core.RepresentationMultiVector),
+			testprovider.WithRepresentationOutputs(retrieval.RepresentationMultiVector),
 		}},
 		{"single output per request", []testprovider.RepresentationOption{
 			testprovider.WithRepresentationMultiOutput(false),
@@ -44,7 +44,7 @@ func TestRepresentationConformance(t *testing.T) {
 			testprovider.WithRepresentationMaxBatchSize(2048),
 		}},
 		{"untyped inputs only", []testprovider.RepresentationOption{
-			testprovider.WithRepresentationInputTypes(core.EmbeddingInputNone),
+			testprovider.WithRepresentationInputTypes(retrieval.EmbeddingInputNone),
 		}},
 		{"empty inputs allowed", []testprovider.RepresentationOption{
 			testprovider.WithRepresentationEmptyInput(true),
@@ -57,7 +57,7 @@ func TestRepresentationConformance(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			conformance.RunRepresentation(t, conformance.RepresentationOptions{
-				NewEncoder: func(*testing.T) core.RepresentationEncoder {
+				NewEncoder: func(*testing.T) retrieval.RepresentationEncoder {
 					return testprovider.NewTestRepresentationEncoder(tc.opts...)
 				},
 				Deterministic: true,
@@ -70,7 +70,7 @@ func TestRepresentationConformance(t *testing.T) {
 // and unable to observe cancellation, which is how a live provider runs it.
 func TestRepresentationConformanceRelaxedOptions(t *testing.T) {
 	conformance.RunRepresentation(t, conformance.RepresentationOptions{
-		NewEncoder: func(*testing.T) core.RepresentationEncoder {
+		NewEncoder: func(*testing.T) retrieval.RepresentationEncoder {
 			return testprovider.NewTestRepresentationEncoder()
 		},
 		Corpus:           []string{"one input only"},
@@ -92,10 +92,10 @@ func TestTestRepresentationEncoderDefaults(t *testing.T) {
 	// encoder's declared support.
 	caps.Outputs[0] = "colbert"
 	caps.InputTypes[0] = "passage"
-	if encoder.Capabilities().Outputs[0] != core.RepresentationDense {
+	if encoder.Capabilities().Outputs[0] != retrieval.RepresentationDense {
 		t.Error("Capabilities() shares its Outputs slice")
 	}
-	if encoder.Capabilities().InputTypes[0] != core.EmbeddingInputNone {
+	if encoder.Capabilities().InputTypes[0] != retrieval.EmbeddingInputNone {
 		t.Error("Capabilities() shares its InputTypes slice")
 	}
 }
@@ -107,16 +107,16 @@ func TestTestRepresentationEncoderName(t *testing.T) {
 	if encoder.Name() != "BAAI/bge-m3" {
 		t.Fatalf("Name() = %q", encoder.Name())
 	}
-	if encoder.Space(core.RepresentationDense).Model != "BAAI/bge-m3" {
+	if encoder.Space(retrieval.RepresentationDense).Model != "BAAI/bge-m3" {
 		t.Error("the configured name should reach the vector space")
 	}
 }
 
 func TestTestRepresentationEncoderIsDeterministic(t *testing.T) {
 	encoder := testprovider.NewTestRepresentationEncoder(testprovider.WithRepresentationDimensions(4))
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:     []string{"sparse vectors in postgres", "sparse vectors in postgres"},
-		InputType: core.EmbeddingInputDocument,
+		InputType: retrieval.EmbeddingInputDocument,
 		Outputs:   allOutputs(),
 	}
 	resp, err := encoder.Encode(context.Background(), req)
@@ -140,8 +140,8 @@ func TestTestRepresentationEncoderIsDeterministic(t *testing.T) {
 // provider whose are not.
 func TestTestRepresentationEncoderSeparatesInputRoles(t *testing.T) {
 	encoder := testprovider.NewTestRepresentationEncoder()
-	encode := func(inputType core.EmbeddingInputType) core.Representation {
-		resp, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	encode := func(inputType retrieval.EmbeddingInputType) retrieval.Representation {
+		resp, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 			Input:     []string{"engineering budget"},
 			InputType: inputType,
 			Outputs:   allOutputs(),
@@ -151,8 +151,8 @@ func TestTestRepresentationEncoderSeparatesInputRoles(t *testing.T) {
 		}
 		return resp.Data[0]
 	}
-	query := encode(core.EmbeddingInputQuery)
-	document := encode(core.EmbeddingInputDocument)
+	query := encode(retrieval.EmbeddingInputQuery)
+	document := encode(retrieval.EmbeddingInputDocument)
 
 	if query.Dense[0] == document.Dense[0] {
 		t.Error("query and document dense encodings are identical")
@@ -166,9 +166,9 @@ func TestTestRepresentationEncoderSeparatesInputRoles(t *testing.T) {
 // retrieval test depends on.
 func TestTestRepresentationEncoderSparseSharesCoordinates(t *testing.T) {
 	encoder := testprovider.NewTestRepresentationEncoder()
-	resp, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	resp, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"quarterly budget report", "budget"},
-		Outputs: []core.RepresentationKind{core.RepresentationSparse},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationSparse},
 	})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -185,9 +185,9 @@ func TestTestRepresentationEncoderSparseSharesCoordinates(t *testing.T) {
 	}
 
 	// A repeated word weighs more than one that occurs once.
-	repeated, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	repeated, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"budget budget budget"},
-		Outputs: []core.RepresentationKind{core.RepresentationSparse},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationSparse},
 	})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -202,13 +202,13 @@ func TestTestRepresentationEncoderSpaces(t *testing.T) {
 		testprovider.WithRepresentationDimensions(16),
 		testprovider.WithRepresentationVocabulary(500),
 	)
-	dense := encoder.Space(core.RepresentationDense)
-	sparse := encoder.Space(core.RepresentationSparse)
+	dense := encoder.Space(retrieval.RepresentationDense)
+	sparse := encoder.Space(retrieval.RepresentationSparse)
 
-	if dense.Dimensions != 16 || dense.Metric != core.SimilarityCosine {
+	if dense.Dimensions != 16 || dense.Metric != retrieval.SimilarityCosine {
 		t.Errorf("dense space = %+v", dense)
 	}
-	if sparse.Dimensions != 500 || sparse.Metric != core.SimilarityDotProduct {
+	if sparse.Dimensions != 500 || sparse.Metric != retrieval.SimilarityDotProduct {
 		t.Errorf("sparse space = %+v", sparse)
 	}
 	if dense.ID == sparse.ID {
@@ -222,10 +222,10 @@ func TestTestRepresentationEncoderSpaces(t *testing.T) {
 // Changing a revision changes the space, so a consumer keyed on the ID stops
 // mixing old and new vectors without being told to.
 func TestTestRepresentationEncoderRevisionChangesSpace(t *testing.T) {
-	first := testprovider.NewTestRepresentationEncoder().Space(core.RepresentationSparse)
+	first := testprovider.NewTestRepresentationEncoder().Space(retrieval.RepresentationSparse)
 	second := testprovider.NewTestRepresentationEncoder(
 		testprovider.WithRepresentationRevision("rev-2", "tok-2"),
-	).Space(core.RepresentationSparse)
+	).Space(retrieval.RepresentationSparse)
 	if first.ID == second.ID {
 		t.Fatal("a revision change produced the same space ID")
 	}
@@ -236,19 +236,19 @@ func TestTestRepresentationEncoderRejectsInvalidOptions(t *testing.T) {
 		testprovider.WithRepresentationDimensions(0),
 		testprovider.WithRepresentationVocabulary(-5),
 	)
-	if encoder.Space(core.RepresentationDense).Dimensions != 8 {
+	if encoder.Space(retrieval.RepresentationDense).Dimensions != 8 {
 		t.Error("a non-positive dimension override should be ignored")
 	}
-	if encoder.Space(core.RepresentationSparse).Dimensions != 4096 {
+	if encoder.Space(retrieval.RepresentationSparse).Dimensions != 4096 {
 		t.Error("a non-positive vocabulary override should be ignored")
 	}
 }
 
 func TestTestRepresentationEncoderRecordsCalls(t *testing.T) {
 	encoder := testprovider.NewTestRepresentationEncoder()
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
 	if _, err := encoder.Encode(context.Background(), req); err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -277,9 +277,9 @@ func TestTestRepresentationEncoderInjectedFailures(t *testing.T) {
 	t.Run("every call", func(t *testing.T) {
 		sentinel := errors.New("injected")
 		encoder := testprovider.NewTestRepresentationEncoder(testprovider.WithRepresentationError(sentinel))
-		_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+		_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 			Input:   []string{"a"},
-			Outputs: []core.RepresentationKind{core.RepresentationDense},
+			Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 		})
 		if !errors.Is(err, sentinel) {
 			t.Fatalf("got %v, want the injected error", err)
@@ -289,16 +289,16 @@ func TestTestRepresentationEncoderInjectedFailures(t *testing.T) {
 	t.Run("chosen call", func(t *testing.T) {
 		sentinel := errors.New("second call fails")
 		encoder := testprovider.NewTestRepresentationEncoder(
-			testprovider.WithRepresentationFailure(func(call int, req *core.RepresentationRequest) error {
+			testprovider.WithRepresentationFailure(func(call int, req *retrieval.RepresentationRequest) error {
 				if call == 1 {
 					return sentinel
 				}
 				return nil
 			}),
 		)
-		req := &core.RepresentationRequest{
+		req := &retrieval.RepresentationRequest{
 			Input:   []string{"a"},
-			Outputs: []core.RepresentationKind{core.RepresentationDense},
+			Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 		}
 		if _, err := encoder.Encode(context.Background(), req); err != nil {
 			t.Fatalf("first call: %v", err)
@@ -311,13 +311,13 @@ func TestTestRepresentationEncoderInjectedFailures(t *testing.T) {
 
 func TestTestRepresentationEncoderRejectsUnsupportedOutputs(t *testing.T) {
 	encoder := testprovider.NewTestRepresentationEncoder(
-		testprovider.WithRepresentationOutputs(core.RepresentationDense),
+		testprovider.WithRepresentationOutputs(retrieval.RepresentationDense),
 	)
-	_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationSparse},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationSparse},
 	})
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
 	if encoder.CallCount() != 0 {
@@ -330,9 +330,9 @@ func TestTestRepresentationEncoderHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := encoder.Encode(ctx, &core.RepresentationRequest{
+	_, err := encoder.Encode(ctx, &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
@@ -341,7 +341,7 @@ func TestTestRepresentationEncoderHonorsCancellation(t *testing.T) {
 
 func TestTestRepresentationEncoderEncodesEmptyInputWhenAllowed(t *testing.T) {
 	encoder := testprovider.NewTestRepresentationEncoder(testprovider.WithRepresentationEmptyInput(true))
-	resp, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	resp, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{""},
 		Outputs: allOutputs(),
 	})
@@ -359,9 +359,9 @@ func TestTestRepresentationEncoderEncodesEmptyInputWhenAllowed(t *testing.T) {
 func TestTestRepresentationEncoderCapsTokenVectors(t *testing.T) {
 	encoder := testprovider.NewTestRepresentationEncoder()
 	long := strings.TrimSpace(strings.Repeat("word ", 600))
-	resp, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	resp, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{long},
-		Outputs: []core.RepresentationKind{core.RepresentationMultiVector},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationMultiVector},
 	})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -373,9 +373,9 @@ func TestTestRepresentationEncoderCapsTokenVectors(t *testing.T) {
 
 func TestTestRepresentationEncoderIsRaceSafe(t *testing.T) {
 	encoder := testprovider.NewTestRepresentationEncoder()
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"concurrent"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
 	done := make(chan struct{})
 	for i := 0; i < 8; i++ {

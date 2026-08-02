@@ -1,4 +1,4 @@
-// Package huggingface implements core.RepresentationEncoder over the Hugging
+// Package huggingface implements retrieval.RepresentationEncoder over the Hugging
 // Face Inference Providers router.
 //
 // [NewShared] calls the router's feature-extraction task, which returns one

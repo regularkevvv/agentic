@@ -8,8 +8,8 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/regularkevvv/agentic/internal/core"
-	"github.com/regularkevvv/agentic/internal/representationbatch"
+	"github.com/regularkevvv/agentic/internal/retrieval"
+	"github.com/regularkevvv/agentic/internal/retrieval/batch"
 )
 
 // inferenceRequest is DeepInfra's native body for a multi-representation
@@ -47,14 +47,14 @@ type inferenceResponse struct {
 	} `json:"inference_status"`
 }
 
-// Encode implements core.RepresentationEncoder.
-func (e *Encoder) Encode(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
+// Encode implements retrieval.RepresentationEncoder.
+func (e *Encoder) Encode(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
 	validator := e.validator()
 	if err := validator.ValidateRequest(req); err != nil {
 		return nil, err
 	}
 
-	resp, err := representationbatch.Chunked(ctx, req, e.batchSize, e.encodeChunk)
+	resp, err := batch.Chunked(ctx, req, e.batchSize, e.encodeChunk)
 	if err != nil {
 		return nil, err
 	}
@@ -64,14 +64,14 @@ func (e *Encoder) Encode(ctx context.Context, req *core.RepresentationRequest) (
 	return resp, nil
 }
 
-// Embed implements core.Embedder by requesting dense output only, so an
+// Embed implements retrieval.Embedder by requesting dense output only, so an
 // application already written against Embedder can point at this provider and
 // adopt its sparse output later.
-func (e *Encoder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+func (e *Encoder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	if e.embedder == nil {
-		return nil, &core.UnsupportedRepresentationError{
+		return nil, &retrieval.UnsupportedRepresentationError{
 			Provider:  providerName,
-			Kind:      core.RepresentationDense,
+			Kind:      retrieval.RepresentationDense,
 			Supported: e.outputs,
 		}
 	}
@@ -79,12 +79,12 @@ func (e *Encoder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.
 }
 
 // encodeChunk issues one provider call for the inputs it is given.
-func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
+func (e *Encoder) encodeChunk(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
 	body := inferenceRequest{
 		Inputs:    req.Input,
-		Dense:     req.Wants(core.RepresentationDense),
-		Sparse:    req.Wants(core.RepresentationSparse),
-		Colbert:   req.Wants(core.RepresentationMultiVector),
+		Dense:     req.Wants(retrieval.RepresentationDense),
+		Sparse:    req.Wants(retrieval.RepresentationSparse),
+		Colbert:   req.Wants(retrieval.RepresentationMultiVector),
 		Normalize: e.normalize,
 	}
 
@@ -110,24 +110,24 @@ func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationReque
 
 // buildResponse turns one decoded provider response into the core shape,
 // observing each space's width rather than assuming it.
-func (e *Encoder) buildResponse(req *core.RepresentationRequest, wire *inferenceResponse, responseBytes int) (*core.RepresentationResponse, error) {
+func (e *Encoder) buildResponse(req *retrieval.RepresentationRequest, wire *inferenceResponse, responseBytes int) (*retrieval.RepresentationResponse, error) {
 	count := len(req.Input)
-	data := make([]core.Representation, count)
-	spaces := make(map[core.RepresentationKind]core.VectorSpace, len(req.Outputs))
+	data := make([]retrieval.Representation, count)
+	spaces := make(map[retrieval.RepresentationKind]retrieval.VectorSpace, len(req.Outputs))
 
-	if req.Wants(core.RepresentationDense) {
+	if req.Wants(retrieval.RepresentationDense) {
 		if len(wire.Embeddings) != count {
-			return nil, cardinalityError(core.RepresentationDense, len(wire.Embeddings), count)
+			return nil, cardinalityError(retrieval.RepresentationDense, len(wire.Embeddings), count)
 		}
 		for i, vec := range wire.Embeddings {
 			data[i].Dense = vec
 		}
-		spaces[core.RepresentationDense] = e.space(core.RepresentationDense, width(wire.Embeddings))
+		spaces[retrieval.RepresentationDense] = e.space(retrieval.RepresentationDense, width(wire.Embeddings))
 	}
 
-	if req.Wants(core.RepresentationSparse) {
+	if req.Wants(retrieval.RepresentationSparse) {
 		if len(wire.Sparse) != count {
-			return nil, cardinalityError(core.RepresentationSparse, len(wire.Sparse), count)
+			return nil, cardinalityError(retrieval.RepresentationSparse, len(wire.Sparse), count)
 		}
 		vocabulary := e.sparseVocabulary
 		// One buffer for the batch: the vocabulary-width row is decoded into
@@ -141,10 +141,10 @@ func (e *Encoder) buildResponse(req *core.RepresentationRequest, wire *inference
 			}
 			if observed > 0 {
 				if vocabulary > 0 && observed != vocabulary {
-					return nil, &core.InvalidRepresentationResponseError{
+					return nil, &retrieval.InvalidRepresentationResponseError{
 						Provider: providerName,
 						Item:     i,
-						Kind:     core.RepresentationSparse,
+						Kind:     retrieval.RepresentationSparse,
 						Problem: fmt.Sprintf("sparse row is %d wide, but the vocabulary is declared as %d",
 							observed, vocabulary),
 					}
@@ -154,25 +154,25 @@ func (e *Encoder) buildResponse(req *core.RepresentationRequest, wire *inference
 			data[i].Sparse = vec
 		}
 		if vocabulary == 0 {
-			return nil, &core.InvalidRepresentationResponseError{
+			return nil, &retrieval.InvalidRepresentationResponseError{
 				Provider: providerName,
 				Item:     -1,
-				Kind:     core.RepresentationSparse,
+				Kind:     retrieval.RepresentationSparse,
 				Problem: "sparse output arrived as a coordinate map, which does not reveal the " +
 					"tokenizer vocabulary size; set it with WithSparseVocabulary",
 			}
 		}
-		spaces[core.RepresentationSparse] = e.space(core.RepresentationSparse, vocabulary)
+		spaces[retrieval.RepresentationSparse] = e.space(retrieval.RepresentationSparse, vocabulary)
 	}
 
-	if req.Wants(core.RepresentationMultiVector) {
+	if req.Wants(retrieval.RepresentationMultiVector) {
 		if len(wire.Colbert) != count {
-			return nil, cardinalityError(core.RepresentationMultiVector, len(wire.Colbert), count)
+			return nil, cardinalityError(retrieval.RepresentationMultiVector, len(wire.Colbert), count)
 		}
 		for i, vectors := range wire.Colbert {
 			data[i].MultiVector = vectors
 		}
-		spaces[core.RepresentationMultiVector] = e.space(core.RepresentationMultiVector, tokenWidth(wire.Colbert))
+		spaces[retrieval.RepresentationMultiVector] = e.space(retrieval.RepresentationMultiVector, tokenWidth(wire.Colbert))
 	}
 
 	inputBytes := 0
@@ -184,11 +184,11 @@ func (e *Encoder) buildResponse(req *core.RepresentationRequest, wire *inference
 		tokens = wire.InferenceStatus.TokensInput
 	}
 
-	return &core.RepresentationResponse{
+	return &retrieval.RepresentationResponse{
 		Data:   data,
 		Spaces: spaces,
 		Model:  e.model,
-		Usage: core.RepresentationUsage{
+		Usage: retrieval.RepresentationUsage{
 			InputTokens:  tokens,
 			RequestCount: 1,
 			InputBytes:   inputBytes,
@@ -197,8 +197,8 @@ func (e *Encoder) buildResponse(req *core.RepresentationRequest, wire *inference
 	}, nil
 }
 
-func cardinalityError(kind core.RepresentationKind, got, want int) error {
-	return &core.InvalidRepresentationResponseError{
+func cardinalityError(kind retrieval.RepresentationKind, got, want int) error {
+	return &retrieval.InvalidRepresentationResponseError{
 		Provider: providerName,
 		Item:     -1,
 		Kind:     kind,
@@ -235,7 +235,7 @@ func tokenWidth(vectors [][][]float32) int {
 //
 // The second return value is the observed vocabulary size, or zero when the
 // shape does not carry one.
-func decodeSparse(raw json.RawMessage, item int, scratch *[]float32) (*core.SparseVector, int, error) {
+func decodeSparse(raw json.RawMessage, item int, scratch *[]float32) (*retrieval.SparseVector, int, error) {
 	trimmed := bytes.TrimSpace(raw)
 	if len(trimmed) == 0 {
 		return nil, 0, sparseError(item, "sparse row is empty")
@@ -270,14 +270,14 @@ func decodeSparse(raw json.RawMessage, item int, scratch *[]float32) (*core.Spar
 // the batch. That keeps the stdlib's fast path and pays the megabyte once per
 // request rather than once per input: 464 B/op reusing the buffer against
 // 5.2 MB/op allocating a fresh one, at the same speed.
-func decodeSparseRow(raw json.RawMessage, item int, scratch *[]float32) (*core.SparseVector, int, error) {
+func decodeSparseRow(raw json.RawMessage, item int, scratch *[]float32) (*retrieval.SparseVector, int, error) {
 	row := (*scratch)[:0]
 	if err := json.Unmarshal(raw, &row); err != nil {
 		return nil, 0, sparseError(item, "sparse row is not an array of weights")
 	}
 	*scratch = row
 
-	vec := &core.SparseVector{}
+	vec := &retrieval.SparseVector{}
 	for index, value := range row {
 		if value == 0 {
 			continue
@@ -294,7 +294,7 @@ func decodeSparseRow(raw json.RawMessage, item int, scratch *[]float32) (*core.S
 // map decode resolves a repeated key by keeping the last value. A response
 // that assigns one token two different weights is malformed, and collapsing it
 // silently would store whichever weight happened to come second.
-func decodeSparseMap(raw json.RawMessage, item int) (*core.SparseVector, error) {
+func decodeSparseMap(raw json.RawMessage, item int) (*retrieval.SparseVector, error) {
 	// The value is already known to be syntactically valid JSON, because the
 	// whole response was unmarshaled before this ran. Walking tokens is only
 	// about duplicate keys.
@@ -331,7 +331,7 @@ func decodeSparseMap(raw json.RawMessage, item int) (*core.SparseVector, error) 
 	}
 	sort.Slice(indices, func(i, j int) bool { return indices[i] < indices[j] })
 
-	vec := &core.SparseVector{
+	vec := &retrieval.SparseVector{
 		Indices: indices,
 		Values:  make([]float32, len(indices)),
 	}
@@ -342,10 +342,10 @@ func decodeSparseMap(raw json.RawMessage, item int) (*core.SparseVector, error) 
 }
 
 func sparseError(item int, problem string) error {
-	return &core.InvalidRepresentationResponseError{
+	return &retrieval.InvalidRepresentationResponseError{
 		Provider: providerName,
 		Item:     item,
-		Kind:     core.RepresentationSparse,
+		Kind:     retrieval.RepresentationSparse,
 		Problem:  problem,
 	}
 }

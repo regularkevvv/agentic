@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 func TestNewEmbedderDefaultsToGeminiEmbedding001(t *testing.T) {
@@ -122,17 +122,17 @@ func TestResolveTaskType(t *testing.T) {
 	tests := []struct {
 		name       string
 		configured string
-		inputType  core.EmbeddingInputType
+		inputType  retrieval.EmbeddingInputType
 		want       string
 	}{
-		{"query maps to retrieval query", "", core.EmbeddingInputQuery, TaskTypeRetrievalQuery},
-		{"document maps to retrieval document", "", core.EmbeddingInputDocument, TaskTypeRetrievalDocument},
-		{"none leaves task type unset", "", core.EmbeddingInputNone, ""},
-		{"none falls back to the configured task", TaskTypeClustering, core.EmbeddingInputNone, TaskTypeClustering},
+		{"query maps to retrieval query", "", retrieval.EmbeddingInputQuery, TaskTypeRetrievalQuery},
+		{"document maps to retrieval document", "", retrieval.EmbeddingInputDocument, TaskTypeRetrievalDocument},
+		{"none leaves task type unset", "", retrieval.EmbeddingInputNone, ""},
+		{"none falls back to the configured task", TaskTypeClustering, retrieval.EmbeddingInputNone, TaskTypeClustering},
 		// A per-request setting beats a constructor default, matching the
 		// precedence the other providers in this tree use.
-		{"query overrides the configured task", TaskTypeClustering, core.EmbeddingInputQuery, TaskTypeRetrievalQuery},
-		{"document overrides the configured task", TaskTypeClassification, core.EmbeddingInputDocument, TaskTypeRetrievalDocument},
+		{"query overrides the configured task", TaskTypeClustering, retrieval.EmbeddingInputQuery, TaskTypeRetrievalQuery},
+		{"document overrides the configured task", TaskTypeClassification, retrieval.EmbeddingInputDocument, TaskTypeRetrievalDocument},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -179,7 +179,7 @@ func TestNewEmbedderSingleInput(t *testing.T) {
 func TestBuildConfigDimensions(t *testing.T) {
 	e := &Embedder{}
 
-	cfg, err := e.buildConfig(&core.EmbeddingRequest{Input: []string{"a"}})
+	cfg, err := e.buildConfig(&retrieval.EmbeddingRequest{Input: []string{"a"}})
 	if err != nil {
 		t.Fatalf("buildConfig: %v", err)
 	}
@@ -187,7 +187,7 @@ func TestBuildConfigDimensions(t *testing.T) {
 		t.Error("expected no dimensionality override when Dimensions is zero")
 	}
 
-	cfg, err = e.buildConfig(&core.EmbeddingRequest{Input: []string{"a"}, Dimensions: 768})
+	cfg, err = e.buildConfig(&retrieval.EmbeddingRequest{Input: []string{"a"}, Dimensions: 768})
 	if err != nil {
 		t.Fatalf("buildConfig: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestBuildConfigDimensions(t *testing.T) {
 func TestBuildConfigRejectsTruncateFalse(t *testing.T) {
 	no := false
 	for _, e := range []*Embedder{{}, {vertexAI: true}} {
-		_, err := e.buildConfig(&core.EmbeddingRequest{Input: []string{"a"}, Truncate: &no})
+		_, err := e.buildConfig(&retrieval.EmbeddingRequest{Input: []string{"a"}, Truncate: &no})
 		if err == nil {
 			t.Fatal("expected an error for Truncate=false")
 		}
@@ -217,12 +217,12 @@ func TestBuildConfigTruncateTrueNeedsVertex(t *testing.T) {
 	yes := true
 
 	e := &Embedder{}
-	if _, err := e.buildConfig(&core.EmbeddingRequest{Input: []string{"a"}, Truncate: &yes}); err == nil {
+	if _, err := e.buildConfig(&retrieval.EmbeddingRequest{Input: []string{"a"}, Truncate: &yes}); err == nil {
 		t.Error("expected an error for Truncate=true on the Gemini API")
 	}
 
 	vertex := &Embedder{vertexAI: true}
-	cfg, err := vertex.buildConfig(&core.EmbeddingRequest{Input: []string{"a"}, Truncate: &yes})
+	cfg, err := vertex.buildConfig(&retrieval.EmbeddingRequest{Input: []string{"a"}, Truncate: &yes})
 	if err != nil {
 		t.Fatalf("buildConfig: %v", err)
 	}
@@ -233,7 +233,7 @@ func TestBuildConfigTruncateTrueNeedsVertex(t *testing.T) {
 
 func TestBuildConfigTruncateNilOmitsIt(t *testing.T) {
 	e := &Embedder{vertexAI: true}
-	cfg, err := e.buildConfig(&core.EmbeddingRequest{Input: []string{"a"}})
+	cfg, err := e.buildConfig(&retrieval.EmbeddingRequest{Input: []string{"a"}})
 	if err != nil {
 		t.Fatalf("buildConfig: %v", err)
 	}
@@ -247,12 +247,12 @@ func TestEmbedValidatesRequest(t *testing.T) {
 
 	tests := []struct {
 		name string
-		req  *core.EmbeddingRequest
+		req  *retrieval.EmbeddingRequest
 	}{
-		{"empty input", &core.EmbeddingRequest{}},
-		{"empty string input", &core.EmbeddingRequest{Input: []string{""}}},
-		{"bad input type", &core.EmbeddingRequest{Input: []string{"a"}, InputType: "nonsense"}},
-		{"negative dimensions", &core.EmbeddingRequest{Input: []string{"a"}, Dimensions: -1}},
+		{"empty input", &retrieval.EmbeddingRequest{}},
+		{"empty string input", &retrieval.EmbeddingRequest{Input: []string{""}}},
+		{"bad input type", &retrieval.EmbeddingRequest{Input: []string{"a"}, InputType: "nonsense"}},
+		{"negative dimensions", &retrieval.EmbeddingRequest{Input: []string{"a"}, Dimensions: -1}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -267,11 +267,11 @@ func TestEmbedValidatesRequest(t *testing.T) {
 func TestEmbedRejectsUnsupportedTruncateBeforeCalling(t *testing.T) {
 	e := MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
 	no := false
-	if _, err := e.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a"}, Truncate: &no}); err == nil {
+	if _, err := e.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a"}, Truncate: &no}); err == nil {
 		t.Error("expected an error for Truncate=false")
 	}
 }
 
 func TestEmbedderImplementsCoreEmbedder(t *testing.T) {
-	var _ core.Embedder = MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
+	var _ retrieval.Embedder = MustNewEmbedder("gemini-embedding-001", WithAPIKey("test-key"))
 }

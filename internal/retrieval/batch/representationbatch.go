@@ -13,13 +13,13 @@
 // for models that accept exactly one input per call; no multi-representation
 // service in scope has that shape, and an untested concurrency helper with no
 // caller is a liability rather than symmetry.
-package representationbatch
+package batch
 
 import (
 	"context"
 	"fmt"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // Chunked encodes inputs in batches of at most size, preserving input order
@@ -35,10 +35,10 @@ import (
 // whether to restart the batch at all.
 func Chunked(
 	ctx context.Context,
-	req *core.RepresentationRequest,
+	req *retrieval.RepresentationRequest,
 	size int,
-	fn func(context.Context, *core.RepresentationRequest) (*core.RepresentationResponse, error),
-) (*core.RepresentationResponse, error) {
+	fn func(context.Context, *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error),
+) (*retrieval.RepresentationResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("representationbatch: request cannot be nil")
 	}
@@ -46,8 +46,8 @@ func Chunked(
 		return single(ctx, req, fn)
 	}
 
-	merged := &core.RepresentationResponse{
-		Data: make([]core.Representation, 0, len(req.Input)),
+	merged := &retrieval.RepresentationResponse{
+		Data: make([]retrieval.Representation, 0, len(req.Input)),
 	}
 	first := true
 
@@ -99,9 +99,9 @@ func Chunked(
 // be billed for work they cannot use.
 func single(
 	ctx context.Context,
-	req *core.RepresentationRequest,
-	fn func(context.Context, *core.RepresentationRequest) (*core.RepresentationResponse, error),
-) (*core.RepresentationResponse, error) {
+	req *retrieval.RepresentationRequest,
+	fn func(context.Context, *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error),
+) (*retrieval.RepresentationResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func (e *CountMismatchError) Error() string {
 // SpaceMismatchError reports two chunks of one logical request encoding into
 // different vector spaces, which makes their outputs incomparable.
 type SpaceMismatchError struct {
-	Kind core.RepresentationKind
+	Kind retrieval.RepresentationKind
 	Want string
 	Got  string
 }
@@ -155,7 +155,7 @@ func (e *ModelMismatchError) Error() string {
 
 // sameSpaces checks that a chunk encoded into exactly the spaces the batch
 // started with. Both the set of kinds and each descriptor must match.
-func sameSpaces(want, got map[core.RepresentationKind]core.VectorSpace) error {
+func sameSpaces(want, got map[retrieval.RepresentationKind]retrieval.VectorSpace) error {
 	for kind, wantSpace := range want {
 		gotSpace, ok := got[kind]
 		if !ok {
@@ -173,11 +173,11 @@ func sameSpaces(want, got map[core.RepresentationKind]core.VectorSpace) error {
 	return nil
 }
 
-func cloneSpaces(spaces map[core.RepresentationKind]core.VectorSpace) map[core.RepresentationKind]core.VectorSpace {
+func cloneSpaces(spaces map[retrieval.RepresentationKind]retrieval.VectorSpace) map[retrieval.RepresentationKind]retrieval.VectorSpace {
 	if spaces == nil {
 		return nil
 	}
-	out := make(map[core.RepresentationKind]core.VectorSpace, len(spaces))
+	out := make(map[retrieval.RepresentationKind]retrieval.VectorSpace, len(spaces))
 	for kind, space := range spaces {
 		out[kind] = space
 	}

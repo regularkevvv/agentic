@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/sagemaker"
 	"github.com/regularkevvv/agentic/provider/test/conformance"
 
@@ -20,7 +20,7 @@ import (
 	"github.com/aws/smithy-go"
 )
 
-const goldenResponsePath = "../../internal/representationwire/testdata/response.json"
+const goldenResponsePath = "../../internal/retrieval/wire/testdata/response.json"
 
 // stubRuntime records invocations and answers them from a scripted function.
 // SageMaker has no local emulator, so this is how the transport is driven
@@ -81,20 +81,20 @@ func newEncoder(t *testing.T, runtime sagemaker.InvokeAPI, opts ...sagemaker.Opt
 	return encoder
 }
 
-func goldenRequest() *core.RepresentationRequest {
+func goldenRequest() *retrieval.RepresentationRequest {
 	truncate := true
-	return &core.RepresentationRequest{
+	return &retrieval.RepresentationRequest{
 		Input:     []string{"a document", "another document"},
-		InputType: core.EmbeddingInputDocument,
-		Outputs:   []core.RepresentationKind{core.RepresentationDense, core.RepresentationSparse},
+		InputType: retrieval.EmbeddingInputDocument,
+		Outputs:   []retrieval.RepresentationKind{retrieval.RepresentationDense, retrieval.RepresentationSparse},
 		Truncate:  &truncate,
 	}
 }
 
-func denseRequest(inputs ...string) *core.RepresentationRequest {
-	return &core.RepresentationRequest{
+func denseRequest(inputs ...string) *retrieval.RepresentationRequest {
+	return &retrieval.RepresentationRequest{
 		Input:   inputs,
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
 }
 
@@ -115,8 +115,8 @@ func TestNewValidatesConfiguration(t *testing.T) {
 		{"zero response limit", "e", []sagemaker.Option{sagemaker.WithMaxResponseBytes(0)}, "max response bytes"},
 		{"unknown output", "e", []sagemaker.Option{sagemaker.WithOutputs("colbert")}, "not dense, sparse, or multi_vector"},
 		{"invalid pinned space", "e", []sagemaker.Option{
-			sagemaker.WithVectorSpaces(map[core.RepresentationKind]core.VectorSpace{
-				core.RepresentationDense: {Provider: "p"},
+			sagemaker.WithVectorSpaces(map[retrieval.RepresentationKind]retrieval.VectorSpace{
+				retrieval.RepresentationDense: {Provider: "p"},
 			}),
 		}, "pinned dense space"},
 	}
@@ -246,8 +246,8 @@ func TestEncodeSendsTheProtocol(t *testing.T) {
 	if len(resp.Data) != 2 || resp.Data[1].Sparse.Indices[0] != 914 {
 		t.Errorf("decoded data = %+v", resp.Data)
 	}
-	if resp.Spaces[core.RepresentationSparse].Dimensions != 250002 {
-		t.Errorf("sparse space = %+v", resp.Spaces[core.RepresentationSparse])
+	if resp.Spaces[retrieval.RepresentationSparse].Dimensions != 250002 {
+		t.Errorf("sparse space = %+v", resp.Spaces[retrieval.RepresentationSparse])
 	}
 }
 
@@ -330,41 +330,41 @@ func TestEncodeBatchesLargeRequests(t *testing.T) {
 // --------------------------------------------------------------------------
 
 func TestEncodeUsesPinnedSpacesWhenTheHandlerReportsNone(t *testing.T) {
-	pinned := core.VectorSpace{
+	pinned := retrieval.VectorSpace{
 		ID:         "my-index-space",
 		Provider:   "sagemaker",
 		Model:      "BAAI/bge-m3",
 		Revision:   "rev-1",
 		Tokenizer:  "tok-1",
-		Kind:       core.RepresentationDense,
+		Kind:       retrieval.RepresentationDense,
 		Dimensions: 2,
-		Metric:     core.SimilarityCosine,
+		Metric:     retrieval.SimilarityCosine,
 	}
 	runtime := respondWith(`{"version":"agentic.representations.v1","model":"BAAI/bge-m3","data":[{"dense":[0.1,0.2]}]}`)
 	encoder := newEncoder(t, runtime, sagemaker.WithVectorSpaces(
-		map[core.RepresentationKind]core.VectorSpace{core.RepresentationDense: pinned}))
+		map[retrieval.RepresentationKind]retrieval.VectorSpace{retrieval.RepresentationDense: pinned}))
 
 	resp, err := encoder.Encode(context.Background(), denseRequest("a"))
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
-	if resp.Spaces[core.RepresentationDense].ID != "my-index-space" {
-		t.Errorf("space = %+v", resp.Spaces[core.RepresentationDense])
+	if resp.Spaces[retrieval.RepresentationDense].ID != "my-index-space" {
+		t.Errorf("space = %+v", resp.Spaces[retrieval.RepresentationDense])
 	}
 }
 
 // A redeployment onto different weights must fail rather than quietly writing
 // incomparable vectors into an existing index.
 func TestEncodeRejectsASpaceThatContradictsThePin(t *testing.T) {
-	pinned := core.VectorSpace{
+	pinned := retrieval.VectorSpace{
 		ID: "my-index-space", Provider: "sagemaker", Model: "BAAI/bge-m3",
-		Revision: "rev-1", Kind: core.RepresentationDense, Dimensions: 2, Metric: core.SimilarityCosine,
+		Revision: "rev-1", Kind: retrieval.RepresentationDense, Dimensions: 2, Metric: retrieval.SimilarityCosine,
 	}
 	runtime := respondWith(`{"version":"agentic.representations.v1","model":"BAAI/bge-m3",
 		"spaces":{"dense":{"id":"my-index-space","provider":"sagemaker","model":"BAAI/bge-m3","revision":"rev-2","kind":"dense","dimensions":2,"metric":"cosine"}},
 		"data":[{"dense":[0.1,0.2]}]}`)
 	encoder := newEncoder(t, runtime, sagemaker.WithVectorSpaces(
-		map[core.RepresentationKind]core.VectorSpace{core.RepresentationDense: pinned}))
+		map[retrieval.RepresentationKind]retrieval.VectorSpace{retrieval.RepresentationDense: pinned}))
 
 	_, err := encoder.Encode(context.Background(), denseRequest("a"))
 	if err == nil || !strings.Contains(err.Error(), "configured for my-index-space") {
@@ -511,21 +511,21 @@ func TestEncodeRejectsMalformedResponses(t *testing.T) {
 }
 
 func TestEncodeRejectsUnsupportedOutputs(t *testing.T) {
-	encoder := newEncoder(t, respondWith("{}"), sagemaker.WithOutputs(core.RepresentationDense))
-	_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	encoder := newEncoder(t, respondWith("{}"), sagemaker.WithOutputs(retrieval.RepresentationDense))
+	_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationSparse},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationSparse},
 	})
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
 }
 
 func TestConfiguredLimitsAreEnforced(t *testing.T) {
 	encoder := newEncoder(t, respondWith("{}"),
-		sagemaker.WithLimits(core.RepresentationLimits{MaxInputs: 1}))
+		sagemaker.WithLimits(retrieval.RepresentationLimits{MaxInputs: 1}))
 	_, err := encoder.Encode(context.Background(), denseRequest("a", "b"))
-	if !errors.Is(err, core.ErrInvalidRepresentationRequest) {
+	if !errors.Is(err, retrieval.ErrInvalidRepresentationRequest) {
 		t.Fatalf("got %v, want the configured limit to be enforced", err)
 	}
 }
@@ -540,7 +540,7 @@ func TestEmbedProjectsDenseOutput(t *testing.T) {
 		"data":[{"dense":[0.1,0.2]}],"usage":{"input_tokens":3,"request_count":1}}`)
 	encoder := newEncoder(t, runtime)
 
-	resp, err := encoder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a"}})
+	resp, err := encoder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -557,16 +557,16 @@ func TestEmbedProjectsDenseOutput(t *testing.T) {
 }
 
 func TestEmbedFailsWhenDenseIsNotServed(t *testing.T) {
-	encoder := newEncoder(t, respondWith("{}"), sagemaker.WithOutputs(core.RepresentationSparse))
-	_, err := encoder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a"}})
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	encoder := newEncoder(t, respondWith("{}"), sagemaker.WithOutputs(retrieval.RepresentationSparse))
+	_, err := encoder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a"}})
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
 }
 
 func TestConformance(t *testing.T) {
 	conformance.RunRepresentation(t, conformance.RepresentationOptions{
-		NewEncoder: func(t *testing.T) core.RepresentationEncoder {
+		NewEncoder: func(t *testing.T) retrieval.RepresentationEncoder {
 			runtime := &stubRuntime{
 				respond: func(_ int, in *sagemakerruntime.InvokeEndpointInput) (*sagemakerruntime.InvokeEndpointOutput, error) {
 					var body struct {

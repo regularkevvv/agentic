@@ -1,6 +1,6 @@
 // Package endpoint provides a client for any server speaking
 // agentic.representations.v1, the protocol defined by the JSON Schemas in
-// internal/representationwire/testdata.
+// internal/retrieval/wire/testdata.
 //
 // It POSTs protocol JSON to a URL. That URL may be a Hugging Face Inference
 // Endpoint, a container on Kubernetes, a Modal or Fly.io deployment, or a
@@ -29,10 +29,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/providerhttp"
-	"github.com/regularkevvv/agentic/internal/representationbatch"
-	"github.com/regularkevvv/agentic/internal/representationwire"
+	"github.com/regularkevvv/agentic/internal/retrieval"
+	"github.com/regularkevvv/agentic/internal/retrieval/batch"
+	"github.com/regularkevvv/agentic/internal/retrieval/wire"
 )
 
 // providerName identifies this package in vector spaces and errors. It reaches
@@ -57,10 +57,10 @@ type Encoder struct {
 	endpoint  string
 	model     string
 	batchSize int
-	outputs   []core.RepresentationKind
-	spaces    map[core.RepresentationKind]core.VectorSpace
-	limits    core.RepresentationLimits
-	embedder  *core.EncoderEmbedder
+	outputs   []retrieval.RepresentationKind
+	spaces    map[retrieval.RepresentationKind]retrieval.VectorSpace
+	limits    retrieval.RepresentationLimits
+	embedder  *retrieval.EncoderEmbedder
 }
 
 // New creates an encoder for a server running the agentic.representations.v1
@@ -96,10 +96,10 @@ func New(endpointURL string, opts ...Option) (*Encoder, error) {
 
 	outputs := cfg.outputs
 	if outputs == nil {
-		outputs = []core.RepresentationKind{
-			core.RepresentationDense,
-			core.RepresentationSparse,
-			core.RepresentationMultiVector,
+		outputs = []retrieval.RepresentationKind{
+			retrieval.RepresentationDense,
+			retrieval.RepresentationSparse,
+			retrieval.RepresentationMultiVector,
 		}
 	}
 	for _, kind := range outputs {
@@ -119,7 +119,7 @@ func New(endpointURL string, opts ...Option) (*Encoder, error) {
 		return nil, err
 	}
 
-	limits := core.DefaultRepresentationLimits()
+	limits := retrieval.DefaultRepresentationLimits()
 	if cfg.limits != nil {
 		limits = *cfg.limits
 	}
@@ -133,8 +133,8 @@ func New(endpointURL string, opts ...Option) (*Encoder, error) {
 		spaces:    cfg.spaces,
 		limits:    limits,
 	}
-	if encoder.Capabilities().Supports(core.RepresentationDense) {
-		encoder.embedder, err = core.NewEncoderEmbedder(encoder)
+	if encoder.Capabilities().Supports(retrieval.RepresentationDense) {
+		encoder.embedder, err = retrieval.NewEncoderEmbedder(encoder)
 		if err != nil {
 			return nil, err
 		}
@@ -173,7 +173,7 @@ func resolveToken(cfg *config) error {
 	return nil
 }
 
-// Name implements core.RepresentationEncoder. It reports the configured model
+// Name implements retrieval.RepresentationEncoder. It reports the configured model
 // name, falling back to the endpoint URL when none was configured, because an
 // endpoint is a deployment rather than a model and may not name one.
 func (e *Encoder) Name() string {
@@ -183,36 +183,36 @@ func (e *Encoder) Name() string {
 	return e.endpoint
 }
 
-// Capabilities implements core.RepresentationEncoder.
-func (e *Encoder) Capabilities() core.RepresentationCapabilities {
-	return core.RepresentationCapabilities{
-		Outputs: append([]core.RepresentationKind(nil), e.outputs...),
-		InputTypes: []core.EmbeddingInputType{
-			core.EmbeddingInputNone,
-			core.EmbeddingInputQuery,
-			core.EmbeddingInputDocument,
+// Capabilities implements retrieval.RepresentationEncoder.
+func (e *Encoder) Capabilities() retrieval.RepresentationCapabilities {
+	return retrieval.RepresentationCapabilities{
+		Outputs: append([]retrieval.RepresentationKind(nil), e.outputs...),
+		InputTypes: []retrieval.EmbeddingInputType{
+			retrieval.EmbeddingInputNone,
+			retrieval.EmbeddingInputQuery,
+			retrieval.EmbeddingInputDocument,
 		},
 		SupportsTruncation:  true,
 		SupportsMultiOutput: true,
 	}
 }
 
-func (e *Encoder) validator() core.RepresentationValidator {
-	return core.RepresentationValidator{
+func (e *Encoder) validator() retrieval.RepresentationValidator {
+	return retrieval.RepresentationValidator{
 		Provider:     providerName,
 		Capabilities: e.Capabilities(),
 		Limits:       e.limits,
 	}
 }
 
-// Encode implements core.RepresentationEncoder.
-func (e *Encoder) Encode(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
+// Encode implements retrieval.RepresentationEncoder.
+func (e *Encoder) Encode(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
 	validator := e.validator()
 	if err := validator.ValidateRequest(req); err != nil {
 		return nil, err
 	}
 
-	resp, err := representationbatch.Chunked(ctx, req, e.batchSize, e.encodeChunk)
+	resp, err := batch.Chunked(ctx, req, e.batchSize, e.encodeChunk)
 	if err != nil {
 		return nil, err
 	}
@@ -222,12 +222,12 @@ func (e *Encoder) Encode(ctx context.Context, req *core.RepresentationRequest) (
 	return resp, nil
 }
 
-func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
-	payload, err := e.client.Post(ctx, e.endpoint, representationwire.NewRequest(req))
+func (e *Encoder) encodeChunk(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
+	payload, err := e.client.Post(ctx, e.endpoint, wire.NewRequest(req))
 	if err != nil {
 		return nil, err
 	}
-	return representationwire.Decode(payload, req, representationwire.DecodeOptions{
+	return wire.Decode(payload, req, wire.DecodeOptions{
 		Provider:      providerName,
 		Model:         e.Name(),
 		Expected:      e.spaces,
@@ -235,12 +235,12 @@ func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationReque
 	})
 }
 
-// Embed implements core.Embedder by requesting dense output only.
-func (e *Encoder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+// Embed implements retrieval.Embedder by requesting dense output only.
+func (e *Encoder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	if e.embedder == nil {
-		return nil, &core.UnsupportedRepresentationError{
+		return nil, &retrieval.UnsupportedRepresentationError{
 			Provider:  providerName,
-			Kind:      core.RepresentationDense,
+			Kind:      retrieval.RepresentationDense,
 			Supported: e.outputs,
 		}
 	}
@@ -249,6 +249,6 @@ func (e *Encoder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.
 
 // Compile-time checks that Encoder satisfies both contracts.
 var (
-	_ core.RepresentationEncoder = (*Encoder)(nil)
-	_ core.Embedder              = (*Encoder)(nil)
+	_ retrieval.RepresentationEncoder = (*Encoder)(nil)
+	_ retrieval.Embedder              = (*Encoder)(nil)
 )

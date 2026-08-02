@@ -12,15 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 const testDenseResponse = `{"model":"m","vector_type":"dense","data":[{"vector_type":"dense","values":[0.1,0.2]}],"usage":{"total_tokens":3}}`
 
-func denseRequest() *core.RepresentationRequest {
-	return &core.RepresentationRequest{
+func denseRequest() *retrieval.RepresentationRequest {
+	return &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
 }
 
@@ -371,7 +371,7 @@ func TestOptionsReachTheRequest(t *testing.T) {
 	if !used.Load() {
 		t.Error("the injected HTTP client was not used")
 	}
-	space := resp.Spaces[core.RepresentationDense]
+	space := resp.Spaces[retrieval.RepresentationDense]
 	if space.Revision != "rev-1" || space.Tokenizer != "tok-1" {
 		t.Errorf("space did not record the configured revisions: %+v", space)
 	}
@@ -388,7 +388,7 @@ func TestModelRevisionChangesSpaceIdentity(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Encode: %v", err)
 		}
-		return resp.Spaces[core.RepresentationDense].ID
+		return resp.Spaces[retrieval.RepresentationDense].ID
 	}
 	if spaceID() == spaceID(WithModelRevision("rev-1", "tok-1")) {
 		t.Fatal("recording a revision did not change the space ID")
@@ -396,15 +396,15 @@ func TestModelRevisionChangesSpaceIdentity(t *testing.T) {
 }
 
 func TestConfiguredLimitsAreEnforced(t *testing.T) {
-	encoder, err := New("m", WithAPIKey("k"), WithLimits(core.RepresentationLimits{MaxInputs: 1}))
+	encoder, err := New("m", WithAPIKey("k"), WithLimits(retrieval.RepresentationLimits{MaxInputs: 1}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err = encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"a", "b"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	})
-	if !errors.Is(err, core.ErrInvalidRepresentationRequest) {
+	if !errors.Is(err, retrieval.ErrInvalidRepresentationRequest) {
 		t.Fatalf("got %v, want the configured limit to be enforced", err)
 	}
 }

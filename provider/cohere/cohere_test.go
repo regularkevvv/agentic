@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/cohere"
 )
 
@@ -51,7 +51,7 @@ func TestNewReadsAPIKeyFromEnv(t *testing.T) {
 				t.Fatalf("New: %v", err)
 			}
 			// The empty body fails to decode; the header is what is under test.
-			_, _ = embedder.Embed(t.Context(), &core.EmbeddingRequest{Input: []string{"text"}})
+			_, _ = embedder.Embed(t.Context(), &retrieval.EmbeddingRequest{Input: []string{"text"}})
 			if gotAuth != tt.want {
 				t.Errorf("Authorization = %q, want %q", gotAuth, tt.want)
 			}
@@ -195,6 +195,6 @@ func TestMustNew(t *testing.T) {
 // TestInterfaceSatisfaction pins that the exported types are usable through the
 // core abstractions, which is the only way callers reach them.
 func TestInterfaceSatisfaction(t *testing.T) {
-	var _ core.Embedder = cohere.MustNew(cohere.DefaultEmbeddingModel, cohere.WithAPIKey("k"))
-	var _ core.Reranker = cohere.MustNewReranker(cohere.DefaultRerankModel, cohere.WithRerankerAPIKey("k"))
+	var _ retrieval.Embedder = cohere.MustNew(cohere.DefaultEmbeddingModel, cohere.WithAPIKey("k"))
+	var _ retrieval.Reranker = cohere.MustNewReranker(cohere.DefaultRerankModel, cohere.WithRerankerAPIKey("k"))
 }

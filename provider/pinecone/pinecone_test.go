@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/pinecone"
 	"github.com/regularkevvv/agentic/provider/test/conformance"
 )
@@ -55,7 +55,7 @@ func newSparseEncoder(t *testing.T, handler http.HandlerFunc, opts ...pinecone.O
 	opts = append([]pinecone.Option{
 		pinecone.WithAPIKey("pc-test"),
 		pinecone.WithBaseURL(server.URL),
-		pinecone.WithOutputs(core.RepresentationSparse),
+		pinecone.WithOutputs(retrieval.RepresentationSparse),
 		pinecone.WithSparseIndexSpace(testIndexSpace),
 	}, opts...)
 
@@ -73,11 +73,11 @@ func respondWith(body string) http.HandlerFunc {
 	}
 }
 
-func documentRequest(kind core.RepresentationKind, inputs ...string) *core.RepresentationRequest {
-	return &core.RepresentationRequest{
+func documentRequest(kind retrieval.RepresentationKind, inputs ...string) *retrieval.RepresentationRequest {
+	return &retrieval.RepresentationRequest{
 		Input:     inputs,
-		InputType: core.EmbeddingInputDocument,
-		Outputs:   []core.RepresentationKind{kind},
+		InputType: retrieval.EmbeddingInputDocument,
+		Outputs:   []retrieval.RepresentationKind{kind},
 	}
 }
 
@@ -108,7 +108,7 @@ func TestNewReadsKeyFromEnvironment(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 	if _, err := encoder.Encode(context.Background(),
-		documentRequest(core.RepresentationDense, "a", "b")); err != nil {
+		documentRequest(retrieval.RepresentationDense, "a", "b")); err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 	if apiKey != "env-key" {
@@ -126,7 +126,7 @@ func TestNewReadsKeyFromEnvironment(t *testing.T) {
 func TestNewRequiresSparseIndexSpace(t *testing.T) {
 	_, err := pinecone.New(pinecone.SparseEnglishModel,
 		pinecone.WithAPIKey("k"),
-		pinecone.WithOutputs(core.RepresentationSparse),
+		pinecone.WithOutputs(retrieval.RepresentationSparse),
 	)
 	if err == nil || !strings.Contains(err.Error(), "WithSparseIndexSpace") {
 		t.Fatalf("got %v, want an error naming the missing bound", err)
@@ -142,7 +142,7 @@ func TestNewValidatesConfiguration(t *testing.T) {
 	}{
 		{"empty model", "", nil, "model cannot be empty"},
 		{"two output kinds", "m", []pinecone.Option{
-			pinecone.WithOutputs(core.RepresentationDense, core.RepresentationSparse),
+			pinecone.WithOutputs(retrieval.RepresentationDense, retrieval.RepresentationSparse),
 		}, "one vector type"},
 		{"no output kinds", "m", []pinecone.Option{pinecone.WithOutputs()}, "one vector type"},
 		{"negative dimensions", "m", []pinecone.Option{pinecone.WithDimensions(-1)}, "dimensions cannot be negative"},
@@ -165,8 +165,8 @@ func TestNewValidatesConfiguration(t *testing.T) {
 // typed capability error rather than a runtime surprise.
 func TestNewRejectsMultiVector(t *testing.T) {
 	_, err := pinecone.New("m", pinecone.WithAPIKey("k"),
-		pinecone.WithOutputs(core.RepresentationMultiVector))
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+		pinecone.WithOutputs(retrieval.RepresentationMultiVector))
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
 }
@@ -198,7 +198,7 @@ func TestEncodeDense(t *testing.T) {
 	})
 
 	resp, err := encoder.Encode(context.Background(),
-		documentRequest(core.RepresentationDense, "a", "b"))
+		documentRequest(retrieval.RepresentationDense, "a", "b"))
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -221,8 +221,8 @@ func TestEncodeDense(t *testing.T) {
 	if len(resp.Data) != 2 || resp.Data[1].Dense[1] != 0.4 {
 		t.Errorf("data = %v", resp.Data)
 	}
-	space := resp.Spaces[core.RepresentationDense]
-	if space.Dimensions != 2 || space.Metric != core.SimilarityCosine {
+	space := resp.Spaces[retrieval.RepresentationDense]
+	if space.Dimensions != 2 || space.Metric != retrieval.SimilarityCosine {
 		t.Errorf("space = %+v", space)
 	}
 	if resp.Usage.InputTokens != 6 || resp.Usage.RequestCount != 1 {
@@ -234,12 +234,12 @@ func TestEncodeDense(t *testing.T) {
 // model needs, and they encode into the same space.
 func TestEncodeMapsInputRoles(t *testing.T) {
 	tests := []struct {
-		inputType core.EmbeddingInputType
+		inputType retrieval.EmbeddingInputType
 		want      any
 	}{
-		{core.EmbeddingInputQuery, "query"},
-		{core.EmbeddingInputDocument, "passage"},
-		{core.EmbeddingInputNone, nil},
+		{retrieval.EmbeddingInputQuery, "query"},
+		{retrieval.EmbeddingInputDocument, "passage"},
+		{retrieval.EmbeddingInputNone, nil},
 	}
 	for _, tc := range tests {
 		t.Run(string(tc.inputType), func(t *testing.T) {
@@ -248,10 +248,10 @@ func TestEncodeMapsInputRoles(t *testing.T) {
 				_ = json.NewDecoder(r.Body).Decode(&body)
 				fmt.Fprint(w, denseResponse)
 			})
-			if _, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+			if _, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 				Input:     []string{"a", "b"},
 				InputType: tc.inputType,
-				Outputs:   []core.RepresentationKind{core.RepresentationDense},
+				Outputs:   []retrieval.RepresentationKind{retrieval.RepresentationDense},
 			}); err != nil {
 				t.Fatalf("Encode: %v", err)
 			}
@@ -280,9 +280,9 @@ func TestEncodeMapsTruncation(t *testing.T) {
 				_ = json.NewDecoder(r.Body).Decode(&body)
 				fmt.Fprint(w, denseResponse)
 			})
-			if _, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+			if _, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 				Input:    []string{"a", "b"},
-				Outputs:  []core.RepresentationKind{core.RepresentationDense},
+				Outputs:  []retrieval.RepresentationKind{retrieval.RepresentationDense},
 				Truncate: tc.truncate,
 			}); err != nil {
 				t.Fatalf("Encode: %v", err)
@@ -303,7 +303,7 @@ func TestEncodeSendsConfiguredDimension(t *testing.T) {
 	}, pinecone.WithDimensions(2))
 
 	if _, err := encoder.Encode(context.Background(),
-		documentRequest(core.RepresentationDense, "a", "b")); err != nil {
+		documentRequest(retrieval.RepresentationDense, "a", "b")); err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 	params, _ := body["parameters"].(map[string]any)
@@ -314,7 +314,7 @@ func TestEncodeSendsConfiguredDimension(t *testing.T) {
 
 func TestEmbedProjectsDenseOutput(t *testing.T) {
 	encoder := newTestEncoder(t, respondWith(denseResponse))
-	resp, err := encoder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a", "b"}})
+	resp, err := encoder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a", "b"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -325,8 +325,8 @@ func TestEmbedProjectsDenseOutput(t *testing.T) {
 
 func TestEmbedFailsForASparseModel(t *testing.T) {
 	encoder := newSparseEncoder(t, respondWith("{}"))
-	_, err := encoder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a"}})
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	_, err := encoder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a"}})
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
 }
@@ -351,7 +351,7 @@ func TestEncodeSparseCanonicalizesCoordinates(t *testing.T) {
 	encoder := newSparseEncoder(t, respondWith(body), pinecone.WithReturnTokens(true))
 
 	resp, tokens, err := encoder.EncodeWithTokens(context.Background(),
-		documentRequest(core.RepresentationSparse, "the quick brown fox"))
+		documentRequest(retrieval.RepresentationSparse, "the quick brown fox"))
 	if err != nil {
 		t.Fatalf("EncodeWithTokens: %v", err)
 	}
@@ -371,8 +371,8 @@ func TestEncodeSparseCanonicalizesCoordinates(t *testing.T) {
 		t.Errorf("tokens = %v", tokens[0])
 	}
 
-	space := resp.Spaces[core.RepresentationSparse]
-	if space.Dimensions != testIndexSpace || space.Metric != core.SimilarityDotProduct {
+	space := resp.Spaces[retrieval.RepresentationSparse]
+	if space.Dimensions != testIndexSpace || space.Metric != retrieval.SimilarityDotProduct {
 		t.Errorf("space = %+v", space)
 	}
 }
@@ -393,7 +393,7 @@ func TestEncodeSparseExposesExpansionTokens(t *testing.T) {
 	encoder := newSparseEncoder(t, respondWith(body), pinecone.WithReturnTokens(true))
 
 	_, tokens, err := encoder.EncodeWithTokens(context.Background(),
-		documentRequest(core.RepresentationSparse, "car"))
+		documentRequest(retrieval.RepresentationSparse, "car"))
 	if err != nil {
 		t.Fatalf("EncodeWithTokens: %v", err)
 	}
@@ -414,7 +414,7 @@ func TestEncodeSparseExposesExpansionTokens(t *testing.T) {
 func TestEncodeWithTokensRequiresTheOption(t *testing.T) {
 	encoder := newSparseEncoder(t, respondWith("{}"))
 	_, _, err := encoder.EncodeWithTokens(context.Background(),
-		documentRequest(core.RepresentationSparse, "a"))
+		documentRequest(retrieval.RepresentationSparse, "a"))
 	if err == nil || !strings.Contains(err.Error(), "WithReturnTokens") {
 		t.Fatalf("got %v, want an error naming the missing option", err)
 	}
@@ -456,7 +456,7 @@ func TestEncodeSparseRejectsMalformedVectors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			encoder := newSparseEncoder(t, respondWith(tc.body))
 			_, err := encoder.Encode(context.Background(),
-				documentRequest(core.RepresentationSparse, "a"))
+				documentRequest(retrieval.RepresentationSparse, "a"))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
@@ -474,7 +474,7 @@ func TestEncodeRejectsAMismatchedVectorType(t *testing.T) {
 	t.Run("response level", func(t *testing.T) {
 		encoder := newTestEncoder(t, respondWith(
 			`{"vector_type":"sparse","data":[{"vector_type":"sparse","sparse_indices":[1],"sparse_values":[0.5]}]}`))
-		_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense, "a"))
+		_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense, "a"))
 		if err == nil || !strings.Contains(err.Error(), "configured for dense") {
 			t.Fatalf("got %v, want a vector-type mismatch", err)
 		}
@@ -483,7 +483,7 @@ func TestEncodeRejectsAMismatchedVectorType(t *testing.T) {
 	t.Run("item level", func(t *testing.T) {
 		encoder := newTestEncoder(t, respondWith(
 			`{"data":[{"vector_type":"sparse","sparse_indices":[1],"sparse_values":[0.5]}]}`))
-		_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense, "a"))
+		_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense, "a"))
 		if err == nil || !strings.Contains(err.Error(), "configured for dense") {
 			t.Fatalf("got %v, want a vector-type mismatch", err)
 		}
@@ -492,8 +492,8 @@ func TestEncodeRejectsAMismatchedVectorType(t *testing.T) {
 
 func TestEncodeRejectsUnsupportedOutputs(t *testing.T) {
 	encoder := newTestEncoder(t, respondWith(denseResponse))
-	_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationSparse, "a"))
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationSparse, "a"))
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
 }
@@ -506,11 +506,11 @@ func TestEncodeRejectsMultipleOutputs(t *testing.T) {
 	encoder := newTestEncoder(t, func(http.ResponseWriter, *http.Request) {
 		t.Error("a multi-output request should not reach the provider")
 	})
-	_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense, core.RepresentationSparse},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense, retrieval.RepresentationSparse},
 	})
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want the multi-output request refused", err)
 	}
 	if encoder.Capabilities().SupportsMultiOutput {
@@ -532,7 +532,7 @@ func TestEncodeRejectsMalformedResponses(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			encoder := newTestEncoder(t, respondWith(tc.body))
 			_, err := encoder.Encode(context.Background(),
-				documentRequest(core.RepresentationDense, "a", "b"))
+				documentRequest(retrieval.RepresentationDense, "a", "b"))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
@@ -543,7 +543,7 @@ func TestEncodeRejectsMalformedResponses(t *testing.T) {
 func TestEncodeRejectsOversizedResponses(t *testing.T) {
 	encoder := newTestEncoder(t, respondWith(strings.Repeat("x", 4096)),
 		pinecone.WithMaxResponseBytes(128))
-	_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense, "a"))
+	_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense, "a"))
 	if err == nil || !strings.Contains(err.Error(), "exceeds the 128 byte limit") {
 		t.Fatalf("got %v, want an oversized-response error", err)
 	}
@@ -569,7 +569,7 @@ func TestEncodeBatchesLargeRequests(t *testing.T) {
 	}, pinecone.WithBatchSize(2))
 
 	resp, err := encoder.Encode(context.Background(),
-		documentRequest(core.RepresentationDense, "a", "bb", "ccc", "dddd", "eeeee"))
+		documentRequest(retrieval.RepresentationDense, "a", "bb", "ccc", "dddd", "eeeee"))
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -607,7 +607,7 @@ func TestEncodeWithTokensAcrossChunks(t *testing.T) {
 	}, pinecone.WithReturnTokens(true), pinecone.WithBatchSize(2))
 
 	resp, tokens, err := encoder.EncodeWithTokens(context.Background(),
-		documentRequest(core.RepresentationSparse, "a", "bb", "ccc"))
+		documentRequest(retrieval.RepresentationSparse, "a", "bb", "ccc"))
 	if err != nil {
 		t.Fatalf("EncodeWithTokens: %v", err)
 	}
@@ -639,7 +639,7 @@ func TestAPIErrorsRedactSecretsAndInput(t *testing.T) {
 	})
 
 	_, err := encoder.Encode(context.Background(),
-		documentRequest(core.RepresentationDense, document))
+		documentRequest(retrieval.RepresentationDense, document))
 	var apiErr *pinecone.APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("got %v, want *pinecone.APIError", err)
@@ -658,7 +658,7 @@ func TestEncodeHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := encoder.Encode(ctx, documentRequest(core.RepresentationDense, "a"))
+	_, err := encoder.Encode(ctx, documentRequest(retrieval.RepresentationDense, "a"))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
@@ -670,7 +670,7 @@ func TestEncodeHonorsCancellation(t *testing.T) {
 
 func TestDenseConformance(t *testing.T) {
 	conformance.RunRepresentation(t, conformance.RepresentationOptions{
-		NewEncoder: func(t *testing.T) core.RepresentationEncoder {
+		NewEncoder: func(t *testing.T) retrieval.RepresentationEncoder {
 			return newTestEncoder(t, func(w http.ResponseWriter, r *http.Request) {
 				writeSynthetic(w, r, false)
 			})
@@ -682,7 +682,7 @@ func TestDenseConformance(t *testing.T) {
 
 func TestSparseConformance(t *testing.T) {
 	conformance.RunRepresentation(t, conformance.RepresentationOptions{
-		NewEncoder: func(t *testing.T) core.RepresentationEncoder {
+		NewEncoder: func(t *testing.T) retrieval.RepresentationEncoder {
 			return newSparseEncoder(t, func(w http.ResponseWriter, r *http.Request) {
 				writeSynthetic(w, r, true)
 			})

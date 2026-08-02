@@ -1,5 +1,5 @@
-// Package voyageai provides Voyage AI implementations of core.Embedder and
-// core.Reranker for Agentic. Voyage AI (by MongoDB) offers retrieval-tuned
+// Package voyageai provides Voyage AI implementations of retrieval.Embedder and
+// retrieval.Reranker for Agentic. Voyage AI (by MongoDB) offers retrieval-tuned
 // embedding models with first-class query/document input types, plus
 // cross-encoder rerank models for second-stage ranking; it has no chat API, so
 // this package implements no core.Model.
@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
-// Embedder implements core.Embedder using the Voyage AI embeddings API.
+// Embedder implements retrieval.Embedder using the Voyage AI embeddings API.
 type Embedder struct {
 	*client
 
@@ -50,7 +50,7 @@ func WithHTTPClient(client *http.Client) Option {
 // WithTruncation sets the default for inputs longer than the model's context
 // length: true truncates them, false rejects the request with an error.
 //
-// This is only a default. A per-call core.EmbeddingRequest.Truncate takes
+// This is only a default. A per-call retrieval.EmbeddingRequest.Truncate takes
 // precedence over it. If neither is set, the Voyage API's own default applies,
 // which is to truncate silently — prefer WithTruncation(false) when indexing,
 // because storing the vector of a clipped document as if it covered the whole
@@ -117,8 +117,8 @@ type embedResponse struct {
 	} `json:"usage"`
 }
 
-// Embed implements core.Embedder.
-func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+// Embed implements retrieval.Embedder.
+func (e *Embedder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -153,14 +153,14 @@ func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core
 		vectors[item.Index] = item.Embedding
 	}
 
-	return &core.EmbeddingResponse{
+	return &retrieval.EmbeddingResponse{
 		Vectors: vectors,
 		Model:   resp.Model,
-		Usage:   core.EmbeddingUsage{TotalTokens: resp.Usage.TotalTokens},
+		Usage:   retrieval.EmbeddingUsage{TotalTokens: resp.Usage.TotalTokens},
 	}, nil
 }
 
-// Name implements core.Embedder.
+// Name implements retrieval.Embedder.
 func (e *Embedder) Name() string {
 	return e.model
 }
@@ -178,5 +178,5 @@ func (e *Embedder) resolveTruncation(requested *bool) *bool {
 	return e.truncation
 }
 
-// Compile-time check that Embedder implements core.Embedder.
-var _ core.Embedder = (*Embedder)(nil)
+// Compile-time check that Embedder implements retrieval.Embedder.
+var _ retrieval.Embedder = (*Embedder)(nil)

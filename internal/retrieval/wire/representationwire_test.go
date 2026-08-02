@@ -1,4 +1,4 @@
-package representationwire_test
+package wire_test
 
 import (
 	"encoding/json"
@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
-	"github.com/regularkevvv/agentic/internal/representationwire"
+	"github.com/regularkevvv/agentic/internal/retrieval"
+	"github.com/regularkevvv/agentic/internal/retrieval/wire"
 )
 
 // goldenDir holds the fixtures the Python handler tests read too. Sharing them
@@ -26,19 +26,19 @@ func readGolden(t *testing.T, name string) []byte {
 	return body
 }
 
-func goldenRequest() *core.RepresentationRequest {
+func goldenRequest() *retrieval.RepresentationRequest {
 	truncate := true
-	return &core.RepresentationRequest{
+	return &retrieval.RepresentationRequest{
 		Input:     []string{"a document", "another document"},
-		InputType: core.EmbeddingInputDocument,
-		Outputs:   []core.RepresentationKind{core.RepresentationDense, core.RepresentationSparse},
+		InputType: retrieval.EmbeddingInputDocument,
+		Outputs:   []retrieval.RepresentationKind{retrieval.RepresentationDense, retrieval.RepresentationSparse},
 		Truncate:  &truncate,
 	}
 }
 
 // The request this client sends must be the request the handler tests accept.
 func TestNewRequestMatchesGoldenFixture(t *testing.T) {
-	encoded, err := json.Marshal(representationwire.NewRequest(goldenRequest()))
+	encoded, err := json.Marshal(wire.NewRequest(goldenRequest()))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -58,9 +58,9 @@ func TestNewRequestMatchesGoldenFixture(t *testing.T) {
 // A request with no input role omits the field rather than sending an empty
 // string, so a handler cannot tell "unset" from "explicitly neither".
 func TestNewRequestOmitsUnsetFields(t *testing.T) {
-	encoded, err := json.Marshal(representationwire.NewRequest(&core.RepresentationRequest{
+	encoded, err := json.Marshal(wire.NewRequest(&retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -74,7 +74,7 @@ func TestNewRequestOmitsUnsetFields(t *testing.T) {
 	if _, present := body["truncate"]; present {
 		t.Error("truncate should be omitted when unset")
 	}
-	if body["version"] != representationwire.Version {
+	if body["version"] != wire.Version {
 		t.Errorf("version = %v", body["version"])
 	}
 }
@@ -83,7 +83,7 @@ func TestDecodeGoldenResponse(t *testing.T) {
 	req := goldenRequest()
 	payload := readGolden(t, "response.json")
 
-	resp, err := representationwire.Decode(payload, req, representationwire.DecodeOptions{
+	resp, err := wire.Decode(payload, req, wire.DecodeOptions{
 		Provider:      "huggingface",
 		Model:         "BAAI/bge-m3",
 		ResponseBytes: len(payload),
@@ -105,15 +105,15 @@ func TestDecodeGoldenResponse(t *testing.T) {
 		t.Errorf("sparse output = %+v", resp.Data[0].Sparse)
 	}
 
-	dense := resp.Spaces[core.RepresentationDense]
+	dense := resp.Spaces[retrieval.RepresentationDense]
 	if dense.ID != "configured-immutable-dense-id" {
 		t.Errorf("dense space ID = %q, want the handler's configured value", dense.ID)
 	}
 	if dense.Revision != "immutable-revision" || dense.Tokenizer != "immutable-tokenizer-revision" {
 		t.Errorf("dense space lost its revisions: %+v", dense)
 	}
-	sparse := resp.Spaces[core.RepresentationSparse]
-	if sparse.Dimensions != 250002 || sparse.Metric != core.SimilarityDotProduct {
+	sparse := resp.Spaces[retrieval.RepresentationSparse]
+	if sparse.Dimensions != 250002 || sparse.Metric != retrieval.SimilarityDotProduct {
 		t.Errorf("sparse space = %+v", sparse)
 	}
 
@@ -130,15 +130,15 @@ func TestDecodeGoldenResponse(t *testing.T) {
 	}
 
 	// The decoded response must satisfy the core contract end to end.
-	validator := core.RepresentationValidator{
+	validator := retrieval.RepresentationValidator{
 		Provider: "huggingface",
-		Capabilities: core.RepresentationCapabilities{
-			Outputs:             []core.RepresentationKind{core.RepresentationDense, core.RepresentationSparse},
-			InputTypes:          []core.EmbeddingInputType{core.EmbeddingInputDocument},
+		Capabilities: retrieval.RepresentationCapabilities{
+			Outputs:             []retrieval.RepresentationKind{retrieval.RepresentationDense, retrieval.RepresentationSparse},
+			InputTypes:          []retrieval.EmbeddingInputType{retrieval.EmbeddingInputDocument},
 			SupportsTruncation:  true,
 			SupportsMultiOutput: true,
 		},
-		Limits: core.DefaultRepresentationLimits(),
+		Limits: retrieval.DefaultRepresentationLimits(),
 	}
 	if err := validator.ValidateResponse(req, resp); err != nil {
 		t.Fatalf("golden response fails core validation: %v", err)
@@ -152,12 +152,12 @@ func TestDecodeFillsMissingMeasurements(t *testing.T) {
 		"spaces": {"dense": {"id": "d", "provider": "custom", "model": "m", "kind": "dense", "dimensions": 2, "metric": "cosine"}},
 		"data": [{"dense": [0.1, 0.2]}]
 	}`)
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"a document"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
 
-	resp, err := representationwire.Decode(payload, req, representationwire.DecodeOptions{
+	resp, err := wire.Decode(payload, req, wire.DecodeOptions{
 		Provider:      "sagemaker",
 		Model:         "configured-model",
 		ResponseBytes: len(payload),
@@ -184,23 +184,23 @@ func TestDecodeCompletesPartialSpaceDescriptors(t *testing.T) {
 		"spaces": {"dense": {"dimensions": 2, "metric": "cosine"}},
 		"data": [{"dense": [0.1, 0.2]}]
 	}`)
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
 
-	resp, err := representationwire.Decode(payload, req, representationwire.DecodeOptions{
+	resp, err := wire.Decode(payload, req, wire.DecodeOptions{
 		Provider: "sagemaker",
 		Model:    "configured-model",
 	})
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
-	space := resp.Spaces[core.RepresentationDense]
+	space := resp.Spaces[retrieval.RepresentationDense]
 	if space.Provider != "sagemaker" || space.Model != "configured-model" {
 		t.Errorf("space was not completed from configuration: %+v", space)
 	}
-	if space.Kind != core.RepresentationDense {
+	if space.Kind != retrieval.RepresentationDense {
 		t.Errorf("space kind = %q, want it inferred from the map key", space.Kind)
 	}
 	if space.ID != space.CanonicalID() {
@@ -209,33 +209,33 @@ func TestDecodeCompletesPartialSpaceDescriptors(t *testing.T) {
 }
 
 func TestDecodeReconcilesPinnedSpaces(t *testing.T) {
-	pinned := core.VectorSpace{
+	pinned := retrieval.VectorSpace{
 		ID:         "pinned-dense",
 		Provider:   "sagemaker",
 		Model:      "BAAI/bge-m3",
 		Revision:   "rev-1",
 		Tokenizer:  "tok-1",
-		Kind:       core.RepresentationDense,
+		Kind:       retrieval.RepresentationDense,
 		Dimensions: 2,
-		Metric:     core.SimilarityCosine,
+		Metric:     retrieval.SimilarityCosine,
 	}
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
-	opts := representationwire.DecodeOptions{
+	opts := wire.DecodeOptions{
 		Provider: "sagemaker",
 		Model:    "BAAI/bge-m3",
-		Expected: map[core.RepresentationKind]core.VectorSpace{core.RepresentationDense: pinned},
+		Expected: map[retrieval.RepresentationKind]retrieval.VectorSpace{retrieval.RepresentationDense: pinned},
 	}
 
 	t.Run("handler describes nothing", func(t *testing.T) {
 		payload := []byte(`{"version":"agentic.representations.v1","model":"m","data":[{"dense":[0.1,0.2]}]}`)
-		resp, err := representationwire.Decode(payload, req, opts)
+		resp, err := wire.Decode(payload, req, opts)
 		if err != nil {
 			t.Fatalf("Decode: %v", err)
 		}
-		if resp.Spaces[core.RepresentationDense].ID != "pinned-dense" {
+		if resp.Spaces[retrieval.RepresentationDense].ID != "pinned-dense" {
 			t.Error("an undescribed space should be filled from the pin")
 		}
 	})
@@ -246,7 +246,7 @@ func TestDecodeReconcilesPinnedSpaces(t *testing.T) {
 			"spaces":{"dense":{"id":"pinned-dense","provider":"sagemaker","model":"BAAI/bge-m3","revision":"rev-1","tokenizer":"tok-1","kind":"dense","dimensions":2,"metric":"cosine"}},
 			"data":[{"dense":[0.1,0.2]}]
 		}`)
-		if _, err := representationwire.Decode(payload, req, opts); err != nil {
+		if _, err := wire.Decode(payload, req, opts); err != nil {
 			t.Fatalf("Decode: %v", err)
 		}
 	})
@@ -259,7 +259,7 @@ func TestDecodeReconcilesPinnedSpaces(t *testing.T) {
 			"spaces":{"dense":{"id":"pinned-dense","provider":"sagemaker","model":"BAAI/bge-m3","revision":"rev-2","tokenizer":"tok-1","kind":"dense","dimensions":2,"metric":"cosine"}},
 			"data":[{"dense":[0.1,0.2]}]
 		}`)
-		_, err := representationwire.Decode(payload, req, opts)
+		_, err := wire.Decode(payload, req, opts)
 		if err == nil || !strings.Contains(err.Error(), "configured for") {
 			t.Fatalf("got %v, want a pinned-space mismatch", err)
 		}
@@ -271,8 +271,8 @@ func TestDecodeReconcilesPinnedSpaces(t *testing.T) {
 			"spaces":{"dense":{"id":"other","provider":"sagemaker","model":"BAAI/bge-m3","revision":"rev-1","tokenizer":"tok-1","kind":"dense","dimensions":2,"metric":"cosine"}},
 			"data":[{"dense":[0.1,0.2]}]
 		}`)
-		_, err := representationwire.Decode(payload, req, opts)
-		if !errors.Is(err, core.ErrInvalidRepresentationResponse) {
+		_, err := wire.Decode(payload, req, opts)
+		if !errors.Is(err, retrieval.ErrInvalidRepresentationResponse) {
 			t.Fatalf("got %v, want a pinned-space mismatch", err)
 		}
 	})
@@ -281,45 +281,45 @@ func TestDecodeReconcilesPinnedSpaces(t *testing.T) {
 // A pinned space for a kind that was not requested must not appear in the
 // response, or validation would reject a response the handler got right.
 func TestDecodeIgnoresPinsForUnrequestedKinds(t *testing.T) {
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
 	payload := []byte(`{"version":"agentic.representations.v1","model":"m","data":[{"dense":[0.1,0.2]}]}`)
 
-	resp, err := representationwire.Decode(payload, req, representationwire.DecodeOptions{
+	resp, err := wire.Decode(payload, req, wire.DecodeOptions{
 		Provider: "sagemaker",
-		Expected: map[core.RepresentationKind]core.VectorSpace{
-			core.RepresentationDense: {
+		Expected: map[retrieval.RepresentationKind]retrieval.VectorSpace{
+			retrieval.RepresentationDense: {
 				ID: "d", Provider: "sagemaker", Model: "m",
-				Kind: core.RepresentationDense, Dimensions: 2, Metric: core.SimilarityCosine,
+				Kind: retrieval.RepresentationDense, Dimensions: 2, Metric: retrieval.SimilarityCosine,
 			},
-			core.RepresentationSparse: {
+			retrieval.RepresentationSparse: {
 				ID: "s", Provider: "sagemaker", Model: "m",
-				Kind: core.RepresentationSparse, Dimensions: 100, Metric: core.SimilarityDotProduct,
+				Kind: retrieval.RepresentationSparse, Dimensions: 100, Metric: retrieval.SimilarityDotProduct,
 			},
 		},
 	})
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
-	if _, present := resp.Spaces[core.RepresentationSparse]; present {
+	if _, present := resp.Spaces[retrieval.RepresentationSparse]; present {
 		t.Error("an unrequested pinned space should not be reported")
 	}
 }
 
 func TestDecodeVersionHandling(t *testing.T) {
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
 	body := func(version string) []byte {
 		return []byte(`{"version":"` + version + `","model":"m","data":[{"dense":[0.1]}]}`)
 	}
 
 	t.Run("additive minor is accepted", func(t *testing.T) {
-		if _, err := representationwire.Decode(body("agentic.representations.v1.7"), req,
-			representationwire.DecodeOptions{Provider: "p"}); err != nil {
+		if _, err := wire.Decode(body("agentic.representations.v1.7"), req,
+			wire.DecodeOptions{Provider: "p"}); err != nil {
 			t.Fatalf("Decode: %v", err)
 		}
 	})
@@ -336,12 +336,12 @@ func TestDecodeVersionHandling(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := representationwire.Decode(body(tc.version), req,
-				representationwire.DecodeOptions{Provider: "p"})
+			_, err := wire.Decode(body(tc.version), req,
+				wire.DecodeOptions{Provider: "p"})
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
-			if !errors.Is(err, core.ErrInvalidRepresentationResponse) {
+			if !errors.Is(err, retrieval.ErrInvalidRepresentationResponse) {
 				t.Error("error does not match ErrInvalidRepresentationResponse")
 			}
 		})
@@ -359,11 +359,11 @@ func TestDecodeIgnoresUnknownFields(t *testing.T) {
 		"data": [{"dense": [0.1, 0.2], "future_kind": [1, 2]}],
 		"usage": {"input_tokens": 3, "future_measure": 9}
 	}`)
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
-	resp, err := representationwire.Decode(payload, req, representationwire.DecodeOptions{Provider: "p"})
+	resp, err := wire.Decode(payload, req, wire.DecodeOptions{Provider: "p"})
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
@@ -373,12 +373,12 @@ func TestDecodeIgnoresUnknownFields(t *testing.T) {
 }
 
 func TestDecodeRejectsMalformedPayload(t *testing.T) {
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
-	_, err := representationwire.Decode([]byte(`{"version":`), req,
-		representationwire.DecodeOptions{Provider: "p"})
+	_, err := wire.Decode([]byte(`{"version":`), req,
+		wire.DecodeOptions{Provider: "p"})
 	if err == nil || !strings.Contains(err.Error(), "not valid agentic.representations.v1 JSON") {
 		t.Fatalf("got %v, want a decode error", err)
 	}
@@ -387,13 +387,13 @@ func TestDecodeRejectsMalformedPayload(t *testing.T) {
 // A malformed payload may contain the caller's documents, so the error must
 // not echo it.
 func TestDecodeErrorsDoNotEchoPayload(t *testing.T) {
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}
 	payload := []byte(`{"version": "agentic.representations.v1", "echo": "the launch code is hunter2"`)
 
-	_, err := representationwire.Decode(payload, req, representationwire.DecodeOptions{Provider: "p"})
+	_, err := wire.Decode(payload, req, wire.DecodeOptions{Provider: "p"})
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -403,13 +403,13 @@ func TestDecodeErrorsDoNotEchoPayload(t *testing.T) {
 }
 
 func TestCheckVersion(t *testing.T) {
-	if err := representationwire.CheckVersion(representationwire.Version, "p"); err != nil {
+	if err := wire.CheckVersion(wire.Version, "p"); err != nil {
 		t.Fatalf("current version rejected: %v", err)
 	}
-	if err := representationwire.CheckVersion("agentic.representations.v1.0.3", "p"); err != nil {
+	if err := wire.CheckVersion("agentic.representations.v1.0.3", "p"); err != nil {
 		t.Fatalf("additive suffix rejected: %v", err)
 	}
-	if err := representationwire.CheckVersion("agentic.representations.v", "p"); err == nil {
+	if err := wire.CheckVersion("agentic.representations.v", "p"); err == nil {
 		t.Fatal("a version with no major number should be rejected")
 	}
 }
@@ -424,12 +424,12 @@ func TestDecodeMapsSparseAndMultiVector(t *testing.T) {
 		},
 		"data": [{"sparse": {"indices": [3, 9], "values": [0.5, 0.25]}, "multi_vector": [[0.1, 0.2],[0.3,0.4]]}]
 	}`)
-	req := &core.RepresentationRequest{
+	req := &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationSparse, core.RepresentationMultiVector},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationSparse, retrieval.RepresentationMultiVector},
 	}
 
-	resp, err := representationwire.Decode(payload, req, representationwire.DecodeOptions{Provider: "p"})
+	resp, err := wire.Decode(payload, req, wire.DecodeOptions{Provider: "p"})
 	if err != nil {
 		t.Fatalf("Decode: %v", err)
 	}

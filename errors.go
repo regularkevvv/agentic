@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // ErrNilDeps is returned before any external effect when a dependency-aware
@@ -34,9 +35,9 @@ var (
 // errors the encoders return, so callers can branch on the class of failure
 // without depending on a concrete error type.
 var (
-	ErrUnsupportedRepresentation     = core.ErrUnsupportedRepresentation
-	ErrInvalidRepresentationRequest  = core.ErrInvalidRepresentationRequest
-	ErrInvalidRepresentationResponse = core.ErrInvalidRepresentationResponse
+	ErrUnsupportedRepresentation     = retrieval.ErrUnsupportedRepresentation
+	ErrInvalidRepresentationRequest  = retrieval.ErrInvalidRepresentationRequest
+	ErrInvalidRepresentationResponse = retrieval.ErrInvalidRepresentationResponse
 )
 
 // ModelRetry is a sentinel error that tools can return to request a retry.

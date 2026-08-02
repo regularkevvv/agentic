@@ -13,12 +13,12 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/endpoint"
 	"github.com/regularkevvv/agentic/provider/test/conformance"
 )
 
-const goldenResponsePath = "../../internal/representationwire/testdata/response.json"
+const goldenResponsePath = "../../internal/retrieval/wire/testdata/response.json"
 
 func goldenResponse(t *testing.T) string {
 	t.Helper()
@@ -53,12 +53,12 @@ func respondWith(body string) http.HandlerFunc {
 	}
 }
 
-func goldenRequest() *core.RepresentationRequest {
+func goldenRequest() *retrieval.RepresentationRequest {
 	truncate := true
-	return &core.RepresentationRequest{
+	return &retrieval.RepresentationRequest{
 		Input:     []string{"a document", "another document"},
-		InputType: core.EmbeddingInputDocument,
-		Outputs:   []core.RepresentationKind{core.RepresentationDense, core.RepresentationSparse},
+		InputType: retrieval.EmbeddingInputDocument,
+		Outputs:   []retrieval.RepresentationKind{retrieval.RepresentationDense, retrieval.RepresentationSparse},
 		Truncate:  &truncate,
 	}
 }
@@ -81,8 +81,8 @@ func TestNewValidatesConfiguration(t *testing.T) {
 		{"negative batch size", "https://e", []endpoint.Option{endpoint.WithBatchSize(-1)}, "batch size"},
 		{"unknown output", "https://e", []endpoint.Option{endpoint.WithOutputs("colbert")}, "not dense, sparse, or multi_vector"},
 		{"invalid pinned space", "https://e", []endpoint.Option{
-			endpoint.WithVectorSpaces(map[core.RepresentationKind]core.VectorSpace{
-				core.RepresentationDense: {Provider: "p"},
+			endpoint.WithVectorSpaces(map[retrieval.RepresentationKind]retrieval.VectorSpace{
+				retrieval.RepresentationDense: {Provider: "p"},
 			}),
 		}, "pinned dense space"},
 	}
@@ -219,8 +219,8 @@ func TestSpeaksTheProtocol(t *testing.T) {
 	if len(resp.Data) != 2 {
 		t.Fatalf("got %d items", len(resp.Data))
 	}
-	if resp.Spaces[core.RepresentationDense].ID != "configured-immutable-dense-id" {
-		t.Errorf("dense space = %+v", resp.Spaces[core.RepresentationDense])
+	if resp.Spaces[retrieval.RepresentationDense].ID != "configured-immutable-dense-id" {
+		t.Errorf("dense space = %+v", resp.Spaces[retrieval.RepresentationDense])
 	}
 	if resp.Model != "BAAI/bge-m3" {
 		t.Errorf("model = %q", resp.Model)
@@ -239,13 +239,13 @@ func TestNameFallsBackToEndpoint(t *testing.T) {
 
 func TestRejectsUnsupportedOutputs(t *testing.T) {
 	encoder := newEncoder(t, respondWith(goldenResponse(t)),
-		endpoint.WithOutputs(core.RepresentationDense))
+		endpoint.WithOutputs(retrieval.RepresentationDense))
 
-	_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"a"},
-		Outputs: []core.RepresentationKind{core.RepresentationMultiVector},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationMultiVector},
 	})
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
 }
@@ -272,9 +272,9 @@ func TestBatchesLargeRequests(t *testing.T) {
 		}`, strings.Join(items, ","), len(body.Inputs))
 	}, endpoint.WithBatchSize(2))
 
-	resp, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	resp, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"a", "bb", "ccc", "dddd", "eeeee"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -344,7 +344,7 @@ func TestEmbedProjectsDense(t *testing.T) {
 			"data":[{"dense":[0.1,0.2]}],"usage":{"input_tokens":3,"request_count":1}}`)
 	})
 
-	resp, err := encoder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a"}})
+	resp, err := encoder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -358,9 +358,9 @@ func TestEmbedProjectsDense(t *testing.T) {
 }
 
 func TestEmbedFailsWhenDenseIsNotServed(t *testing.T) {
-	encoder := newEncoder(t, respondWith("{}"), endpoint.WithOutputs(core.RepresentationSparse))
-	_, err := encoder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a"}})
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	encoder := newEncoder(t, respondWith("{}"), endpoint.WithOutputs(retrieval.RepresentationSparse))
+	_, err := encoder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a"}})
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
 }
@@ -368,10 +368,10 @@ func TestEmbedFailsWhenDenseIsNotServed(t *testing.T) {
 // A pinned space is what makes a silent redeployment detectable.
 func TestPinnedSpaceMismatchFails(t *testing.T) {
 	encoder := newEncoder(t, respondWith(goldenResponse(t)),
-		endpoint.WithVectorSpaces(map[core.RepresentationKind]core.VectorSpace{
-			core.RepresentationDense: {
+		endpoint.WithVectorSpaces(map[retrieval.RepresentationKind]retrieval.VectorSpace{
+			retrieval.RepresentationDense: {
 				ID: "my-index-space", Provider: "custom", Model: "BAAI/bge-m3",
-				Kind: core.RepresentationDense, Dimensions: 2, Metric: core.SimilarityCosine,
+				Kind: retrieval.RepresentationDense, Dimensions: 2, Metric: retrieval.SimilarityCosine,
 			},
 		}))
 
@@ -383,15 +383,15 @@ func TestPinnedSpaceMismatchFails(t *testing.T) {
 
 func TestConfiguredLimitsAreEnforced(t *testing.T) {
 	encoder, err := endpoint.New("https://e", endpoint.WithToken("t"),
-		endpoint.WithLimits(core.RepresentationLimits{MaxInputs: 1}))
+		endpoint.WithLimits(retrieval.RepresentationLimits{MaxInputs: 1}))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	_, err = encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err = encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"a", "b"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	})
-	if !errors.Is(err, core.ErrInvalidRepresentationRequest) {
+	if !errors.Is(err, retrieval.ErrInvalidRepresentationRequest) {
 		t.Fatalf("got %v, want the configured limit to be enforced", err)
 	}
 }
@@ -432,9 +432,9 @@ func TestAPIErrorsRedactSecretsAndInput(t *testing.T) {
 		fmt.Fprintf(w, `{"error": "cannot encode", "echo": %q, "auth": "endpoint_test"}`, document)
 	})
 
-	_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{document},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	})
 	var apiErr *endpoint.APIError
 	if !errors.As(err, &apiErr) {
@@ -466,7 +466,7 @@ func TestEncodeHonorsCancellation(t *testing.T) {
 
 func TestConformance(t *testing.T) {
 	conformance.RunRepresentation(t, conformance.RepresentationOptions{
-		NewEncoder: func(t *testing.T) core.RepresentationEncoder {
+		NewEncoder: func(t *testing.T) retrieval.RepresentationEncoder {
 			return newEncoder(t, func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
 					Inputs  []string `json:"inputs"`

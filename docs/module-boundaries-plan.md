@@ -466,7 +466,7 @@ Where the implementation departed from the text above, and why.
     a directory of Python servers in it is a maintenance surface nobody asked
     for. The handlers, their tests, their requirements files, and the CI job
     that ran them are gone. The JSON Schemas and the golden request/response
-    moved to `internal/representationwire/testdata`, where three Go test
+    moved to `internal/retrieval/wire/testdata`, where three Go test
     packages read them. Exactly one Python file survives, `export_onnx.py`,
     beside the only thing that needs it; it runs once per model and nothing at
     runtime invokes it. The encoder briefly moved to a top-level
@@ -492,6 +492,25 @@ Where the implementation departed from the text above, and why.
     `libtokenizers.a`. A fourth module costs one `go.mod` and keeps every other
     example buildable with nothing but a Go toolchain. It holds the only example
     in the repository that needs no credentials.
+
+12. **`internal/` was reorganized along the line it was missing.** The plan
+    added `representationwire` and `representationbatch` beside `core`, and put
+    1,284 lines of representation types *into* `core` — a package that already
+    held `embedding.go` and `reranking.go` next to `message.go` and `stream.go`.
+    That took `core` from 80% chat to 63% retrieval: a second domain wearing the
+    first one's name. `internal/` is now four packages instead of six —
+
+        core/        chat and agent primitives
+        retrieval/   embedding, reranking, representation, and its wire/,
+                     batch/, and embedbatch/ helpers
+        providerhttp/
+        testutil/
+
+    The split is mechanical rather than a judgement call: measured before
+    moving anything, no chat file referenced a retrieval type and no retrieval
+    file referenced a chat type, so there was no cycle to break and no shared
+    type to duplicate. The public API is unchanged, because the root package
+    exposes both halves through type aliases.
 
 ## Definition of done
 

@@ -1,5 +1,5 @@
 // Package embedbatch adapts providers whose native batch shape does not match
-// the batch-first contract of core.Embedder.
+// the batch-first contract of retrieval.Embedder.
 //
 // Two mismatches occur in practice. Some models accept exactly one input per
 // call (Amazon Titan; Gemini's embedding-2 family on Vertex), which needs
@@ -13,7 +13,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // defaultConcurrency bounds in-flight requests when a caller does not choose.
@@ -31,8 +31,8 @@ func FanOut(
 	ctx context.Context,
 	inputs []string,
 	concurrency int,
-	fn func(context.Context, string) ([]float32, core.EmbeddingUsage, error),
-) ([][]float32, core.EmbeddingUsage, error) {
+	fn func(context.Context, string) ([]float32, retrieval.EmbeddingUsage, error),
+) ([][]float32, retrieval.EmbeddingUsage, error) {
 	if concurrency <= 0 {
 		concurrency = defaultConcurrency
 	}
@@ -44,7 +44,7 @@ func FanOut(
 	defer cancel()
 
 	vectors := make([][]float32, len(inputs))
-	usages := make([]core.EmbeddingUsage, len(inputs))
+	usages := make([]retrieval.EmbeddingUsage, len(inputs))
 
 	var (
 		wg       sync.WaitGroup
@@ -83,7 +83,7 @@ func FanOut(
 	wg.Wait()
 
 	if firstErr != nil {
-		return nil, core.EmbeddingUsage{}, firstErr
+		return nil, retrieval.EmbeddingUsage{}, firstErr
 	}
 	return vectors, sumUsage(usages), nil
 }
@@ -97,28 +97,28 @@ func Chunked(
 	ctx context.Context,
 	inputs []string,
 	size int,
-	fn func(context.Context, []string) ([][]float32, core.EmbeddingUsage, error),
-) ([][]float32, core.EmbeddingUsage, error) {
+	fn func(context.Context, []string) ([][]float32, retrieval.EmbeddingUsage, error),
+) ([][]float32, retrieval.EmbeddingUsage, error) {
 	if size <= 0 || size >= len(inputs) {
 		vectors, usage, err := fn(ctx, inputs)
 		if err != nil {
-			return nil, core.EmbeddingUsage{}, err
+			return nil, retrieval.EmbeddingUsage{}, err
 		}
 		return vectors, usage, nil
 	}
 
 	vectors := make([][]float32, 0, len(inputs))
-	usages := make([]core.EmbeddingUsage, 0, (len(inputs)+size-1)/size)
+	usages := make([]retrieval.EmbeddingUsage, 0, (len(inputs)+size-1)/size)
 
 	for start := 0; start < len(inputs); start += size {
 		end := min(start+size, len(inputs))
 
 		chunk, usage, err := fn(ctx, inputs[start:end])
 		if err != nil {
-			return nil, core.EmbeddingUsage{}, err
+			return nil, retrieval.EmbeddingUsage{}, err
 		}
 		if len(chunk) != end-start {
-			return nil, core.EmbeddingUsage{}, &CountMismatchError{Want: end - start, Got: len(chunk)}
+			return nil, retrieval.EmbeddingUsage{}, &CountMismatchError{Want: end - start, Got: len(chunk)}
 		}
 		vectors = append(vectors, chunk...)
 		usages = append(usages, usage)
@@ -137,8 +137,8 @@ func (e *CountMismatchError) Error() string {
 	return fmt.Sprintf("embedding batch returned %d vectors for %d inputs", e.Got, e.Want)
 }
 
-func sumUsage(usages []core.EmbeddingUsage) core.EmbeddingUsage {
-	var total core.EmbeddingUsage
+func sumUsage(usages []retrieval.EmbeddingUsage) retrieval.EmbeddingUsage {
+	var total retrieval.EmbeddingUsage
 	for _, u := range usages {
 		total.PromptTokens += u.PromptTokens
 		total.TotalTokens += u.TotalTokens

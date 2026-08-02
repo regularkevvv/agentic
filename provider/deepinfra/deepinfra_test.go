@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/deepinfra"
 	"github.com/regularkevvv/agentic/provider/test/conformance"
 )
@@ -48,10 +48,10 @@ func respondWith(body string) http.HandlerFunc {
 	}
 }
 
-func documentRequest(outputs ...core.RepresentationKind) *core.RepresentationRequest {
-	return &core.RepresentationRequest{
+func documentRequest(outputs ...retrieval.RepresentationKind) *retrieval.RepresentationRequest {
+	return &retrieval.RepresentationRequest{
 		Input:     []string{"sparse vectors", "dense vectors"},
-		InputType: core.EmbeddingInputDocument,
+		InputType: retrieval.EmbeddingInputDocument,
 		Outputs:   outputs,
 	}
 }
@@ -77,7 +77,7 @@ func TestNewReadsTokenFromEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	if _, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense)); err != nil {
+	if _, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense)); err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 	if authorization != "Bearer env-token" {
@@ -95,7 +95,7 @@ func TestNewPrefersExplicitToken(t *testing.T) {
 		authorization = r.Header.Get("Authorization")
 		fmt.Fprint(w, denseResponse)
 	})
-	if _, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense)); err != nil {
+	if _, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense)); err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 	if authorization != "Bearer test-token" {
@@ -159,7 +159,7 @@ func TestEncodeUsesNativeInferenceRoute(t *testing.T) {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		fmt.Fprint(w, denseResponse)
 	})
-	if _, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense)); err != nil {
+	if _, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense)); err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
 
@@ -181,16 +181,16 @@ func TestEncodeUsesNativeInferenceRoute(t *testing.T) {
 func TestEncodeSendsEveryOutputFlag(t *testing.T) {
 	tests := []struct {
 		name    string
-		outputs []core.RepresentationKind
+		outputs []retrieval.RepresentationKind
 		want    map[string]bool
 	}{
-		{"dense only", []core.RepresentationKind{core.RepresentationDense},
+		{"dense only", []retrieval.RepresentationKind{retrieval.RepresentationDense},
 			map[string]bool{"dense": true, "sparse": false, "colbert": false}},
-		{"sparse only", []core.RepresentationKind{core.RepresentationSparse},
+		{"sparse only", []retrieval.RepresentationKind{retrieval.RepresentationSparse},
 			map[string]bool{"dense": false, "sparse": true, "colbert": false}},
-		{"multi vector only", []core.RepresentationKind{core.RepresentationMultiVector},
+		{"multi vector only", []retrieval.RepresentationKind{retrieval.RepresentationMultiVector},
 			map[string]bool{"dense": false, "sparse": false, "colbert": true}},
-		{"dense and sparse", []core.RepresentationKind{core.RepresentationDense, core.RepresentationSparse},
+		{"dense and sparse", []retrieval.RepresentationKind{retrieval.RepresentationDense, retrieval.RepresentationSparse},
 			map[string]bool{"dense": true, "sparse": true, "colbert": false}},
 	}
 
@@ -225,7 +225,7 @@ func TestEncodeNormalizeFlag(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			fmt.Fprint(w, denseResponse)
 		})
-		if _, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense)); err != nil {
+		if _, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense)); err != nil {
 			t.Fatalf("Encode: %v", err)
 		}
 		if _, present := body["normalize"]; present {
@@ -239,7 +239,7 @@ func TestEncodeNormalizeFlag(t *testing.T) {
 			_ = json.NewDecoder(r.Body).Decode(&body)
 			fmt.Fprint(w, denseResponse)
 		}, deepinfra.WithNormalize(true))
-		if _, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense)); err != nil {
+		if _, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense)); err != nil {
 			t.Fatalf("Encode: %v", err)
 		}
 		if body["normalize"] != true {
@@ -252,14 +252,14 @@ func TestEncodeNormalizeFlag(t *testing.T) {
 // also not be silently rejected, because a caller writing role-aware retrieval
 // code has to be able to pass it.
 func TestEncodeAcceptsEveryInputRole(t *testing.T) {
-	for _, inputType := range []core.EmbeddingInputType{
-		core.EmbeddingInputNone, core.EmbeddingInputQuery, core.EmbeddingInputDocument,
+	for _, inputType := range []retrieval.EmbeddingInputType{
+		retrieval.EmbeddingInputNone, retrieval.EmbeddingInputQuery, retrieval.EmbeddingInputDocument,
 	} {
 		encoder, _ := newTestEncoder(t, respondWith(denseResponse))
-		_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+		_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 			Input:     []string{"a", "b"},
 			InputType: inputType,
-			Outputs:   []core.RepresentationKind{core.RepresentationDense},
+			Outputs:   []retrieval.RepresentationKind{retrieval.RepresentationDense},
 		})
 		if err != nil {
 			t.Errorf("input type %q: %v", inputType, err)
@@ -270,7 +270,7 @@ func TestEncodeAcceptsEveryInputRole(t *testing.T) {
 func TestEncodeDecodesEveryRepresentation(t *testing.T) {
 	encoder, _ := newTestEncoder(t, respondWith(readFixture(t)))
 	resp, err := encoder.Encode(context.Background(), documentRequest(
-		core.RepresentationDense, core.RepresentationSparse, core.RepresentationMultiVector,
+		retrieval.RepresentationDense, retrieval.RepresentationSparse, retrieval.RepresentationMultiVector,
 	))
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -287,7 +287,7 @@ func TestEncodeDecodesEveryRepresentation(t *testing.T) {
 	if resp.Data[0].Dense[0] != 0.12 || resp.Data[1].Dense[0] != 0.08 {
 		t.Errorf("dense output is not in input order: %v", resp.Data)
 	}
-	if got := resp.Spaces[core.RepresentationDense].Dimensions; got != 4 {
+	if got := resp.Spaces[retrieval.RepresentationDense].Dimensions; got != 4 {
 		t.Errorf("dense space width = %d, want the observed 4", got)
 	}
 
@@ -311,11 +311,11 @@ func TestEncodeDecodesEveryRepresentation(t *testing.T) {
 		t.Errorf("second item values = %v", second.Values)
 	}
 
-	sparseSpace := resp.Spaces[core.RepresentationSparse]
+	sparseSpace := resp.Spaces[retrieval.RepresentationSparse]
 	if sparseSpace.Dimensions != 8 {
 		t.Errorf("sparse vocabulary = %d, want the observed row width", sparseSpace.Dimensions)
 	}
-	if sparseSpace.Metric != core.SimilarityDotProduct {
+	if sparseSpace.Metric != retrieval.SimilarityDotProduct {
 		t.Errorf("sparse metric = %q, want dot_product", sparseSpace.Metric)
 	}
 
@@ -324,7 +324,7 @@ func TestEncodeDecodesEveryRepresentation(t *testing.T) {
 		t.Errorf("multi-vector shape = %d, %d token vectors",
 			len(resp.Data[0].MultiVector), len(resp.Data[1].MultiVector))
 	}
-	if resp.Spaces[core.RepresentationMultiVector].Dimensions != 4 {
+	if resp.Spaces[retrieval.RepresentationMultiVector].Dimensions != 4 {
 		t.Error("multi-vector space did not record the observed token width")
 	}
 
@@ -342,7 +342,7 @@ func TestEncodeSpacesAreDistinct(t *testing.T) {
 	encoder, _ := newTestEncoder(t, respondWith(readFixture(t)),
 		deepinfra.WithModelRevision("rev-abc", "xlm-roberta-250002"))
 	resp, err := encoder.Encode(context.Background(), documentRequest(
-		core.RepresentationDense, core.RepresentationSparse, core.RepresentationMultiVector,
+		retrieval.RepresentationDense, retrieval.RepresentationSparse, retrieval.RepresentationMultiVector,
 	))
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -368,11 +368,11 @@ func TestEncodeSpacesAreDistinct(t *testing.T) {
 func TestEncodeRevisionChangesSpaceIdentity(t *testing.T) {
 	spaceID := func(opts ...deepinfra.Option) string {
 		encoder, _ := newTestEncoder(t, respondWith(denseResponse), opts...)
-		resp, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense))
+		resp, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense))
 		if err != nil {
 			t.Fatalf("Encode: %v", err)
 		}
-		return resp.Spaces[core.RepresentationDense].ID
+		return resp.Spaces[retrieval.RepresentationDense].ID
 	}
 
 	if spaceID() == spaceID(deepinfra.WithModelRevision("rev-1", "tok-1")) {
@@ -392,7 +392,7 @@ func TestEncodeSparseCoordinateMap(t *testing.T) {
 
 	t.Run("needs a declared vocabulary", func(t *testing.T) {
 		encoder, _ := newTestEncoder(t, respondWith(body))
-		_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationSparse))
+		_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationSparse))
 		if err == nil || !strings.Contains(err.Error(), "WithSparseVocabulary") {
 			t.Fatalf("got %v, want an error naming the missing vocabulary", err)
 		}
@@ -401,7 +401,7 @@ func TestEncodeSparseCoordinateMap(t *testing.T) {
 	t.Run("sorted into canonical order", func(t *testing.T) {
 		encoder, _ := newTestEncoder(t, respondWith(body),
 			deepinfra.WithSparseVocabulary(deepinfra.BGEM3SparseVocabulary))
-		resp, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationSparse))
+		resp, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationSparse))
 		if err != nil {
 			t.Fatalf("Encode: %v", err)
 		}
@@ -412,7 +412,7 @@ func TestEncodeSparseCoordinateMap(t *testing.T) {
 		if sparse.Values[0] != 0.91 || sparse.Values[1] != 0.37 {
 			t.Errorf("values = %v, want the weights to follow their indices", sparse.Values)
 		}
-		if resp.Spaces[core.RepresentationSparse].Dimensions != deepinfra.BGEM3SparseVocabulary {
+		if resp.Spaces[retrieval.RepresentationSparse].Dimensions != deepinfra.BGEM3SparseVocabulary {
 			t.Error("sparse space did not use the declared vocabulary")
 		}
 	})
@@ -422,7 +422,7 @@ func TestEncodeSparseCoordinateMap(t *testing.T) {
 // the two is wrong, and storing either would be a guess.
 func TestEncodeRejectsVocabularyMismatch(t *testing.T) {
 	encoder, _ := newTestEncoder(t, respondWith(readFixture(t)), deepinfra.WithSparseVocabulary(250002))
-	_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationSparse))
+	_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationSparse))
 	if err == nil || !strings.Contains(err.Error(), "declared as 250002") {
 		t.Fatalf("got %v, want a vocabulary mismatch error", err)
 	}
@@ -444,7 +444,7 @@ func TestEncodeRejectsMalformedSparse(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			encoder, _ := newTestEncoder(t, respondWith(tc.body), deepinfra.WithSparseVocabulary(100))
-			_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationSparse))
+			_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationSparse))
 			if err == nil || !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("got %v, want an error containing %q", err, tc.want)
 			}
@@ -458,7 +458,7 @@ func TestEncodeRejectsOutOfRangeSparseIndex(t *testing.T) {
 	encoder, _ := newTestEncoder(t,
 		respondWith(`{"sparse": [{"500": 0.5}, {"1": 0.5}]}`),
 		deepinfra.WithSparseVocabulary(100))
-	_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationSparse))
+	_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationSparse))
 	if err == nil || !strings.Contains(err.Error(), "outside the declared vocabulary") {
 		t.Fatalf("got %v, want an out-of-vocabulary error", err)
 	}
@@ -468,67 +468,67 @@ func TestEncodeRejectsMalformedResponses(t *testing.T) {
 	tests := []struct {
 		name    string
 		body    string
-		outputs []core.RepresentationKind
+		outputs []retrieval.RepresentationKind
 		want    string
 	}{
 		{
 			name:    "truncated json",
 			body:    `{"embeddings": [[0.1, 0.2]`,
-			outputs: []core.RepresentationKind{core.RepresentationDense},
+			outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 			want:    "decode response",
 		},
 		{
 			name:    "short dense batch",
 			body:    `{"embeddings": [[0.1, 0.2]]}`,
-			outputs: []core.RepresentationKind{core.RepresentationDense},
+			outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 			want:    "got 1 dense representations for 2 inputs",
 		},
 		{
 			name:    "long dense batch",
 			body:    `{"embeddings": [[0.1], [0.2], [0.3]]}`,
-			outputs: []core.RepresentationKind{core.RepresentationDense},
+			outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 			want:    "got 3 dense representations for 2 inputs",
 		},
 		{
 			name:    "missing requested output",
 			body:    `{"embeddings": [[0.1, 0.2], [0.3, 0.4]]}`,
-			outputs: []core.RepresentationKind{core.RepresentationDense, core.RepresentationSparse},
+			outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense, retrieval.RepresentationSparse},
 			want:    "got 0 sparse representations for 2 inputs",
 		},
 		{
 			name:    "short multi-vector batch",
 			body:    `{"colbert": [[[0.1, 0.2]]]}`,
-			outputs: []core.RepresentationKind{core.RepresentationMultiVector},
+			outputs: []retrieval.RepresentationKind{retrieval.RepresentationMultiVector},
 			want:    "got 1 multi_vector representations for 2 inputs",
 		},
 		{
 			name:    "inconsistent dense width",
 			body:    `{"embeddings": [[0.1, 0.2], [0.3]]}`,
-			outputs: []core.RepresentationKind{core.RepresentationDense},
+			outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 			want:    "width 1, space declares 2",
 		},
 		{
 			name:    "not a number",
 			body:    `{"embeddings": [[0.1, "x"], [0.3, 0.4]]}`,
-			outputs: []core.RepresentationKind{core.RepresentationDense},
+			outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 			want:    "decode response",
 		},
 		{
 			name:    "inconsistent token vector width",
 			body:    `{"colbert": [[[0.1, 0.2], [0.3]], [[0.4, 0.5]]]}`,
-			outputs: []core.RepresentationKind{core.RepresentationMultiVector},
+			outputs: []retrieval.RepresentationKind{retrieval.RepresentationMultiVector},
 			want:    "token vector 1 has width 1",
 		},
 		{
 			name:    "empty multi-vector item",
 			body:    `{"colbert": [[[0.1, 0.2]], []]}`,
-			outputs: []core.RepresentationKind{core.RepresentationMultiVector},
+			outputs: []retrieval.RepresentationKind{retrieval.RepresentationMultiVector},
 			want:    "multi-vector representation is missing",
 		},
 		{
 			name:    "inference reported failure",
 			body:    `{"embeddings": [[0.1], [0.2]], "inference_status": {"status": "failed"}}`,
-			outputs: []core.RepresentationKind{core.RepresentationDense},
+			outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 			want:    "status failed",
 		},
 	}
@@ -548,7 +548,7 @@ func TestEncodeRejectsNonFiniteValues(t *testing.T) {
 	// bare token; encoding/json rejects that before the validator sees it.
 	// A very large exponent is the reachable path to an infinity.
 	encoder, _ := newTestEncoder(t, respondWith(`{"embeddings": [[1e400, 0.2], [0.3, 0.4]]}`))
-	_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense))
+	_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense))
 	if err == nil {
 		t.Fatal("an out-of-range float should not be accepted")
 	}
@@ -556,13 +556,13 @@ func TestEncodeRejectsNonFiniteValues(t *testing.T) {
 
 func TestEncodeRejectsUnsupportedOutputs(t *testing.T) {
 	encoder, _ := newTestEncoder(t, respondWith(denseResponse),
-		deepinfra.WithOutputs(core.RepresentationDense))
+		deepinfra.WithOutputs(retrieval.RepresentationDense))
 
-	_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationSparse))
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationSparse))
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
-	var typed *core.UnsupportedRepresentationError
+	var typed *retrieval.UnsupportedRepresentationError
 	if !errors.As(err, &typed) || typed.Provider != "deepinfra" {
 		t.Fatalf("error does not name the provider: %v", err)
 	}
@@ -573,12 +573,12 @@ func TestEncodeRejectsUnsupportedOutputs(t *testing.T) {
 func TestEncodeRejectsTruncateOption(t *testing.T) {
 	encoder, _ := newTestEncoder(t, respondWith(denseResponse))
 	truncate := false
-	_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:    []string{"a"},
-		Outputs:  []core.RepresentationKind{core.RepresentationDense},
+		Outputs:  []retrieval.RepresentationKind{retrieval.RepresentationDense},
 		Truncate: &truncate,
 	})
-	if !errors.Is(err, core.ErrInvalidRepresentationRequest) {
+	if !errors.Is(err, retrieval.ErrInvalidRepresentationRequest) {
 		t.Fatalf("got %v, want the truncate option to be rejected", err)
 	}
 }
@@ -600,9 +600,9 @@ func TestEncodeBatchesLargeRequests(t *testing.T) {
 			strings.Join(vectors, ","), len(body.Inputs))
 	}, deepinfra.WithBatchSize(2))
 
-	resp, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	resp, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{"a", "bb", "ccc", "dddd", "eeeee"},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -650,9 +650,9 @@ func TestEncodeSplitsByDefault(t *testing.T) {
 	for i := range input {
 		input[i] = "document"
 	}
-	resp, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	resp, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   input,
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	})
 	if err != nil {
 		t.Fatalf("Encode: %v", err)
@@ -688,9 +688,9 @@ func TestEncodeBatchSizeZeroSendsOneRequest(t *testing.T) {
 	for i := range input {
 		input[i] = "document"
 	}
-	if _, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	if _, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   input,
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	}); err != nil {
 		t.Fatalf("Encode: %v", err)
 	}
@@ -705,7 +705,7 @@ func TestEncodeRejectsOversizedResponses(t *testing.T) {
 		respondWith(fmt.Sprintf(`{"embeddings": [[%s], [%s]]}`, big, big)),
 		deepinfra.WithMaxResponseBytes(256))
 
-	_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense))
+	_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense))
 	if err == nil || !strings.Contains(err.Error(), "exceeds the 256 byte limit") {
 		t.Fatalf("got %v, want an oversized-response error", err)
 	}
@@ -719,7 +719,7 @@ func TestEncodeDoesNotRetryClientErrors(t *testing.T) {
 		fmt.Fprint(w, `{"detail": "inputs must be a list of strings"}`)
 	})
 
-	_, err := encoder.Encode(context.Background(), documentRequest(core.RepresentationDense))
+	_, err := encoder.Encode(context.Background(), documentRequest(retrieval.RepresentationDense))
 	var apiErr *deepinfra.APIError
 	if !errors.As(err, &apiErr) {
 		t.Fatalf("got %v, want *deepinfra.APIError", err)
@@ -744,9 +744,9 @@ func TestAPIErrorsRedactSecretsAndInput(t *testing.T) {
 		fmt.Fprintf(w, `{"error": "cannot embed %q", "internal": "token test-token"}`, document)
 	})
 
-	_, err := encoder.Encode(context.Background(), &core.RepresentationRequest{
+	_, err := encoder.Encode(context.Background(), &retrieval.RepresentationRequest{
 		Input:   []string{document},
-		Outputs: []core.RepresentationKind{core.RepresentationDense},
+		Outputs: []retrieval.RepresentationKind{retrieval.RepresentationDense},
 	})
 	if err == nil {
 		t.Fatal("expected an error")
@@ -765,7 +765,7 @@ func TestEncodeHonorsCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := encoder.Encode(ctx, documentRequest(core.RepresentationDense))
+	_, err := encoder.Encode(ctx, documentRequest(retrieval.RepresentationDense))
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("got %v, want context.Canceled", err)
 	}
@@ -778,9 +778,9 @@ func TestEmbedProjectsDenseOutput(t *testing.T) {
 		fmt.Fprint(w, denseResponse)
 	})
 
-	resp, err := encoder.Embed(context.Background(), &core.EmbeddingRequest{
+	resp, err := encoder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:     []string{"a", "b"},
-		InputType: core.EmbeddingInputQuery,
+		InputType: retrieval.EmbeddingInputQuery,
 	})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -798,10 +798,10 @@ func TestEmbedProjectsDenseOutput(t *testing.T) {
 
 func TestEmbedFailsWhenDenseIsNotAdvertised(t *testing.T) {
 	encoder, _ := newTestEncoder(t, respondWith(denseResponse),
-		deepinfra.WithOutputs(core.RepresentationSparse))
+		deepinfra.WithOutputs(retrieval.RepresentationSparse))
 
-	_, err := encoder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"a"}})
-	if !errors.Is(err, core.ErrUnsupportedRepresentation) {
+	_, err := encoder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"a"}})
+	if !errors.Is(err, retrieval.ErrUnsupportedRepresentation) {
 		t.Fatalf("got %v, want ErrUnsupportedRepresentation", err)
 	}
 }
@@ -814,18 +814,18 @@ func TestCapabilitiesDescribeTheDeployment(t *testing.T) {
 
 	narrowed := deepinfra.MustNew(deepinfra.BGEM3Model,
 		deepinfra.WithAPIToken("t"),
-		deepinfra.WithOutputs(core.RepresentationDense),
+		deepinfra.WithOutputs(retrieval.RepresentationDense),
 	).Capabilities()
 	if len(narrowed.Outputs) != 1 {
 		t.Fatalf("narrowed capabilities = %+v", narrowed)
 	}
 
 	// Capabilities must hand back a copy.
-	narrowed.Outputs[0] = core.RepresentationSparse
+	narrowed.Outputs[0] = retrieval.RepresentationSparse
 	if deepinfra.MustNew(deepinfra.BGEM3Model,
 		deepinfra.WithAPIToken("t"),
-		deepinfra.WithOutputs(core.RepresentationDense),
-	).Capabilities().Outputs[0] != core.RepresentationDense {
+		deepinfra.WithOutputs(retrieval.RepresentationDense),
+	).Capabilities().Outputs[0] != retrieval.RepresentationDense {
 		t.Error("Capabilities() shares its Outputs slice")
 	}
 }
@@ -834,7 +834,7 @@ func TestCapabilitiesDescribeTheDeployment(t *testing.T) {
 func TestConformance(t *testing.T) {
 	fixture := readFixture(t)
 	conformance.RunRepresentation(t, conformance.RepresentationOptions{
-		NewEncoder: func(t *testing.T) core.RepresentationEncoder {
+		NewEncoder: func(t *testing.T) retrieval.RepresentationEncoder {
 			encoder, _ := newTestEncoder(t, func(w http.ResponseWriter, r *http.Request) {
 				var body struct {
 					Inputs  []string `json:"inputs"`

@@ -56,7 +56,7 @@ This is additive. Existing `Embedder` users compile and behave as before.
   as diagnostics.
 - **`agentic.representations.v1`** — a versioned JSON contract for endpoints
   you operate, with JSON Schemas and golden fixtures in
-  `internal/representationwire/testdata`.
+  `internal/retrieval/wire/testdata`.
 - **Test doubles** — `provider/test.NewTestRepresentationEncoder`, a
   deterministic fake, and `provider/test/conformance.RunRepresentation`, the
   shared contract suite that providers here and downstream retrieval systems

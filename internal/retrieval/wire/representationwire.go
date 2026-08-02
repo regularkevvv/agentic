@@ -16,7 +16,7 @@
 // clients. An unknown major version is refused rather than guessed at, because
 // a protocol change large enough to bump the major is one where guessing
 // produces vectors that look valid and are not.
-package representationwire
+package wire
 
 import (
 	"encoding/json"
@@ -24,7 +24,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // Version is the protocol version this package speaks.
@@ -89,7 +89,7 @@ type Response struct {
 }
 
 // NewRequest builds the wire request for a core request.
-func NewRequest(req *core.RepresentationRequest) Request {
+func NewRequest(req *retrieval.RepresentationRequest) Request {
 	outputs := make([]string, len(req.Outputs))
 	for i, kind := range req.Outputs {
 		outputs[i] = string(kind)
@@ -118,7 +118,7 @@ type DecodeOptions struct {
 	// deployment that intends to keep an index supplies the descriptor here.
 	// A space the handler does return must match it exactly; a space it omits
 	// is filled from here.
-	Expected map[core.RepresentationKind]core.VectorSpace
+	Expected map[retrieval.RepresentationKind]retrieval.VectorSpace
 
 	// ResponseBytes is the size of the payload, recorded as usage when the
 	// handler does not report its own.
@@ -128,9 +128,9 @@ type DecodeOptions struct {
 // Decode converts a handler payload into the core response shape.
 //
 // It does not run the full contract validation; the caller does that with its
-// own core.RepresentationValidator, so that limits and capabilities stay a
+// own retrieval.RepresentationValidator, so that limits and capabilities stay a
 // provider concern.
-func Decode(payload []byte, req *core.RepresentationRequest, opts DecodeOptions) (*core.RepresentationResponse, error) {
+func Decode(payload []byte, req *retrieval.RepresentationRequest, opts DecodeOptions) (*retrieval.RepresentationResponse, error) {
 	var wire Response
 	if err := json.Unmarshal(payload, &wire); err != nil {
 		return nil, wireError(opts.Provider, -1, "", "response is not valid "+Version+" JSON")
@@ -144,14 +144,14 @@ func Decode(payload []byte, req *core.RepresentationRequest, opts DecodeOptions)
 		return nil, err
 	}
 
-	data := make([]core.Representation, len(wire.Data))
+	data := make([]retrieval.Representation, len(wire.Data))
 	for i, item := range wire.Data {
-		data[i] = core.Representation{
+		data[i] = retrieval.Representation{
 			Dense:       item.Dense,
 			MultiVector: item.MultiVector,
 		}
 		if item.Sparse != nil {
-			data[i].Sparse = &core.SparseVector{
+			data[i].Sparse = &retrieval.SparseVector{
 				Indices: item.Sparse.Indices,
 				Values:  item.Sparse.Values,
 			}
@@ -163,7 +163,7 @@ func Decode(payload []byte, req *core.RepresentationRequest, opts DecodeOptions)
 		model = opts.Model
 	}
 
-	usage := core.RepresentationUsage{
+	usage := retrieval.RepresentationUsage{
 		InputTokens:  wire.Usage.InputTokens,
 		RequestCount: max(wire.Usage.RequestCount, 1),
 		InputBytes:   wire.Usage.InputBytes,
@@ -178,7 +178,7 @@ func Decode(payload []byte, req *core.RepresentationRequest, opts DecodeOptions)
 		usage.OutputBytes = opts.ResponseBytes
 	}
 
-	return &core.RepresentationResponse{
+	return &retrieval.RepresentationResponse{
 		Data:   data,
 		Spaces: spaces,
 		Model:  model,
@@ -216,20 +216,20 @@ func CheckVersion(version, provider string) error {
 
 // decodeSpaces converts the wire descriptors and reconciles them with the
 // caller's configured spaces.
-func decodeSpaces(wire map[string]Space, req *core.RepresentationRequest, opts DecodeOptions) (map[core.RepresentationKind]core.VectorSpace, error) {
-	spaces := make(map[core.RepresentationKind]core.VectorSpace, len(req.Outputs))
+func decodeSpaces(wire map[string]Space, req *retrieval.RepresentationRequest, opts DecodeOptions) (map[retrieval.RepresentationKind]retrieval.VectorSpace, error) {
+	spaces := make(map[retrieval.RepresentationKind]retrieval.VectorSpace, len(req.Outputs))
 
 	for name, space := range wire {
-		kind := core.RepresentationKind(name)
-		decoded := core.VectorSpace{
+		kind := retrieval.RepresentationKind(name)
+		decoded := retrieval.VectorSpace{
 			ID:         space.ID,
 			Provider:   space.Provider,
 			Model:      space.Model,
 			Revision:   space.Revision,
 			Tokenizer:  space.Tokenizer,
-			Kind:       core.RepresentationKind(space.Kind),
+			Kind:       retrieval.RepresentationKind(space.Kind),
 			Dimensions: space.Dimensions,
-			Metric:     core.SimilarityMetric(space.Metric),
+			Metric:     retrieval.SimilarityMetric(space.Metric),
 		}
 		if decoded.Kind == "" {
 			decoded.Kind = kind
@@ -265,8 +265,8 @@ func decodeSpaces(wire map[string]Space, req *core.RepresentationRequest, opts D
 	return spaces, nil
 }
 
-func wireError(provider string, item int, kind core.RepresentationKind, problem string) error {
-	return &core.InvalidRepresentationResponseError{
+func wireError(provider string, item int, kind retrieval.RepresentationKind, problem string) error {
+	return &retrieval.InvalidRepresentationResponseError{
 		Provider: provider,
 		Item:     item,
 		Kind:     kind,

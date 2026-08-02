@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/provider/voyageai"
 )
 
@@ -99,7 +99,7 @@ func TestEmbedTruncationPrecedence(t *testing.T) {
 			var gotBody map[string]any
 			embedder := newBodyCapturingEmbedder(t, &gotBody, tt.opts...)
 
-			if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+			if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 				Input:    []string{"text"},
 				Truncate: tt.truncate,
 			}); err != nil {
@@ -123,7 +123,7 @@ func TestEmbedTruncateDoesNotLeakAcrossCalls(t *testing.T) {
 	var gotBody map[string]any
 	embedder := newBodyCapturingEmbedder(t, &gotBody, voyageai.WithTruncation(true))
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input:    []string{"text"},
 		Truncate: ptr(false),
 	}); err != nil {
@@ -133,7 +133,7 @@ func TestEmbedTruncateDoesNotLeakAcrossCalls(t *testing.T) {
 		t.Fatalf("overridden call truncation = %v, want false", got)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{
 		Input: []string{"text"},
 	}); err != nil {
 		t.Fatalf("Embed without override: %v", err)
@@ -149,7 +149,7 @@ func TestEmbedVectorsAreFloat32(t *testing.T) {
 	var gotBody map[string]any
 	embedder := newBodyCapturingEmbedder(t, &gotBody)
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"text"}})
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"text"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -217,7 +217,7 @@ func TestEmbedInvalidBaseURL(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	if _, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
+	if _, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}}); err == nil {
 		t.Fatal("Embed should fail when the base URL cannot form a request")
 	}
 }
@@ -238,7 +238,7 @@ func TestEmbedRetriesNetworkError(t *testing.T) {
 		}, nil
 	})
 
-	resp, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+	resp, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestEmbedBodyFailures(t *testing.T) {
 				}, nil
 			})
 
-			_, err := embedder.Embed(context.Background(), &core.EmbeddingRequest{Input: []string{"hello"}})
+			_, err := embedder.Embed(context.Background(), &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 			if err == nil {
 				t.Fatalf("Embed should fail on a %s", tt.name)
 			}
@@ -327,7 +327,7 @@ func TestEmbedDeadlineDuringBackoff(t *testing.T) {
 				return tt.reply()
 			})
 
-			_, err := embedder.Embed(ctx, &core.EmbeddingRequest{Input: []string{"hello"}})
+			_, err := embedder.Embed(ctx, &retrieval.EmbeddingRequest{Input: []string{"hello"}})
 			if !errors.Is(err, context.DeadlineExceeded) {
 				t.Fatalf("error = %v, want context.DeadlineExceeded", err)
 			}

@@ -467,7 +467,8 @@ agentic/
   tool/               # Tool builders, registry, toolsets
   representation.go   # Multi-representation encoding helpers and adapters
   provider/           # LLM, embedding, reranking, and encoding providers
-  internal/core/      # Shared types (Message, Tool, Model, etc.)
+  internal/core/      # Chat primitives (Message, Tool, Model, Stream)
+  internal/retrieval/ # Vector primitives (Embedder, Encoder, Reranker, spaces)
   mcp/                # Model Context Protocol integration
   harness/            # Nested module: experimental durable sessions
   e2e/                # Nested module: live provider tests and examples

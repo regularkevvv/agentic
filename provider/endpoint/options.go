@@ -3,8 +3,8 @@ package endpoint
 import (
 	"net/http"
 
-	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/providerhttp"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // Option configures an Encoder.
@@ -21,9 +21,9 @@ type config struct {
 	unauthenticated bool
 	model           string
 	batchSize       int
-	outputs         []core.RepresentationKind
-	spaces          map[core.RepresentationKind]core.VectorSpace
-	limits          *core.RepresentationLimits
+	outputs         []retrieval.RepresentationKind
+	spaces          map[retrieval.RepresentationKind]retrieval.VectorSpace
+	limits          *retrieval.RepresentationLimits
 }
 
 // WithToken sets the bearer token sent to the endpoint. If not set,
@@ -84,8 +84,8 @@ func WithBatchSize(size int) Option {
 
 // WithOutputs declares which representation kinds this endpoint serves
 // (default all three, matching the reference handler).
-func WithOutputs(kinds ...core.RepresentationKind) Option {
-	return func(c *config) { c.outputs = append([]core.RepresentationKind(nil), kinds...) }
+func WithOutputs(kinds ...retrieval.RepresentationKind) Option {
+	return func(c *config) { c.outputs = append([]retrieval.RepresentationKind(nil), kinds...) }
 }
 
 // WithVectorSpaces pins the vector spaces this endpoint encodes into.
@@ -95,9 +95,9 @@ func WithOutputs(kinds ...core.RepresentationKind) Option {
 // whose output you intend to keep, so that a redeployment onto different
 // weights fails loudly instead of quietly mixing two generations of vectors in
 // one index.
-func WithVectorSpaces(spaces map[core.RepresentationKind]core.VectorSpace) Option {
+func WithVectorSpaces(spaces map[retrieval.RepresentationKind]retrieval.VectorSpace) Option {
 	return func(c *config) {
-		c.spaces = make(map[core.RepresentationKind]core.VectorSpace, len(spaces))
+		c.spaces = make(map[retrieval.RepresentationKind]retrieval.VectorSpace, len(spaces))
 		for kind, space := range spaces {
 			c.spaces[kind] = space
 		}
@@ -105,6 +105,6 @@ func WithVectorSpaces(spaces map[core.RepresentationKind]core.VectorSpace) Optio
 }
 
 // WithLimits overrides the request and response size ceilings.
-func WithLimits(limits core.RepresentationLimits) Option {
+func WithLimits(limits retrieval.RepresentationLimits) Option {
 	return func(c *config) { c.limits = &limits }
 }

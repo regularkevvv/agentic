@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/regularkevvv/agentic/internal/core"
-	"github.com/regularkevvv/agentic/internal/embedbatch"
+	"github.com/regularkevvv/agentic/internal/retrieval"
+	"github.com/regularkevvv/agentic/internal/retrieval/embedbatch"
 
 	"google.golang.org/genai"
 )
@@ -20,15 +20,15 @@ const DefaultEmbeddingModel = "gemini-embedding-001"
 // vectors on that task; the model places a query near the documents that
 // answer it rather than near other similarly-worded queries.
 //
-// [core.EmbeddingRequest.InputType] can only express the retrieval pair, so
+// [retrieval.EmbeddingRequest.InputType] can only express the retrieval pair, so
 // the other six are reachable only through WithEmbeddingTaskType.
 const (
 	// TaskTypeRetrievalQuery embeds a search query. Mapped from
-	// [core.EmbeddingInputQuery].
+	// [retrieval.EmbeddingInputQuery].
 	TaskTypeRetrievalQuery = "RETRIEVAL_QUERY"
 
 	// TaskTypeRetrievalDocument embeds a document to be indexed and searched
-	// against. Mapped from [core.EmbeddingInputDocument].
+	// against. Mapped from [retrieval.EmbeddingInputDocument].
 	TaskTypeRetrievalDocument = "RETRIEVAL_DOCUMENT"
 
 	// TaskTypeSemanticSimilarity embeds text for symmetric similarity
@@ -56,7 +56,7 @@ const (
 )
 
 // WithEmbeddingTaskType pins every request to a specific Gemini task type,
-// reaching the task types [core.EmbeddingRequest.InputType] cannot name
+// reaching the task types [retrieval.EmbeddingRequest.InputType] cannot name
 // (clustering, classification, fact verification, and the rest).
 //
 // A request that sets InputType still wins over this option, matching the
@@ -70,7 +70,7 @@ func WithEmbeddingTaskType(taskType string) Option {
 	return func(c *config) { c.taskType = taskType }
 }
 
-// Embedder implements [core.Embedder] using the Gemini embeddings API, via
+// Embedder implements [retrieval.Embedder] using the Gemini embeddings API, via
 // either the Gemini API or Vertex AI.
 type Embedder struct {
 	client *genai.Client
@@ -184,7 +184,7 @@ func newEmbedderSingleInput(vertexAI bool, model string) bool {
 	return isGeminiEmbed || isMaaS
 }
 
-// Embed implements [core.Embedder].
+// Embed implements [retrieval.Embedder].
 //
 // InputType maps onto Gemini's taskType: query becomes RETRIEVAL_QUERY,
 // document becomes RETRIEVAL_DOCUMENT, and none leaves taskType unset so the
@@ -208,7 +208,7 @@ func newEmbedderSingleInput(vertexAI bool, model string) bool {
 // renormalization is applied here: no other embedder in this tree rescales a
 // provider's output, and the upstream reference returns the values verbatim
 // too. Renormalize in the caller if your index needs it.
-func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+func (e *Embedder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -220,29 +220,29 @@ func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core
 
 	if e.singleInput && len(req.Input) > 1 {
 		vectors, usage, err := embedbatch.FanOut(ctx, req.Input, 0,
-			func(ctx context.Context, text string) ([]float32, core.EmbeddingUsage, error) {
+			func(ctx context.Context, text string) ([]float32, retrieval.EmbeddingUsage, error) {
 				vecs, usage, err := e.embedBatch(ctx, []string{text}, cfg)
 				if err != nil {
-					return nil, core.EmbeddingUsage{}, err
+					return nil, retrieval.EmbeddingUsage{}, err
 				}
 				return vecs[0], usage, nil
 			})
 		if err != nil {
 			return nil, err
 		}
-		return &core.EmbeddingResponse{Vectors: vectors, Model: e.model, Usage: usage}, nil
+		return &retrieval.EmbeddingResponse{Vectors: vectors, Model: e.model, Usage: usage}, nil
 	}
 
 	vectors, usage, err := e.embedBatch(ctx, req.Input, cfg)
 	if err != nil {
 		return nil, err
 	}
-	return &core.EmbeddingResponse{Vectors: vectors, Model: e.model, Usage: usage}, nil
+	return &retrieval.EmbeddingResponse{Vectors: vectors, Model: e.model, Usage: usage}, nil
 }
 
 // buildConfig turns a request into the SDK's embedding config, rejecting the
 // settings this backend cannot represent.
-func (e *Embedder) buildConfig(req *core.EmbeddingRequest) (*genai.EmbedContentConfig, error) {
+func (e *Embedder) buildConfig(req *retrieval.EmbeddingRequest) (*genai.EmbedContentConfig, error) {
 	cfg := &genai.EmbedContentConfig{TaskType: e.resolveTaskType(req.InputType)}
 
 	if req.Dimensions > 0 {
@@ -271,11 +271,11 @@ func (e *Embedder) buildConfig(req *core.EmbeddingRequest) (*genai.EmbedContentC
 // resolveTaskType maps our input type onto Gemini's taskType, falling back to
 // the constructor default when the request does not specify a side of the
 // retrieval pair. An empty result leaves taskType unset.
-func (e *Embedder) resolveTaskType(inputType core.EmbeddingInputType) string {
+func (e *Embedder) resolveTaskType(inputType retrieval.EmbeddingInputType) string {
 	switch inputType {
-	case core.EmbeddingInputQuery:
+	case retrieval.EmbeddingInputQuery:
 		return TaskTypeRetrievalQuery
-	case core.EmbeddingInputDocument:
+	case retrieval.EmbeddingInputDocument:
 		return TaskTypeRetrievalDocument
 	default:
 		return e.taskType
@@ -283,7 +283,7 @@ func (e *Embedder) resolveTaskType(inputType core.EmbeddingInputType) string {
 }
 
 // embedBatch issues one EmbedContent call and validates what comes back.
-func (e *Embedder) embedBatch(ctx context.Context, inputs []string, cfg *genai.EmbedContentConfig) ([][]float32, core.EmbeddingUsage, error) {
+func (e *Embedder) embedBatch(ctx context.Context, inputs []string, cfg *genai.EmbedContentConfig) ([][]float32, retrieval.EmbeddingUsage, error) {
 	contents := make([]*genai.Content, len(inputs))
 	for i, text := range inputs {
 		contents[i] = &genai.Content{Parts: []*genai.Part{genai.NewPartFromText(text)}}
@@ -291,7 +291,7 @@ func (e *Embedder) embedBatch(ctx context.Context, inputs []string, cfg *genai.E
 
 	resp, err := e.client.Models.EmbedContent(ctx, e.model, contents, cfg)
 	if err != nil {
-		return nil, core.EmbeddingUsage{}, fmt.Errorf("gemini embeddings: %w", err)
+		return nil, retrieval.EmbeddingUsage{}, fmt.Errorf("gemini embeddings: %w", err)
 	}
 	// resp is never nil when err is nil: the SDK allocates the response
 	// before decoding into it, so no nil guard is needed here.
@@ -299,16 +299,16 @@ func (e *Embedder) embedBatch(ctx context.Context, inputs []string, cfg *genai.E
 	// A count mismatch would silently misalign every vector against its
 	// source text, so it is an error rather than a short result.
 	if len(resp.Embeddings) != len(inputs) {
-		return nil, core.EmbeddingUsage{}, fmt.Errorf("gemini embeddings: got %d vectors for %d inputs", len(resp.Embeddings), len(inputs))
+		return nil, retrieval.EmbeddingUsage{}, fmt.Errorf("gemini embeddings: got %d vectors for %d inputs", len(resp.Embeddings), len(inputs))
 	}
 
 	// The API documents embeddings as coming back in request order and gives
 	// no index to reorder by, so position is the only join available.
 	vectors := make([][]float32, len(inputs))
-	var usage core.EmbeddingUsage
+	var usage retrieval.EmbeddingUsage
 	for i, emb := range resp.Embeddings {
 		if emb == nil || emb.Values == nil {
-			return nil, core.EmbeddingUsage{}, fmt.Errorf("gemini embeddings: missing vector at index %d", i)
+			return nil, retrieval.EmbeddingUsage{}, fmt.Errorf("gemini embeddings: missing vector at index %d", i)
 		}
 		vectors[i] = emb.Values
 		// Statistics are Vertex-only; on the Gemini API this stays zero.
@@ -323,10 +323,10 @@ func (e *Embedder) embedBatch(ctx context.Context, inputs []string, cfg *genai.E
 	return vectors, usage, nil
 }
 
-// Name implements [core.Embedder].
+// Name implements [retrieval.Embedder].
 func (e *Embedder) Name() string {
 	return e.model
 }
 
-// Compile-time check that Embedder implements core.Embedder.
-var _ core.Embedder = (*Embedder)(nil)
+// Compile-time check that Embedder implements retrieval.Embedder.
+var _ retrieval.Embedder = (*Embedder)(nil)

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // DefaultEmbeddingModel is the model used by the examples in this package and
@@ -14,7 +14,7 @@ import (
 const DefaultEmbeddingModel = "embed-v4.0"
 
 // InputType is Cohere's native input-type vocabulary. The /v2/embed API
-// requires one on every request, so every core.EmbeddingInputType is mapped
+// requires one on every request, so every retrieval.EmbeddingInputType is mapped
 // onto one of these before the call is made.
 type InputType string
 
@@ -44,7 +44,7 @@ func (t InputType) valid() bool {
 	}
 }
 
-// Embedder implements core.Embedder using the Cohere /v2/embed API.
+// Embedder implements retrieval.Embedder using the Cohere /v2/embed API.
 type Embedder struct {
 	model            string
 	client           *client
@@ -90,9 +90,9 @@ func WithMaxRetries(retries int) Option {
 }
 
 // WithDefaultInputType overrides the input type sent for requests that carry
-// core.EmbeddingInputNone.
+// retrieval.EmbeddingInputNone.
 //
-// The /v2/embed API requires an input type, but core.EmbeddingInputNone means
+// The /v2/embed API requires an input type, but retrieval.EmbeddingInputNone means
 // "no task instruction", which has no Cohere equivalent — so a choice has to be
 // made on the caller's behalf. The default is InputTypeSearchDocument, on the
 // reasoning that an untyped batch is far more often a corpus being indexed than
@@ -107,7 +107,7 @@ func WithDefaultInputType(inputType InputType) Option {
 // length: true truncates them at the end, false rejects the request with an
 // error.
 //
-// This is only a default. A per-call core.EmbeddingRequest.Truncate takes
+// This is only a default. A per-call retrieval.EmbeddingRequest.Truncate takes
 // precedence over it. If neither is set the field is omitted and the Cohere
 // API's own default applies, which is to truncate — prefer WithTruncation(false)
 // when indexing, because storing the vector of a clipped document as if it
@@ -172,7 +172,7 @@ type embedRequest struct {
 }
 
 // embedResponse declares only the fields this package maps. Cohere also
-// returns an id and, when asked, the echoed texts; core.EmbeddingResponse has
+// returns an id and, when asked, the echoed texts; retrieval.EmbeddingResponse has
 // nowhere to put either, so they are left undecoded.
 type embedResponse struct {
 	Embeddings struct {
@@ -181,7 +181,7 @@ type embedResponse struct {
 	Meta meta `json:"meta"`
 }
 
-// Embed implements core.Embedder.
+// Embed implements retrieval.Embedder.
 //
 // The request's InputType is mapped onto Cohere's required input_type:
 // EmbeddingInputQuery becomes "search_query", EmbeddingInputDocument becomes
@@ -194,7 +194,7 @@ type embedResponse struct {
 // would have accepted. An oversized batch is left to the API's own 400, whose
 // message field is included verbatim in the returned error, which makes a limit
 // violation self-diagnosing.
-func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+func (e *Embedder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err
 	}
@@ -236,7 +236,7 @@ func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core
 		return nil, fmt.Errorf("cohere embeddings: got %d vectors for %d inputs", len(vectors), len(req.Input))
 	}
 
-	return &core.EmbeddingResponse{
+	return &retrieval.EmbeddingResponse{
 		Vectors: vectors,
 		// Cohere does not echo the model back, so the configured name is
 		// reported.
@@ -245,29 +245,29 @@ func (e *Embedder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core
 	}, nil
 }
 
-// Name implements core.Embedder.
+// Name implements retrieval.Embedder.
 func (e *Embedder) Name() string {
 	return e.model
 }
 
-// usage maps Cohere's meta block onto core.EmbeddingUsage. Billed units are
+// usage maps Cohere's meta block onto retrieval.EmbeddingUsage. Billed units are
 // preferred because they are what the caller pays for; the tokens block is used
 // as a fallback for responses (and proxies) that report only consumption.
-func (e *Embedder) usage(m meta) core.EmbeddingUsage {
+func (e *Embedder) usage(m meta) retrieval.EmbeddingUsage {
 	tokens := m.BilledUnits.InputTokens
 	if tokens == 0 {
 		tokens = m.Tokens.InputTokens
 	}
-	return core.EmbeddingUsage{PromptTokens: tokens, TotalTokens: tokens}
+	return retrieval.EmbeddingUsage{PromptTokens: tokens, TotalTokens: tokens}
 }
 
 // resolveInputType maps our input type onto Cohere's required one, falling back
 // to the configured default when the caller expressed no preference.
-func (e *Embedder) resolveInputType(requested core.EmbeddingInputType) InputType {
+func (e *Embedder) resolveInputType(requested retrieval.EmbeddingInputType) InputType {
 	switch requested {
-	case core.EmbeddingInputQuery:
+	case retrieval.EmbeddingInputQuery:
 		return InputTypeSearchQuery
-	case core.EmbeddingInputDocument:
+	case retrieval.EmbeddingInputDocument:
 		return InputTypeSearchDocument
 	default:
 		return e.defaultInputType
@@ -294,5 +294,5 @@ func (e *Embedder) resolveTruncate(requested *bool) string {
 	return "NONE"
 }
 
-// Compile-time check that Embedder implements core.Embedder.
-var _ core.Embedder = (*Embedder)(nil)
+// Compile-time check that Embedder implements retrieval.Embedder.
+var _ retrieval.Embedder = (*Embedder)(nil)

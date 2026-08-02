@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/regularkevvv/agentic/internal/core"
-	"github.com/regularkevvv/agentic/internal/representationbatch"
+	"github.com/regularkevvv/agentic/internal/retrieval"
+	"github.com/regularkevvv/agentic/internal/retrieval/batch"
 )
 
 // Pinecone's input type values for the two retrieval roles.
@@ -58,8 +58,8 @@ type embedUsageBlock struct {
 	TotalTokens int `json:"total_tokens"`
 }
 
-// Encode implements core.RepresentationEncoder.
-func (e *Encoder) Encode(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
+// Encode implements retrieval.RepresentationEncoder.
+func (e *Encoder) Encode(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
 	resp, _, err := e.encode(ctx, req)
 	return resp, err
 }
@@ -74,9 +74,9 @@ func (e *Encoder) Encode(ctx context.Context, req *core.RepresentationRequest) (
 // coordinate, or the reverse.
 //
 // Tokens are nil for a dense encoder, which has no coordinates to name.
-func (e *Encoder) EncodeWithTokens(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, [][]string, error) {
+func (e *Encoder) EncodeWithTokens(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, [][]string, error) {
 	if !e.returnTokens {
-		return nil, nil, &core.InvalidRepresentationRequestError{
+		return nil, nil, &retrieval.InvalidRepresentationRequestError{
 			Invariant: "return_tokens.disabled",
 			Detail:    "pinecone: build the encoder with WithReturnTokens(true) to observe the tokens behind each coordinate",
 		}
@@ -84,7 +84,7 @@ func (e *Encoder) EncodeWithTokens(ctx context.Context, req *core.Representation
 	return e.encode(ctx, req)
 }
 
-func (e *Encoder) encode(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, [][]string, error) {
+func (e *Encoder) encode(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, [][]string, error) {
 	validator := e.validator()
 	if err := validator.ValidateRequest(req); err != nil {
 		return nil, nil, err
@@ -93,8 +93,8 @@ func (e *Encoder) encode(ctx context.Context, req *core.RepresentationRequest) (
 	// Tokens accumulate across chunks in input order, alongside the merged
 	// response the batch helper builds.
 	var tokens [][]string
-	resp, err := representationbatch.Chunked(ctx, req, e.batchSize,
-		func(ctx context.Context, chunk *core.RepresentationRequest) (*core.RepresentationResponse, error) {
+	resp, err := batch.Chunked(ctx, req, e.batchSize,
+		func(ctx context.Context, chunk *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
 			chunkResp, chunkTokens, err := e.encodeChunk(ctx, chunk)
 			if err != nil {
 				return nil, err
@@ -111,7 +111,7 @@ func (e *Encoder) encode(ctx context.Context, req *core.RepresentationRequest) (
 	return resp, tokens, nil
 }
 
-func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, [][]string, error) {
+func (e *Encoder) encodeChunk(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, [][]string, error) {
 	body := embedRequest{
 		Model: e.model,
 		Parameters: embedParameters{
@@ -147,7 +147,7 @@ func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationReque
 			"model returned %s vectors, but this encoder is configured for %s", got, e.kind))
 	}
 
-	data := make([]core.Representation, len(wire.Data))
+	data := make([]retrieval.Representation, len(wire.Data))
 	tokens := make([][]string, len(wire.Data))
 	width := 0
 
@@ -157,12 +157,12 @@ func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationReque
 				"vector is %s, but this encoder is configured for %s", vec.VectorType, e.kind))
 		}
 		switch e.kind {
-		case core.RepresentationDense:
+		case retrieval.RepresentationDense:
 			data[i].Dense = vec.Values
 			if i == 0 {
 				width = len(vec.Values)
 			}
-		case core.RepresentationSparse:
+		case retrieval.RepresentationSparse:
 			sparse, ordered, err := canonicalSparse(vec, i)
 			if err != nil {
 				return nil, nil, err
@@ -181,11 +181,11 @@ func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationReque
 		inputBytes += len(text)
 	}
 
-	return &core.RepresentationResponse{
+	return &retrieval.RepresentationResponse{
 		Data:   data,
-		Spaces: map[core.RepresentationKind]core.VectorSpace{e.kind: e.space(width)},
+		Spaces: map[retrieval.RepresentationKind]retrieval.VectorSpace{e.kind: e.space(width)},
 		Model:  e.model,
-		Usage: core.RepresentationUsage{
+		Usage: retrieval.RepresentationUsage{
 			InputTokens:  wire.Usage.TotalTokens,
 			RequestCount: 1,
 			InputBytes:   inputBytes,
@@ -200,14 +200,14 @@ func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationReque
 // Sorting is safe here only because duplicates are rejected first: reordering
 // a list that assigns one coordinate two weights would hide the conflict and
 // keep whichever weight happened to land last.
-func canonicalSparse(vec embedVector, item int) (*core.SparseVector, []string, error) {
+func canonicalSparse(vec embedVector, item int) (*retrieval.SparseVector, []string, error) {
 	if len(vec.SparseIndices) != len(vec.SparseValues) {
-		return nil, nil, responseError(item, core.RepresentationSparse,
+		return nil, nil, responseError(item, retrieval.RepresentationSparse,
 			fmt.Sprintf("got %d sparse indices and %d values",
 				len(vec.SparseIndices), len(vec.SparseValues)))
 	}
 	if len(vec.SparseTokens) > 0 && len(vec.SparseTokens) != len(vec.SparseIndices) {
-		return nil, nil, responseError(item, core.RepresentationSparse,
+		return nil, nil, responseError(item, retrieval.RepresentationSparse,
 			fmt.Sprintf("got %d sparse tokens for %d coordinates",
 				len(vec.SparseTokens), len(vec.SparseIndices)))
 	}
@@ -220,7 +220,7 @@ func canonicalSparse(vec embedVector, item int) (*core.SparseVector, []string, e
 		return vec.SparseIndices[order[a]] < vec.SparseIndices[order[b]]
 	})
 
-	sparse := &core.SparseVector{
+	sparse := &retrieval.SparseVector{
 		Indices: make([]uint32, len(order)),
 		Values:  make([]float32, len(order)),
 	}
@@ -232,7 +232,7 @@ func canonicalSparse(vec embedVector, item int) (*core.SparseVector, []string, e
 	for position, source := range order {
 		index := vec.SparseIndices[source]
 		if position > 0 && index == sparse.Indices[position-1] {
-			return nil, nil, responseError(item, core.RepresentationSparse,
+			return nil, nil, responseError(item, retrieval.RepresentationSparse,
 				fmt.Sprintf("sparse coordinate %d appears more than once", index))
 		}
 		sparse.Indices[position] = index
@@ -244,13 +244,13 @@ func canonicalSparse(vec embedVector, item int) (*core.SparseVector, []string, e
 	return sparse, tokens, nil
 }
 
-// Embed implements core.Embedder for a dense-configured encoder.
-func (e *Encoder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+// Embed implements retrieval.Embedder for a dense-configured encoder.
+func (e *Encoder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	if e.embedder == nil {
-		return nil, &core.UnsupportedRepresentationError{
+		return nil, &retrieval.UnsupportedRepresentationError{
 			Provider:  providerName,
-			Kind:      core.RepresentationDense,
-			Supported: []core.RepresentationKind{e.kind},
+			Kind:      retrieval.RepresentationDense,
+			Supported: []retrieval.RepresentationKind{e.kind},
 		}
 	}
 	return e.embedder.Embed(ctx, req)
@@ -259,11 +259,11 @@ func (e *Encoder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.
 // inputTypeFor maps Agentic's retrieval role onto Pinecone's vocabulary. The
 // two roles encode into the same space, which is what makes a query
 // comparable to an indexed passage.
-func inputTypeFor(inputType core.EmbeddingInputType) string {
+func inputTypeFor(inputType retrieval.EmbeddingInputType) string {
 	switch inputType {
-	case core.EmbeddingInputQuery:
+	case retrieval.EmbeddingInputQuery:
 		return inputTypeQuery
-	case core.EmbeddingInputDocument:
+	case retrieval.EmbeddingInputDocument:
 		return inputTypePassage
 	}
 	return ""
@@ -281,8 +281,8 @@ func truncateFor(truncate *bool) string {
 	return truncateNone
 }
 
-func responseError(item int, kind core.RepresentationKind, problem string) error {
-	return &core.InvalidRepresentationResponseError{
+func responseError(item int, kind retrieval.RepresentationKind, problem string) error {
+	return &retrieval.InvalidRepresentationResponseError{
 		Provider: providerName,
 		Item:     item,
 		Kind:     kind,

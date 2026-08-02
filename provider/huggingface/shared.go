@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/providerhttp"
-	"github.com/regularkevvv/agentic/internal/representationbatch"
+	"github.com/regularkevvv/agentic/internal/retrieval"
+	"github.com/regularkevvv/agentic/internal/retrieval/batch"
 )
 
 // SharedEncoder calls the Inference Providers router's feature-extraction
@@ -29,10 +29,10 @@ type SharedEncoder struct {
 	provider   string
 	batchSize  int
 	normalize  *bool
-	promptName map[core.EmbeddingInputType]string
-	space      core.VectorSpace
-	limits     core.RepresentationLimits
-	embedder   *core.EncoderEmbedder
+	promptName map[retrieval.EmbeddingInputType]string
+	space      retrieval.VectorSpace
+	limits     retrieval.RepresentationLimits
+	embedder   *retrieval.EncoderEmbedder
 }
 
 // SharedOption configures a SharedEncoder.
@@ -45,9 +45,9 @@ type sharedConfig struct {
 	provider   string
 	batchSize  int
 	normalize  *bool
-	promptName map[core.EmbeddingInputType]string
-	space      core.VectorSpace
-	limits     *core.RepresentationLimits
+	promptName map[retrieval.EmbeddingInputType]string
+	space      retrieval.VectorSpace
+	limits     *retrieval.RepresentationLimits
 }
 
 // WithSharedToken sets the access token. If not set, HF_TOKEN and then
@@ -104,12 +104,12 @@ func WithNormalize(normalize bool) SharedOption {
 // encoding happened when it did not.
 func WithPromptNames(query, document string) SharedOption {
 	return func(c *sharedConfig) {
-		c.promptName = map[core.EmbeddingInputType]string{}
+		c.promptName = map[retrieval.EmbeddingInputType]string{}
 		if query != "" {
-			c.promptName[core.EmbeddingInputQuery] = query
+			c.promptName[retrieval.EmbeddingInputQuery] = query
 		}
 		if document != "" {
-			c.promptName[core.EmbeddingInputDocument] = document
+			c.promptName[retrieval.EmbeddingInputDocument] = document
 		}
 	}
 }
@@ -119,12 +119,12 @@ func WithPromptNames(query, document string) SharedOption {
 //
 // Only ID, Revision, and Tokenizer are taken from it; the width and metric are
 // observed from the response and fixed by this package respectively.
-func WithSharedVectorSpace(space core.VectorSpace) SharedOption {
+func WithSharedVectorSpace(space retrieval.VectorSpace) SharedOption {
 	return func(c *sharedConfig) { c.space = space }
 }
 
 // WithSharedLimits overrides the request and response size ceilings.
-func WithSharedLimits(limits core.RepresentationLimits) SharedOption {
+func WithSharedLimits(limits retrieval.RepresentationLimits) SharedOption {
 	return func(c *sharedConfig) { c.limits = &limits }
 }
 
@@ -160,7 +160,7 @@ func NewShared(model string, opts ...SharedOption) (*SharedEncoder, error) {
 	if provider == "" {
 		provider = "hf-inference"
 	}
-	limits := core.DefaultRepresentationLimits()
+	limits := retrieval.DefaultRepresentationLimits()
 	if cfg.limits != nil {
 		limits = *cfg.limits
 	}
@@ -176,34 +176,34 @@ func NewShared(model string, opts ...SharedOption) (*SharedEncoder, error) {
 		space:      cfg.space,
 		limits:     limits,
 	}
-	encoder.embedder, err = core.NewEncoderEmbedder(encoder)
+	encoder.embedder, err = retrieval.NewEncoderEmbedder(encoder)
 	if err != nil {
 		return nil, err
 	}
 	return encoder, nil
 }
 
-// Name implements core.RepresentationEncoder and core.Embedder.
+// Name implements retrieval.RepresentationEncoder and retrieval.Embedder.
 func (e *SharedEncoder) Name() string { return e.model }
 
-// Capabilities implements core.RepresentationEncoder.
-func (e *SharedEncoder) Capabilities() core.RepresentationCapabilities {
-	inputTypes := []core.EmbeddingInputType{core.EmbeddingInputNone}
-	for _, role := range []core.EmbeddingInputType{core.EmbeddingInputQuery, core.EmbeddingInputDocument} {
+// Capabilities implements retrieval.RepresentationEncoder.
+func (e *SharedEncoder) Capabilities() retrieval.RepresentationCapabilities {
+	inputTypes := []retrieval.EmbeddingInputType{retrieval.EmbeddingInputNone}
+	for _, role := range []retrieval.EmbeddingInputType{retrieval.EmbeddingInputQuery, retrieval.EmbeddingInputDocument} {
 		if e.promptName[role] != "" {
 			inputTypes = append(inputTypes, role)
 		}
 	}
-	return core.RepresentationCapabilities{
-		Outputs:             []core.RepresentationKind{core.RepresentationDense},
+	return retrieval.RepresentationCapabilities{
+		Outputs:             []retrieval.RepresentationKind{retrieval.RepresentationDense},
 		InputTypes:          inputTypes,
 		SupportsTruncation:  true,
 		SupportsMultiOutput: false,
 	}
 }
 
-func (e *SharedEncoder) validator() core.RepresentationValidator {
-	return core.RepresentationValidator{
+func (e *SharedEncoder) validator() retrieval.RepresentationValidator {
+	return retrieval.RepresentationValidator{
 		Provider:     providerName,
 		Capabilities: e.Capabilities(),
 		Limits:       e.limits,
@@ -219,14 +219,14 @@ type featureExtractionRequest struct {
 	PromptName string   `json:"prompt_name,omitempty"`
 }
 
-// Encode implements core.RepresentationEncoder.
-func (e *SharedEncoder) Encode(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
+// Encode implements retrieval.RepresentationEncoder.
+func (e *SharedEncoder) Encode(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
 	validator := e.validator()
 	if err := validator.ValidateRequest(req); err != nil {
 		return nil, err
 	}
 
-	resp, err := representationbatch.Chunked(ctx, req, e.batchSize, e.encodeChunk)
+	resp, err := batch.Chunked(ctx, req, e.batchSize, e.encodeChunk)
 	if err != nil {
 		return nil, err
 	}
@@ -236,7 +236,7 @@ func (e *SharedEncoder) Encode(ctx context.Context, req *core.RepresentationRequ
 	return resp, nil
 }
 
-func (e *SharedEncoder) encodeChunk(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
+func (e *SharedEncoder) encodeChunk(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
 	url := fmt.Sprintf("%s/%s/models/%s/pipeline/feature-extraction", e.routerURL, e.provider, e.model)
 
 	payload, err := e.client.Post(ctx, url, featureExtractionRequest{
@@ -251,27 +251,27 @@ func (e *SharedEncoder) encodeChunk(ctx context.Context, req *core.Representatio
 
 	var vectors [][]float32
 	if err := json.Unmarshal(payload, &vectors); err != nil {
-		return nil, &core.InvalidRepresentationResponseError{
+		return nil, &retrieval.InvalidRepresentationResponseError{
 			Provider: providerName,
 			Item:     -1,
-			Kind:     core.RepresentationDense,
+			Kind:     retrieval.RepresentationDense,
 			Problem: "feature-extraction response is not an array of vectors; " +
 				"a model whose pipeline returns token-level output is not usable here",
 		}
 	}
 	if len(vectors) != len(req.Input) {
-		return nil, &core.InvalidRepresentationResponseError{
+		return nil, &retrieval.InvalidRepresentationResponseError{
 			Provider: providerName,
 			Item:     -1,
-			Kind:     core.RepresentationDense,
+			Kind:     retrieval.RepresentationDense,
 			Problem:  fmt.Sprintf("got %d vectors for %d inputs", len(vectors), len(req.Input)),
 		}
 	}
 
-	data := make([]core.Representation, len(vectors))
+	data := make([]retrieval.Representation, len(vectors))
 	inputBytes := 0
 	for i, vec := range vectors {
-		data[i] = core.Representation{Dense: vec}
+		data[i] = retrieval.Representation{Dense: vec}
 	}
 	for _, text := range req.Input {
 		inputBytes += len(text)
@@ -282,11 +282,11 @@ func (e *SharedEncoder) encodeChunk(ctx context.Context, req *core.Representatio
 		width = len(vectors[0])
 	}
 
-	return &core.RepresentationResponse{
+	return &retrieval.RepresentationResponse{
 		Data:   data,
-		Spaces: map[core.RepresentationKind]core.VectorSpace{core.RepresentationDense: e.vectorSpace(width)},
+		Spaces: map[retrieval.RepresentationKind]retrieval.VectorSpace{retrieval.RepresentationDense: e.vectorSpace(width)},
 		Model:  e.model,
-		Usage: core.RepresentationUsage{
+		Usage: retrieval.RepresentationUsage{
 			RequestCount: 1,
 			InputBytes:   inputBytes,
 			OutputBytes:  len(payload),
@@ -299,27 +299,27 @@ func (e *SharedEncoder) encodeChunk(ctx context.Context, req *core.Representatio
 // The router reports no token usage and no model revision, so InputTokens
 // stays zero rather than being estimated locally, and the revision is empty
 // unless the caller pinned one.
-func (e *SharedEncoder) vectorSpace(width int) core.VectorSpace {
-	space := core.VectorSpace{
+func (e *SharedEncoder) vectorSpace(width int) retrieval.VectorSpace {
+	space := retrieval.VectorSpace{
 		ID:         e.space.ID,
 		Provider:   providerName,
 		Model:      e.model,
 		Revision:   e.space.Revision,
 		Tokenizer:  e.space.Tokenizer,
-		Kind:       core.RepresentationDense,
+		Kind:       retrieval.RepresentationDense,
 		Dimensions: width,
-		Metric:     core.SimilarityCosine,
+		Metric:     retrieval.SimilarityCosine,
 	}
 	return space.WithCanonicalID()
 }
 
-// Embed implements core.Embedder.
-func (e *SharedEncoder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+// Embed implements retrieval.Embedder.
+func (e *SharedEncoder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	return e.embedder.Embed(ctx, req)
 }
 
 // Compile-time checks that SharedEncoder satisfies both contracts.
 var (
-	_ core.RepresentationEncoder = (*SharedEncoder)(nil)
-	_ core.Embedder              = (*SharedEncoder)(nil)
+	_ retrieval.RepresentationEncoder = (*SharedEncoder)(nil)
+	_ retrieval.Embedder              = (*SharedEncoder)(nil)
 )

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
 // realisticSparseRow builds a row shaped like the live one: BGE-M3's full
@@ -35,12 +35,12 @@ func realisticSparseRow(vocabulary, nonzero int) json.RawMessage {
 // so the full vocabulary width is never held. It exists only to keep the
 // measurement that rejected it — encoding/json boxes every number into an
 // interface, so it allocates by the million.
-func streamSparseRow(raw json.RawMessage) (*core.SparseVector, int, error) {
+func streamSparseRow(raw json.RawMessage) (*retrieval.SparseVector, int, error) {
 	decoder := json.NewDecoder(strings.NewReader(string(raw)))
 	if _, err := decoder.Token(); err != nil {
 		return nil, 0, err
 	}
-	vec := &core.SparseVector{}
+	vec := &retrieval.SparseVector{}
 	width := 0
 	for decoder.More() {
 		token, err := decoder.Token()

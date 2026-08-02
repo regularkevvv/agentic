@@ -462,7 +462,7 @@ the payload does not.
 
 The JSON Schemas that define the protocol, and the golden request and response
 the Go tests are checked against, are in
-`internal/representationwire/testdata`. Writing the handler itself belongs to
+`internal/retrieval/wire/testdata`. Writing the handler itself belongs to
 the deployment, in whatever language its platform runs.
 
 Additive fields are ignored. An unknown *major* version fails rather than being

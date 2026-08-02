@@ -1,5 +1,5 @@
 // Package sagemaker provides an Amazon SageMaker implementation of
-// core.RepresentationEncoder for endpoints running a handler that speaks
+// retrieval.RepresentationEncoder for endpoints running a handler that speaks
 // agentic.representations.v1.
 //
 // The runtime invocation is the same for a real-time endpoint and a serverless
@@ -24,9 +24,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/regularkevvv/agentic/internal/core"
-	"github.com/regularkevvv/agentic/internal/representationbatch"
-	"github.com/regularkevvv/agentic/internal/representationwire"
+	"github.com/regularkevvv/agentic/internal/retrieval"
+	"github.com/regularkevvv/agentic/internal/retrieval/batch"
+	"github.com/regularkevvv/agentic/internal/retrieval/wire"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -69,10 +69,10 @@ type Encoder struct {
 	targetModel        string
 	batchSize          int
 	maxResponseBytes   int
-	outputs            []core.RepresentationKind
-	spaces             map[core.RepresentationKind]core.VectorSpace
-	limits             core.RepresentationLimits
-	embedder           *core.EncoderEmbedder
+	outputs            []retrieval.RepresentationKind
+	spaces             map[retrieval.RepresentationKind]retrieval.VectorSpace
+	limits             retrieval.RepresentationLimits
+	embedder           *retrieval.EncoderEmbedder
 }
 
 // Option configures the Encoder.
@@ -92,9 +92,9 @@ type config struct {
 	targetModel        string
 	batchSize          int
 	maxResponseBytes   *int
-	outputs            []core.RepresentationKind
-	spaces             map[core.RepresentationKind]core.VectorSpace
-	limits             *core.RepresentationLimits
+	outputs            []retrieval.RepresentationKind
+	spaces             map[retrieval.RepresentationKind]retrieval.VectorSpace
+	limits             *retrieval.RepresentationLimits
 }
 
 // WithClient injects the SageMaker Runtime client, bypassing AWS config
@@ -171,15 +171,15 @@ func WithMaxResponseBytes(limit int) Option {
 
 // WithOutputs declares which representation kinds this endpoint serves
 // (default all three, matching the reference handler).
-func WithOutputs(kinds ...core.RepresentationKind) Option {
-	return func(c *config) { c.outputs = append([]core.RepresentationKind(nil), kinds...) }
+func WithOutputs(kinds ...retrieval.RepresentationKind) Option {
+	return func(c *config) { c.outputs = append([]retrieval.RepresentationKind(nil), kinds...) }
 }
 
 // WithVectorSpaces pins the vector spaces this endpoint encodes into. See the
 // package documentation for why an opaque endpoint needs them.
-func WithVectorSpaces(spaces map[core.RepresentationKind]core.VectorSpace) Option {
+func WithVectorSpaces(spaces map[retrieval.RepresentationKind]retrieval.VectorSpace) Option {
 	return func(c *config) {
-		c.spaces = make(map[core.RepresentationKind]core.VectorSpace, len(spaces))
+		c.spaces = make(map[retrieval.RepresentationKind]retrieval.VectorSpace, len(spaces))
 		for kind, space := range spaces {
 			c.spaces[kind] = space
 		}
@@ -187,7 +187,7 @@ func WithVectorSpaces(spaces map[core.RepresentationKind]core.VectorSpace) Optio
 }
 
 // WithLimits overrides the request and response size ceilings.
-func WithLimits(limits core.RepresentationLimits) Option {
+func WithLimits(limits retrieval.RepresentationLimits) Option {
 	return func(c *config) { c.limits = &limits }
 }
 
@@ -215,10 +215,10 @@ func New(ctx context.Context, endpointName string, opts ...Option) (*Encoder, er
 
 	outputs := cfg.outputs
 	if outputs == nil {
-		outputs = []core.RepresentationKind{
-			core.RepresentationDense,
-			core.RepresentationSparse,
-			core.RepresentationMultiVector,
+		outputs = []retrieval.RepresentationKind{
+			retrieval.RepresentationDense,
+			retrieval.RepresentationSparse,
+			retrieval.RepresentationMultiVector,
 		}
 	}
 	for _, kind := range outputs {
@@ -250,7 +250,7 @@ func New(ctx context.Context, endpointName string, opts ...Option) (*Encoder, er
 		client = sagemakerruntime.NewFromConfig(awsCfg)
 	}
 
-	limits := core.DefaultRepresentationLimits()
+	limits := retrieval.DefaultRepresentationLimits()
 	if cfg.limits != nil {
 		limits = *cfg.limits
 	}
@@ -270,8 +270,8 @@ func New(ctx context.Context, endpointName string, opts ...Option) (*Encoder, er
 	}
 
 	var err error
-	if encoder.Capabilities().Supports(core.RepresentationDense) {
-		encoder.embedder, err = core.NewEncoderEmbedder(encoder)
+	if encoder.Capabilities().Supports(retrieval.RepresentationDense) {
+		encoder.embedder, err = retrieval.NewEncoderEmbedder(encoder)
 		if err != nil {
 			return nil, err
 		}
@@ -322,7 +322,7 @@ func MustNew(ctx context.Context, endpointName string, opts ...Option) *Encoder 
 	return e
 }
 
-// Name implements core.RepresentationEncoder. It reports the configured model
+// Name implements retrieval.RepresentationEncoder. It reports the configured model
 // name, falling back to the endpoint name, because an endpoint is a deployment
 // rather than a model and may not name one.
 func (e *Encoder) Name() string {
@@ -332,22 +332,22 @@ func (e *Encoder) Name() string {
 	return e.endpoint
 }
 
-// Capabilities implements core.RepresentationEncoder.
-func (e *Encoder) Capabilities() core.RepresentationCapabilities {
-	return core.RepresentationCapabilities{
-		Outputs: append([]core.RepresentationKind(nil), e.outputs...),
-		InputTypes: []core.EmbeddingInputType{
-			core.EmbeddingInputNone,
-			core.EmbeddingInputQuery,
-			core.EmbeddingInputDocument,
+// Capabilities implements retrieval.RepresentationEncoder.
+func (e *Encoder) Capabilities() retrieval.RepresentationCapabilities {
+	return retrieval.RepresentationCapabilities{
+		Outputs: append([]retrieval.RepresentationKind(nil), e.outputs...),
+		InputTypes: []retrieval.EmbeddingInputType{
+			retrieval.EmbeddingInputNone,
+			retrieval.EmbeddingInputQuery,
+			retrieval.EmbeddingInputDocument,
 		},
 		SupportsTruncation:  true,
 		SupportsMultiOutput: true,
 	}
 }
 
-func (e *Encoder) validator() core.RepresentationValidator {
-	return core.RepresentationValidator{
+func (e *Encoder) validator() retrieval.RepresentationValidator {
+	return retrieval.RepresentationValidator{
 		Provider:     providerName,
 		Capabilities: e.Capabilities(),
 		Limits:       e.limits,
@@ -382,14 +382,14 @@ func (e *InvocationError) Error() string {
 
 func (e *InvocationError) Unwrap() error { return e.Err }
 
-// Encode implements core.RepresentationEncoder.
-func (e *Encoder) Encode(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
+// Encode implements retrieval.RepresentationEncoder.
+func (e *Encoder) Encode(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
 	validator := e.validator()
 	if err := validator.ValidateRequest(req); err != nil {
 		return nil, err
 	}
 
-	resp, err := representationbatch.Chunked(ctx, req, e.batchSize, e.encodeChunk)
+	resp, err := batch.Chunked(ctx, req, e.batchSize, e.encodeChunk)
 	if err != nil {
 		return nil, err
 	}
@@ -399,7 +399,7 @@ func (e *Encoder) Encode(ctx context.Context, req *core.RepresentationRequest) (
 	return resp, nil
 }
 
-func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
+func (e *Encoder) encodeChunk(ctx context.Context, req *retrieval.RepresentationRequest) (*retrieval.RepresentationResponse, error) {
 	body, err := marshalRequest(req)
 	if err != nil {
 		return nil, err
@@ -435,7 +435,7 @@ func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationReque
 		}
 	}
 	if out == nil {
-		return nil, &core.InvalidRepresentationResponseError{
+		return nil, &retrieval.InvalidRepresentationResponseError{
 			Provider: providerName,
 			Item:     -1,
 			Problem:  "endpoint returned no output",
@@ -445,7 +445,7 @@ func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationReque
 		return nil, fmt.Errorf("sagemaker: response exceeds the %d byte limit", e.maxResponseBytes)
 	}
 
-	return representationwire.Decode(out.Body, req, representationwire.DecodeOptions{
+	return wire.Decode(out.Body, req, wire.DecodeOptions{
 		Provider:      providerName,
 		Model:         e.Name(),
 		Expected:      e.spaces,
@@ -453,12 +453,12 @@ func (e *Encoder) encodeChunk(ctx context.Context, req *core.RepresentationReque
 	})
 }
 
-// Embed implements core.Embedder by requesting dense output only.
-func (e *Encoder) Embed(ctx context.Context, req *core.EmbeddingRequest) (*core.EmbeddingResponse, error) {
+// Embed implements retrieval.Embedder by requesting dense output only.
+func (e *Encoder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (*retrieval.EmbeddingResponse, error) {
 	if e.embedder == nil {
-		return nil, &core.UnsupportedRepresentationError{
+		return nil, &retrieval.UnsupportedRepresentationError{
 			Provider:  providerName,
-			Kind:      core.RepresentationDense,
+			Kind:      retrieval.RepresentationDense,
 			Supported: e.outputs,
 		}
 	}
@@ -480,6 +480,6 @@ func awsRequestID(err error) string {
 
 // Compile-time checks that Encoder satisfies both contracts.
 var (
-	_ core.RepresentationEncoder = (*Encoder)(nil)
-	_ core.Embedder              = (*Encoder)(nil)
+	_ retrieval.RepresentationEncoder = (*Encoder)(nil)
+	_ retrieval.Embedder              = (*Encoder)(nil)
 )
