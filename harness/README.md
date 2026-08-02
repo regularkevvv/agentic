@@ -89,12 +89,11 @@ in-process adapters. Local permission policy is governance around ordinary host
 execution; it does not create an OS sandbox.
 
 GoMonty is an optional adapter; the codemode core still depends only on its
-generic `Executor` port. The adapter is pinned to the source-only
-`github.com/regularkevvv/gomonty` fork revision that contains verified native
-runtime release preparation and publication. Importing it never downloads,
-builds, or loads native code. Applications explicitly prepare the runtime once
-with the matching `gomonty prepare download` command or with `monty.Prepare`
-before constructing work that can execute code:
+generic `Executor` port. The adapter pins the source-only
+`github.com/regularkevvv/gomonty` `v0.0.15` release. Importing it never
+downloads, builds, or loads native code. Applications explicitly prepare the
+runtime once with the matching `gomonty prepare download` command or with
+`monty.Prepare` before constructing work that can execute code:
 
 ```go
 import (
@@ -111,10 +110,11 @@ code := codemode.New(codemode.Config{
 })
 ```
 
-`PrepareDownload` succeeds only after the matching immutable runtime release
-has been published by the fork. Before that first publication, applications
-can explicitly select `PrepareBuild`; a missing or mismatched release asset
-fails closed.
+`PrepareDownload` installs the matching
+[`runtime-monty-v0.0.19-1`](https://github.com/regularkevvv/gomonty/releases/tag/runtime-monty-v0.0.19-1)
+asset only after verifying the committed archive and inner-file SHA-256 hashes.
+Applications can explicitly select `PrepareBuild` instead; a missing or
+mismatched release asset fails closed.
 
 The prepared shared library is verified before loading, and Monty owns the
 worker subprocess lifecycle. That subprocess is crash isolation, not an OS
@@ -187,7 +187,7 @@ github.com/regularkevvv/agentic v0.5.1
 Its optional GoMonty adapter pins:
 
 ```text
-github.com/regularkevvv/gomonty v0.0.15-0.20260802022921-c8d6e9d1905f
+github.com/regularkevvv/gomonty v0.0.15
 ```
 
 Local development uses the committed repository `go.work`; the module does not

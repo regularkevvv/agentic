@@ -4,7 +4,7 @@ go 1.25.4
 
 require (
 	github.com/regularkevvv/agentic v0.5.1
-	github.com/regularkevvv/gomonty v0.0.15-0.20260802022921-c8d6e9d1905f
+	github.com/regularkevvv/gomonty v0.0.15
 	golang.org/x/sys v0.42.0
 )
 
