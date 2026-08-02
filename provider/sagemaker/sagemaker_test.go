@@ -20,7 +20,7 @@ import (
 	"github.com/aws/smithy-go"
 )
 
-const goldenResponsePath = "../../deploy/representations/testdata/response.json"
+const goldenResponsePath = "../../internal/representationwire/testdata/response.json"
 
 // stubRuntime records invocations and answers them from a scripted function.
 // SageMaker has no local emulator, so this is how the transport is driven
@@ -164,10 +164,23 @@ func TestNewAcceptsAnExistingAWSConfig(t *testing.T) {
 	}
 }
 
+// WithProfile sends the AWS SDK looking for a named profile in the shared
+// config file, so this test supplies its own rather than whichever one the
+// machine happens to have. Reading the developer's ~/.aws/config made the
+// result depend on the machine: it passed locally and failed in CI, which is
+// the least useful way for a test to be wrong.
 func TestNewAcceptsRegionProfileAndCredentials(t *testing.T) {
+	dir := t.TempDir()
+	config := filepath.Join(dir, "config")
+	if err := os.WriteFile(config, []byte("[profile agentic-test]\nregion = us-west-2\n"), 0o600); err != nil {
+		t.Fatalf("write shared config: %v", err)
+	}
+	t.Setenv("AWS_CONFIG_FILE", config)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", filepath.Join(dir, "credentials"))
+
 	encoder, err := sagemaker.New(context.Background(), "endpoint",
 		sagemaker.WithRegion("us-west-2"),
-		sagemaker.WithProfile("default"),
+		sagemaker.WithProfile("agentic-test"),
 		sagemaker.WithCredentials("AKIAEXAMPLE", "secret", "session"),
 	)
 	if err != nil {

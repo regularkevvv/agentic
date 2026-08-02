@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/regularkevvv/agentic/internal/core"
+	"github.com/regularkevvv/agentic/internal/providerhttp"
 	"github.com/regularkevvv/agentic/internal/representationbatch"
 )
 
@@ -21,7 +22,7 @@ import (
 // here because a model can produce it locally would be a capability claim with
 // no response behind it.
 type SharedEncoder struct {
-	*client
+	client *providerhttp.Client
 
 	model      string
 	routerURL  string
@@ -34,13 +35,11 @@ type SharedEncoder struct {
 	embedder   *core.EncoderEmbedder
 }
 
-// SharedOption configures a SharedEncoder. Options are not interchangeable
-// with DedicatedOption, so a dedicated-only knob cannot reach NewShared by
-// mistake.
+// SharedOption configures a SharedEncoder.
 type SharedOption func(*sharedConfig)
 
 type sharedConfig struct {
-	transportConfig
+	providerhttp.Config
 
 	routerURL  string
 	provider   string
@@ -54,23 +53,23 @@ type sharedConfig struct {
 // WithSharedToken sets the access token. If not set, HF_TOKEN and then
 // HUGGING_FACE_HUB_TOKEN are used.
 func WithSharedToken(token string) SharedOption {
-	return func(c *sharedConfig) { c.token = token }
+	return func(c *sharedConfig) { c.Token = token }
 }
 
 // WithSharedHTTPClient sets a custom HTTP client.
 func WithSharedHTTPClient(client *http.Client) SharedOption {
-	return func(c *sharedConfig) { c.httpClient = client }
+	return func(c *sharedConfig) { c.HTTPClient = client }
 }
 
 // WithSharedMaxRetries sets how many times a request is retried on 429 and
 // transient 5xx responses (default 2).
 func WithSharedMaxRetries(retries int) SharedOption {
-	return func(c *sharedConfig) { c.maxRetries = &retries }
+	return func(c *sharedConfig) { c.MaxRetries = &retries }
 }
 
 // WithSharedMaxResponseBytes caps the response body this encoder will read.
 func WithSharedMaxResponseBytes(limit int64) SharedOption {
-	return func(c *sharedConfig) { c.maxResponseBytes = &limit }
+	return func(c *sharedConfig) { c.MaxResponseBytes = &limit }
 }
 
 // WithRouterURL overrides the Inference Providers router base URL.
@@ -148,7 +147,7 @@ func NewShared(model string, opts ...SharedOption) (*SharedEncoder, error) {
 		return nil, errors.New("huggingface: batch size cannot be negative")
 	}
 
-	c, err := newClient(cfg.transportConfig)
+	c, err := newClient(cfg.Config)
 	if err != nil {
 		return nil, err
 	}
@@ -240,7 +239,7 @@ func (e *SharedEncoder) Encode(ctx context.Context, req *core.RepresentationRequ
 func (e *SharedEncoder) encodeChunk(ctx context.Context, req *core.RepresentationRequest) (*core.RepresentationResponse, error) {
 	url := fmt.Sprintf("%s/%s/models/%s/pipeline/feature-extraction", e.routerURL, e.provider, e.model)
 
-	payload, err := e.post(ctx, url, featureExtractionRequest{
+	payload, err := e.client.Post(ctx, url, featureExtractionRequest{
 		Inputs:     req.Input,
 		Normalize:  e.normalize,
 		Truncate:   req.Truncate,

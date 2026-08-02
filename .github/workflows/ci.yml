@@ -38,7 +38,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Run tests
-        run: GOWORK=off go test -race -count=1 -timeout 60s $(GOWORK=off go list ./... | grep -v /e2e)
+        run: GOWORK=off go test -race -count=1 -timeout 60s ./...
       - name: Check build
         run: GOWORK=off go build ./...
 
@@ -80,6 +80,111 @@ jobs:
           install-mode: goinstall
           working-directory: harness
 
+  # The live tests and the examples are their own module, so they have left the
+  # root's `go build ./...`. Without this job an incompatible API change would
+  # break them silently and be discovered only by whoever next ran an example by
+  # hand. The tests are behind //go:build e2e, so a plain build compiles none of
+  # them; vetting with the tag typechecks the tagged tests and the untagged
+  # examples in one pass. Nothing here executes a test that needs a credential.
+  e2e-module:
+    name: E2E module compiles
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: e2e/go.mod
+      - name: Typecheck the live tests and the examples
+        run: GOWORK=off go vet -tags=e2e ./...
+      - name: Check build
+        run: GOWORK=off go build ./...
+      - name: Enforce the module boundary
+        run: GOWORK=off go test -count=1 ./...
+
+  # While the examples and live tests were packages of the root module, the Lint
+  # job above covered them. Leaving the module took them out of that net, so this
+  # puts them back. --build-tags=e2e for the reason the job above vets with it:
+  # e2e/providers has no untagged files, and without the tag golangci-lint
+  # reports success over a package it never opened.
+  e2e-lint:
+    name: E2E module lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GOWORK: "off"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: e2e/go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+          working-directory: e2e
+          args: --build-tags=e2e
+
+  # provider/local/onnx is a nested module that needs CGO, a native ONNX Runtime, and a
+  # statically linked tokenizer. It is invisible to every job above and gates
+  # none of them, but it gates itself: this job fails the workflow, because the
+  # platform it covers is no longer unverified.
+  #
+  # linux/amd64 was checked by running the live tests in a golang:1.25-bookworm
+  # container against the real exported graph on 2026-08-01. Every coordinate
+  # index matched the PyTorch golden and the largest weight difference was
+  # 4.38e-06, against darwin/arm64's 4.56e-06 — both far inside the 1e-4 gate.
+  # A red tick here is therefore a real defect, not a platform caveat.
+  #
+  # What this job still does not cover: the live tests skip, because the exported
+  # graph is 117 MiB and has no home in CI. It proves the two downloads still
+  # exist, the module compiles and lints against them, and the unit tests pass.
+  onnx:
+    name: Local inference module (linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: provider/local/onnx
+    env:
+      GOWORK: "off"
+      CGO_LDFLAGS: -L${{ github.workspace }}/provider/local/onnx/lib
+      ONNXRUNTIME_VERSION: 1.28.0
+      TOKENIZERS_VERSION: v1.27.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: provider/local/onnx/go.mod
+      # Static, and needed at link time. Only -L is passed: the binding's own
+      # #cgo LDFLAGS already supply -ltokenizers -ldl -lm -lstdc++.
+      - name: Fetch libtokenizers.a
+        run: |
+          mkdir -p lib
+          curl -fsSL "https://github.com/daulet/tokenizers/releases/download/${TOKENIZERS_VERSION}/libtokenizers.linux-amd64.tar.gz" \
+            | tar xz -C lib
+          ls -l lib/libtokenizers.a
+      # Dynamic, and loaded at run time rather than linked, which is why it is
+      # named by an environment variable instead of by a linker flag.
+      - name: Install ONNX Runtime
+        run: |
+          curl -fsSL -O "https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz"
+          tar xzf "onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz"
+          echo "AGENTIC_ONNX_LIBRARY=$PWD/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}/lib/libonnxruntime.so" >> "$GITHUB_ENV"
+      - name: Vet
+        run: go vet ./...
+      - name: Check build
+        run: go build ./...
+      - name: Unit tests and the module boundary
+        run: go test -count=1 ./...
+      # Run here rather than as its own job: linting cgo means compiling it, and
+      # this job has already paid for the two downloads that makes possible.
+      - name: Lint
+        run: go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6 run ./...
+
   workspace:
     name: Workspace integration
     runs-on: ubuntu-latest
@@ -89,8 +194,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Test both modules
-        run: go test -race -count=1 -timeout 60s ./... ./harness/...
+      - name: Test all three modules
+        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./e2e/...
 
   coverage:
     name: Coverage
@@ -114,28 +219,6 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
-
-  # The reference representation handler is deployed to endpoints we do not
-  # control, so its protocol half is tested here on every push. Only pytest and
-  # jsonschema are installed: the model is faked, so no GPU and no
-  # multi-gigabyte download are involved, and the runtime pins in
-  # requirements.txt stay out of CI's dependency surface.
-  handler:
-    name: Representation handler contract
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    defaults:
-      run:
-        working-directory: deploy/representations
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-      - name: Install contract-test dependencies
-        run: pip install -r requirements-dev.txt
-      - name: Run contract tests
-        run: pytest -q
 
   # Golden fixtures are meant to be derived from sanitized real responses, so a
   # sanitization miss commits a live credential to a public repository. This

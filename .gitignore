@@ -38,3 +38,10 @@ Thumbs.db
 # Python bytecode from the representation handler contract tests
 __pycache__/
 *.pyc
+
+# Exported model graphs and the native libraries provider/local/onnx links against.
+# The Granite export alone is 117 MiB; none of this belongs in git, and
+# provider/local/onnx/README.md says where each piece comes from instead.
+*.onnx
+provider/local/onnx/lib/
+provider/local/onnx/onnxruntime-*/

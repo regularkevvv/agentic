@@ -59,6 +59,19 @@ func encode(
 	})
 }
 
+// DefaultRepresentationLimits returns the request and response ceilings every
+// encoder in this repository applies: generous enough for normal retrieval
+// workloads, tight enough that a malformed or hostile response cannot exhaust
+// memory before validation runs.
+//
+// It is exported because [RepresentationValidator] is. An encoder written
+// outside this module cannot reach the same defaults otherwise, and would
+// either invent its own numbers or run with every bound disabled — which would
+// make a consumer's error behavior depend on where the encoder was compiled.
+func DefaultRepresentationLimits() RepresentationLimits {
+	return core.DefaultRepresentationLimits()
+}
+
 // EmbedderAsRepresentationEncoder presents an existing dense [Embedder] as a
 // dense-only [RepresentationEncoder], so one code path can drive both the
 // single-vector providers and the multi-output ones.

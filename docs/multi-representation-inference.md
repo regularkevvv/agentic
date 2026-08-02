@@ -145,10 +145,11 @@ The multi-output providers implement both interfaces directly, so
 | --- | --- | --- | --- | --- |
 | `deepinfra` native BGE-M3 | Yes | Yes | Yes | Input tokens |
 | `deepinfra` OpenAI-compatible route | Not used — see below | No | No | Input tokens |
-| `huggingface` dedicated endpoint | Yes | Yes | Optional | Endpoint compute time |
+| `endpoint`, any host running the handler | Yes | Yes | Optional | Endpoint compute time |
 | `huggingface` shared router | Yes | No | No | Shared provider usage |
 | `sagemaker` custom endpoint | Yes | Yes | Optional | Endpoint or serverless compute |
 | `pinecone` Inference | Model-dependent | Yes, for a sparse model | No | Inference tokens or units |
+| `onnx`, in your own process | No | Yes | No | Your own CPU |
 
 This table is documentation. `Capabilities()` is the runtime contract, and the
 hermetic contract tests plus the opt-in live tests are the evidence. Prices
@@ -224,21 +225,38 @@ alternative — streaming the row token by token so the full width is never held
 `encoding/json` boxes every number into an interface. `BenchmarkDecodeSparseRow`
 keeps that measurement so the decision is not re-litigated from intuition.
 
+### Endpoints you operate
+
+`provider/endpoint` speaks `agentic.representations.v1` to a URL running a
+handler that implements it. That is the reliable path for BGE-M3 or a Granite
+sparse model, because a custom handler
+controls which outputs are computed, what the token weights are, and which
+revisions the response declares.
+
+The URL may be a Hugging Face Inference Endpoint, a container on Kubernetes, a
+Modal or Fly.io deployment, or a Python process on a laptop. Nothing in the
+package knows which, which is why it is named for what it talks to rather than
+for whoever hosts it, and why it reads `AGENTIC_ENDPOINT_TOKEN` rather than any
+one vendor's variable.
+
+A handler on a loopback address usually checks no credential at all.
+`WithoutAuthentication` is how to say that, and it has to be asked for: an
+empty `WithToken` is an error rather than an anonymous request. The
+alternative — inventing a token — writes a credential that does not exist into
+whatever configuration file carries it, and hides the fact that nothing is
+being authenticated.
+
 ### Hugging Face
 
-`provider/huggingface` has two explicit modes rather than pretending every
-Hugging Face endpoint has one response format.
+`provider/huggingface` covers the Inference Providers router only. An endpoint
+you operate is your handler on a URL Hugging Face happens to host, so it is
+served by `provider/endpoint` above rather than by a Hugging Face-specific
+client.
 
-`NewDedicated` speaks `agentic.representations.v1` to an Inference Endpoint you
-operate, running the handler in [`deploy/representations`](../deploy/representations).
-That is the reliable path for BGE-M3 or a Granite sparse model, because a
-custom handler controls which outputs are computed, what the token weights are,
-and which revisions the response declares.
-
-`NewShared` calls the Inference Providers router's feature-extraction task,
-which returns one dense vector per input. It advertises dense only for exactly
-that reason. A model card saying the model produces sparse weights locally is
-not evidence that the hosted route returns them.
+`NewShared` calls the router's feature-extraction task, which returns one dense
+vector per input. It advertises dense only for exactly that reason. A model
+card saying the model produces sparse weights locally is not evidence that the
+hosted route returns them.
 
 Input roles are advertised only when `WithPromptNames` maps them onto the
 model's configured sentence-transformers prompts. A model with no configured
@@ -329,6 +347,98 @@ running both.
 coordinate so you can check that against whatever model you deploy rather than
 trusting a model card. Treat the strings as diagnostics only.
 
+### In-process, with no server
+
+`provider/local/onnx` runs a SPLADE-family sparse model through ONNX Runtime in the
+calling process. There is no HTTP, no handler, and no Python at runtime.
+
+It is a **nested module**, and the only directory under `provider/` that the
+root module does not contain. `go get github.com/regularkevvv/agentic` does not
+pull it, `go build ./...` at the root does not reach it, and it is deliberately
+absent from `go.work`. That is not tidiness: it needs CGO, a native ONNX Runtime
+shared library, and a statically linked tokenizer, and none of those can be a
+condition of importing the library. Working on it means `cd provider/local/onnx`.
+
+```go
+encoder, err := onnx.New(modelPath, tokenizerPath, agentic.VectorSpace{
+    Model:    "ibm-granite/granite-embedding-30m-sparse",
+    Revision: "ad82b1fd09541c998c8d45045d601c51fdb8a9b7",
+})
+defer encoder.Close()
+```
+
+Sparse only. Dense and multi-vector requests return
+`ErrUnsupportedRepresentation` rather than an answer from the wrong reduction.
+The pooling is the same `log1p(relu(logits))`, masked, max over positions that
+`handler_splade.py` performs — restated in Go rather than baked into the graph,
+so a disagreement with PyTorch says which half moved.
+
+#### The one-time export
+
+Granite ships `tokenizer.json`, which is what a Go tokenizer needs, but no ONNX
+export. Producing one is a documented step rather than a download, because the
+result is a 117 MiB artifact and an artifact that appears by surprise during a
+test run is not a dependency anyone agreed to:
+
+```sh
+uv run provider/local/onnx/export_onnx.py --out /some/writable/directory
+```
+
+The script carries its dependencies in a PEP 723 header, so that one command
+fetches Python 3.11 if the machine has none, builds an environment pinned by
+`export_onnx.py.lock`, runs the export, and throws the environment away. Nothing
+is installed system-wide. Without uv, `pip install torch==2.13.0 transformers
+onnx onnxscript` does the same thing unpinned.
+
+Python appears here and nowhere else in this path. `provider/local/onnx` opens a file;
+it imports no Python, spawns none, and does not care whether any is installed —
+the container the Linux figures below were measured in had none.
+
+That writes two things. The graph — the raw masked-language model,
+`(input_ids, attention_mask) -> logits`, with both leading axes dynamic — and
+`reference.json`, a small file recording PyTorch's own input ids, nonzero count,
+top terms, and every coordinate for two sample inputs. The reference is checked
+in as `provider/local/onnx/testdata/granite_reference.json` and is what makes the Go
+implementation falsifiable.
+
+Two details in that script are load-bearing and were both learned the expensive
+way. Pooling is left *out* of the graph, so the Go side has to implement it and
+can be shown to have implemented it correctly. And the export sample has two
+rows, because `torch.export` specializes an axis whose example extent is 1 —
+declaring the batch axis dynamic does not prevent it — which produces a graph
+that silently accepts one input at a time and fails inside ONNX Runtime the
+first time anyone batches. The script now checks its own output for this and
+refuses to write a graph with a fixed leading axis.
+
+#### Runtime setup
+
+Two artifacts have to be on disk before the module compiles, and both are
+otherwise discovered at link time: `libtokenizers.a`, fetched per platform from
+the `daulet/tokenizers` releases, and ONNX Runtime, a separate download.
+[`provider/local/onnx/README.md`](../provider/local/onnx/README.md) has the exact commands,
+the sizes, and the environment variables the live tests are gated on.
+
+#### What was measured
+
+On darwin/arm64, 2026-08-01, against `granite-embedding-30m-sparse`:
+
+| Claim | Result |
+| --- | --- |
+| Go tokenizer reproduces the `transformers` ids | identical, both inputs |
+| Go reproduces PyTorch's coordinate *set* | identical, 41 and 112 of 50,265 |
+| Go reproduces PyTorch's coordinate *weights* | largest difference **4.56e-06** |
+| A row padded to twice its length matches the same row alone | same coordinates, weights within **1.46e-06** |
+| The padding id reaches a padded row's result | no: identical to the bit under two padding ids |
+| Constructing an encoder | 0.30 s, of which 0.12 s reads the vocabulary |
+| Root module stays CGO-free with the nested module present | `go.mod` and `go.sum` byte-identical after `go mod tidy` |
+
+The top terms for `"automobile"` are `auto`, `Motor`, `car`, `aut`, `Autom` —
+expansion, in Go, from a model that never saw the word "car".
+
+darwin/arm64 and linux/amd64 have both been verified against the real graph:
+every coordinate index matched, with a largest weight difference of 4.56e-06 and
+4.38e-06 respectively. No other platform has been run.
+
 ### Not in scope
 
 Qdrant collection inference and search, Pinecone index APIs, Postgres
@@ -344,17 +454,16 @@ against the live response contract without changing any core type.
 ## The portable endpoint contract
 
 `agentic.representations.v1` is a small versioned JSON protocol for endpoints
-you operate yourself. Hugging Face dedicated endpoints and SageMaker endpoints
-have no shared response format — whatever your handler returns *is* the format —
-so Agentic publishes one, implements it in a reference Python handler, and
-speaks it from both Go providers.
+you operate yourself. A dedicated endpoint and a SageMaker endpoint have no
+shared response format — whatever your handler returns *is* the format — so
+Agentic publishes one, implements it in a reference Python handler, and speaks
+it from `provider/endpoint` and `provider/sagemaker`. The transport differs;
+the payload does not.
 
-Schemas, the handler, deployment instructions, and the cost shape of
-compute-billed endpoints are in
-[`deploy/representations/README.md`](../deploy/representations/README.md). The
-golden request and response fixtures under `deploy/representations/testdata` are
-read by both the Go tests and the Python tests, so the two implementations
-cannot drift apart without a test failing.
+The JSON Schemas that define the protocol, and the golden request and response
+the Go tests are checked against, are in
+`internal/representationwire/testdata`. Writing the handler itself belongs to
+the deployment, in whatever language its platform runs.
 
 Additive fields are ignored. An unknown *major* version fails rather than being
 parsed optimistically, because a change that large is one where guessing
@@ -416,7 +525,7 @@ Live tests sit behind the `e2e` build tag and skip cleanly without credentials.
 They prove retrieval rather than status codes: dense finds a paraphrase, sparse
 finds a coined rare term, and a local MaxSim over the token vectors prefers the
 intended document. Gates are listed at the top of
-[`e2e/representations_test.go`](../e2e/representations_test.go).
+[`e2e/providers/representations_test.go`](../e2e/providers/representations_test.go).
 
 ## Observability
 

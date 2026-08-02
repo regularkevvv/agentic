@@ -24,7 +24,7 @@ Current release: **v0.5.1**.
 - **Multi-modal** -- images, audio, video, and document inputs
 - **MCP support** -- use tools from Model Context Protocol servers
 - **Embeddings** -- provider-agnostic `Embedder` interface with OpenAI, Voyage AI, Cohere, Gemini, Ollama, and Bedrock implementations and retrieval-tuned query/document input types
-- **Multi-representation encoding** -- `RepresentationEncoder` returns dense, learned sparse, and token multi-vectors from one call, with validated vector-space identity, via DeepInfra, Hugging Face, SageMaker, and Pinecone
+- **Multi-representation encoding** -- `RepresentationEncoder` returns dense, learned sparse, and token multi-vectors from one call, with validated vector-space identity, via DeepInfra, an endpoint you operate, Hugging Face, SageMaker, Pinecone, or ONNX Runtime in your own process
 - **Reranking** -- `Reranker` cross-encoder interface with Voyage AI and Cohere implementations for two-stage retrieval
 - **Thinking tokens** -- extended reasoning for Anthropic, OpenAI o-series, and Gemini
 - **Output validation** -- struct tag validation with automatic retry
@@ -117,19 +117,48 @@ fmt.Println(result.Output.Title)  // typed access
 
 ## Providers
 
-| Provider | Import | Constructor |
-|----------|--------|-------------|
-| OpenAI | `provider/openai` | `openai.New("gpt-4o")` |
-| Anthropic | `provider/anthropic` | `anthropic.New("claude-sonnet-4-6")` |
-| Google Gemini | `provider/gemini` | `gemini.New("gemini-2.0-flash")` |
-| Azure OpenAI | `provider/azure` | `azure.New(deployment, azure.WithEndpoint(endpoint), azure.WithAPIKey(key))` |
-| AWS Bedrock | `provider/bedrock` | `bedrock.New("anthropic.claude-sonnet-4-6")` |
-| Together AI | `provider/together` | `together.New("meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo")` |
-| OpenRouter | `provider/openrouter` | `openrouter.New("anthropic/claude-sonnet-4")` |
-| Ollama | `provider/ollama` | `ollama.New("llama3.1")` |
-| Grok | `provider/grok` | `grok.New("grok-3")` |
+`provider/` is flat because capability is not single-valued: Bedrock is a model
+*and* an embedder, Cohere an embedder *and* a reranker, DeepInfra an embedder
+*and* an encoder. Any arrangement by role would have to file those packages in
+two places, so the table is the index instead — and a test enforces that every
+provider declares its capabilities in code, so this cannot silently go stale.
 
-Implement the `Model` interface to add your own.
+| Provider | Import | Chat | Embed | Encode | Rerank |
+|---|---|:-:|:-:|:-:|:-:|
+| OpenAI | `provider/openai` | ✓ | ✓ | | |
+| Anthropic | `provider/anthropic` | ✓ | | | |
+| Google Gemini | `provider/gemini` | ✓ | ✓ | | |
+| Azure OpenAI | `provider/azure` | ✓ | | | |
+| AWS Bedrock | `provider/bedrock` | ✓ | ✓ | | |
+| Together AI | `provider/together` | ✓ | | | |
+| OpenRouter | `provider/openrouter` | ✓ | | | |
+| Ollama | `provider/ollama` | ✓ | ✓ | | |
+| Grok | `provider/grok` | ✓ | | | |
+| Voyage AI | `provider/voyageai` | | ✓ | | ✓ |
+| Cohere | `provider/cohere` | | ✓ | | ✓ |
+| DeepInfra | `provider/deepinfra` | | ✓ | ✓ | |
+| Endpoint you operate | `provider/endpoint` | | ✓ | ✓ | |
+| Hugging Face router | `provider/huggingface` | | ✓ | ✓ | |
+| SageMaker | `provider/sagemaker` | | ✓ | ✓ | |
+| Pinecone Inference | `provider/pinecone` | | ✓ | ✓ | |
+| In-process ONNX | `provider/local/onnx` | | | ✓ | |
+
+**Chat** is `Model`/`StreamModel`, **Embed** is `Embedder`, **Encode** is
+`RepresentationEncoder` (dense, learned sparse, and multi-vector in one pass),
+**Rerank** is `Reranker`. Implement the matching interface to add your own.
+
+`provider/local/onnx` is the one entry that is not part of this module: it needs
+CGO and a native ONNX Runtime, so it carries its own `go.mod` and `go get
+agentic` never pulls it. Constructors:
+
+```go
+openai.New("gpt-4o")                          anthropic.New("claude-sonnet-4-6")
+gemini.New("gemini-2.0-flash")                bedrock.New("anthropic.claude-sonnet-4-6")
+azure.New(deployment, azure.WithEndpoint(u), azure.WithAPIKey(k))
+together.New("meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo")
+openrouter.New("anthropic/claude-sonnet-4")   ollama.New("llama3.1")
+grok.New("grok-3")
+```
 
 ## Embeddings
 
@@ -199,13 +228,17 @@ quietly worse recall rather than an error. The ID is a deterministic hash of
 the fields that make values comparable, so two processes agree on it without
 coordinating.
 
-| Provider | Import | Constructor | Dense | Sparse | Multi-vector |
-|----------|--------|-------------|-------|--------|--------------|
-| DeepInfra (native) | `provider/deepinfra` | `deepinfra.New(deepinfra.BGEM3Model)` | Yes | Yes | Yes |
-| Hugging Face endpoint | `provider/huggingface` | `huggingface.NewDedicated(endpointURL)` | Yes | Yes | Optional |
-| Hugging Face router | `provider/huggingface` | `huggingface.NewShared(model)` | Yes | No | No |
-| SageMaker | `provider/sagemaker` | `sagemaker.New(ctx, endpointName)` | Yes | Yes | Optional |
-| Pinecone Inference | `provider/pinecone` | `pinecone.New(model)` | Yes | Yes | No |
+Which representations each encoder returns — the Encode column above, in
+detail:
+
+| Import | Constructor | Dense | Sparse | Multi-vector |
+|---|---|---|---|---|
+| `provider/deepinfra` | `deepinfra.New(deepinfra.BGEM3Model)` | Yes | Yes | Yes |
+| `provider/endpoint` | `endpoint.New(endpointURL)` | Yes | Yes | Optional |
+| `provider/huggingface` | `huggingface.NewShared(model)` | Yes | No | No |
+| `provider/sagemaker` | `sagemaker.New(ctx, endpointName)` | Yes | Yes | Optional |
+| `provider/pinecone` | `pinecone.New(model)` | Yes | Yes | No |
+| `provider/local/onnx` | `onnx.New(model, tokenizer, space)` | No | Yes | No |
 
 Agentic normalizes inference and stops there. Indexing, BM25, candidate fusion,
 and final ranking belong to the retrieval system you build on top, which is why
@@ -219,10 +252,21 @@ one, so sparse output can be adopted when your index is ready for it.
 `provider/test/conformance.RunRepresentation` is the shared contract suite that
 every provider — and your own — is checked against.
 
-Hugging Face and SageMaker endpoints run the versioned handler in
-[`deploy/representations`](deploy/representations). See
+`provider/endpoint` speaks the versioned protocol to any host running a
+handler that implements it — a Hugging Face Inference Endpoint, a container, or
+a process on a laptop — and takes its token from `AGENTIC_ENDPOINT_TOKEN`, or none at all
+with `endpoint.WithoutAuthentication()`. `provider/sagemaker` speaks the same
+protocol through SageMaker Runtime. See
 [docs/multi-representation-inference.md](docs/multi-representation-inference.md)
 for the full contract.
+
+`provider/local/onnx` encodes sparse vectors in your own process with no server at
+all. It is a **nested module** — the one directory under `provider/` that
+`go get github.com/regularkevvv/agentic` does not pull — because it needs CGO, a
+native ONNX Runtime, and a statically linked tokenizer, none of which can be a
+condition of importing the library. See
+[`provider/local/onnx/README.md`](provider/local/onnx/README.md) for the setup, which is a
+real barrier rather than a formality.
 
 ## Reranking
 
@@ -409,7 +453,7 @@ perRun := agent.BindProvider(func(ctx context.Context) (*MyDeps, error) {
 
 ```
 agentic/
-  go.work             # Local root + nested harness workspace
+  go.work             # Local workspace: root + nested harness and e2e
   agent.go            # Core agent orchestration
   agent_options.go    # Configuration options
   driver.go           # Start/continue/resume execution capability
@@ -425,21 +469,26 @@ agentic/
   provider/           # LLM, embedding, reranking, and encoding providers
   internal/core/      # Shared types (Message, Tool, Model, etc.)
   mcp/                # Model Context Protocol integration
-  deploy/representations/ # agentic.representations.v1 schema and handler
-  examples/           # Runnable example programs
-  harness/            # Nested experimental durable-session module
+  harness/            # Nested module: experimental durable sessions
+  e2e/                # Nested module: live provider tests and examples
+  provider/local/onnx/ # Nested module: in-process sparse encoding (CGO)
 ```
 
 ## Examples
 
 ```bash
 cp .env.example .env   # fill in your API key
-go run ./examples/basic
-go run ./examples/tools
-go run ./examples/structured
+go run ./e2e/examples/basic
+go run ./e2e/examples/tools
+go run ./e2e/examples/structured
 ```
 
-See [`examples/`](examples/README.md) for details.
+The examples live in the nested `e2e` module so that what they need to be
+readable — a table writer, a live API key — never reaches an application that
+imports the library. The committed `go.work` is what keeps them runnable from
+the repository root.
+
+See [`e2e/examples/`](e2e/examples/README.md) for details.
 
 ## Contributing
 

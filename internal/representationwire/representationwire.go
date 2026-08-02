@@ -2,13 +2,15 @@
 // portable JSON contract between Agentic and a self-operated inference
 // endpoint.
 //
-// Hugging Face dedicated endpoints and SageMaker endpoints have no shared
-// response format: whatever a custom handler returns is the format. Rather
-// than write one decoder per deployment, Agentic publishes a small versioned
-// protocol, implements it in a reference Python handler under
-// deploy/representations, and speaks it from both Go providers. The transport
-// differs — HTTPS with a bearer token, or InvokeEndpoint with SigV4 — but the
-// payload does not.
+// Endpoints you operate have no shared response format: whatever a custom
+// handler returns is the format. Rather than write one decoder per deployment,
+// Agentic publishes a small versioned protocol and speaks it from both
+// provider/endpoint and provider/sagemaker. The transport differs — HTTPS with
+// a bearer token, or InvokeEndpoint with SigV4 — but the payload does not.
+//
+// testdata holds the golden request and response, and the JSON Schemas that
+// define the shape a handler must return. Writing that handler is the
+// deployment's job, in whatever language its platform runs.
 //
 // Unknown fields are ignored so a handler can add data without breaking older
 // clients. An unknown major version is refused rather than guessed at, because

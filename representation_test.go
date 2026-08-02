@@ -255,3 +255,32 @@ func TestRepresentationFacadeTypesAreUsable(t *testing.T) {
 		t.Fatalf("got %v, want the facade validator to enforce its limits", err)
 	}
 }
+
+// An encoder compiled outside this module — provider/local/onnx is one — reaches the
+// validator through the facade and must reach the same defaults with it.
+// Without this the bounds a consumer sees would depend on where its provider
+// was built.
+func TestDefaultRepresentationLimitsAreReachableThroughTheFacade(t *testing.T) {
+	limits := agentic.DefaultRepresentationLimits()
+	if limits.MaxInputs <= 0 || limits.MaxInputBytes <= 0 || limits.MaxTotalInputBytes <= 0 ||
+		limits.MaxSparseNonZero <= 0 || limits.MaxTokenVectors <= 0 {
+		t.Fatalf("a bound is disabled by default: %+v", limits)
+	}
+
+	validator := agentic.RepresentationValidator{
+		Provider:     "example",
+		Capabilities: agentic.RepresentationCapabilities{Outputs: []agentic.RepresentationKind{agentic.RepresentationSparse}},
+		Limits:       limits,
+	}
+	oversized := make([]string, limits.MaxInputs+1)
+	for i := range oversized {
+		oversized[i] = "a"
+	}
+	err := validator.ValidateRequest(&agentic.RepresentationRequest{
+		Input:   oversized,
+		Outputs: []agentic.RepresentationKind{agentic.RepresentationSparse},
+	})
+	if !errors.Is(err, agentic.ErrInvalidRepresentationRequest) {
+		t.Fatalf("got %v, want the default input ceiling to be enforced", err)
+	}
+}

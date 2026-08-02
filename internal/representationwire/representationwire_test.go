@@ -15,7 +15,7 @@ import (
 
 // goldenDir holds the fixtures the Python handler tests read too. Sharing them
 // is what keeps the two implementations from drifting apart quietly.
-const goldenDir = "../../deploy/representations/testdata"
+const goldenDir = "testdata"
 
 func readGolden(t *testing.T, name string) []byte {
 	t.Helper()

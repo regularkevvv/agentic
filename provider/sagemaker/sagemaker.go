@@ -1,6 +1,6 @@
 // Package sagemaker provides an Amazon SageMaker implementation of
-// core.RepresentationEncoder for endpoints running the canonical
-// agentic.representations.v1 handler from deploy/representations.
+// core.RepresentationEncoder for endpoints running a handler that speaks
+// agentic.representations.v1.
 //
 // The runtime invocation is the same for a real-time endpoint and a serverless
 // one: infrastructure mode is deployment configuration, not a different API.
