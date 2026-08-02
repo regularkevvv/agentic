@@ -283,7 +283,7 @@ resume payload.
 ## Experimental Durable Harness
 
 The repository also contains the nested experimental module
-`github.com/regularkevvv/agentic/harness`. Its Phase 4 surface adds durable
+`github.com/regularkevvv/agentic/harness`. Its Phase 5 surface adds durable
 single-process sessions, steering/follow-up/next-turn queues, interruption and
 recovery, bounded cursor subscriptions, transcript repair, Local and Memory
 environments, session-scoped artifact spill, an immutable capability DAG,
@@ -294,13 +294,15 @@ budget accounting.
 
 The low-level constructor is `harness.NewRuntime`; it depends on generic
 journal, codec, event, environment, clock/ID, and result-processing ports.
-Concrete memory, JSONL, local, file, and in-process adapters are selected only
-at the application composition root. `harness.New(...).Build()` composes public
+Concrete memory, JSONL, local, file, in-process, subprocess, and GoMonty
+adapters are selected only at the application composition root.
+`harness.New(...).Build()` composes public
 capabilities without changing those dependency directions, while
-`harness.Default` is an explicit local convenience assembly. Subagents remain
-optional capabilities rather than part of that default. Out-of-process
-subagents, topology presets, codemode, long-term memory, skills, and evals
-remain later-phase work. See
+`harness.Default` is an explicit local convenience assembly. Subagents,
+codemode, long-term memory, skills, and evals remain optional capabilities
+rather than part of that default. The GoMonty codemode adapter pins the
+source-only `regularkevvv/gomonty` fork and requires explicit verified runtime
+preparation; importing Agentic never downloads or builds native code. See
 [`harness/README.md`](harness/README.md) for the exact experimental boundary.
 
 ## History Processors
