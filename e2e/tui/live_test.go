@@ -133,6 +133,13 @@ func TestLiveProviderHarnessTUIFlow(t *testing.T) {
 	if beforeClose.Usage.CacheReadTokens == 0 || beforeClose.Usage.CacheHitPercent() < 25 {
 		t.Fatalf("live prompt cache was ineffective: usage=%#v hit=%.1f%%", beforeClose.Usage, beforeClose.Usage.CacheHitPercent())
 	}
+	t.Logf("live usage: requests=%d prompt=%d cache_read=%d cache_created=%d hit=%.1f%%",
+		beforeClose.Usage.Requests,
+		beforeClose.Usage.PromptTokens,
+		beforeClose.Usage.CacheReadTokens,
+		beforeClose.Usage.CacheCreationTokens,
+		beforeClose.Usage.CacheHitPercent(),
+	)
 
 	deadline := time.NewTimer(10 * time.Second)
 	defer deadline.Stop()
