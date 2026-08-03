@@ -21,6 +21,11 @@ This is additive. Existing `Embedder` users compile and behave as before.
 
 ### Added
 
+- **Harness exchange instructions** — one capability may register an
+  `ExchangeInstructionProvider` that resolves trusted, non-user instructions
+  once before an application exchange. The value is appended as a system
+  message, remains stable across suspend/resume, refreshes for the next prompt,
+  and aborts before the first durable run entry if resolution fails.
 - **`RepresentationEncoder`** — returns one `Representation` per input, in
   input order, carrying exactly the requested kinds: `RepresentationDense`,
   `RepresentationSparse`, and `RepresentationMultiVector`. Root helpers
