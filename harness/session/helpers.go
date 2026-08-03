@@ -122,6 +122,10 @@ func remainingLimits(budget agentic.UsageLimits, used agentic.Usage) (agentic.Us
 			continue
 		}
 		value := **check.value - check.used
+		if check.name == "tool_calls" && value == 0 {
+			*check.value = &value
+			continue
+		}
 		if value <= 0 {
 			return agentic.UsageLimits{}, &BudgetError{Cause: fmt.Errorf("%s exhausted", check.name)}
 		}

@@ -19,17 +19,18 @@ import (
 )
 
 var (
-	ErrDuplicateCapability = errors.New("duplicate capability ID")
-	ErrMissingOrdering     = errors.New("capability ordering reference is missing")
-	ErrCapabilityCycle     = errors.New("capability ordering contains a cycle")
-	ErrRegistryFrozen      = errors.New("capability registry is frozen")
-	ErrDuplicateTool       = errors.New("duplicate capability tool")
-	ErrDuplicateEffect     = errors.New("duplicate tool effect resolver")
-	ErrContextConfigured   = errors.New("context policy is already configured")
-	ErrGateBroadened       = errors.New("tool gate middleware broadened a prior decision")
-	ErrUnknownTool         = errors.New("capability tool is not registered")
-	ErrDuplicateSelection  = errors.New("duplicate selected capability tool")
-	ErrDuplicatePlanner    = errors.New("duplicate capability resume planner")
+	ErrDuplicateCapability    = errors.New("duplicate capability ID")
+	ErrMissingOrdering        = errors.New("capability ordering reference is missing")
+	ErrCapabilityCycle        = errors.New("capability ordering contains a cycle")
+	ErrRegistryFrozen         = errors.New("capability registry is frozen")
+	ErrDuplicateTool          = errors.New("duplicate capability tool")
+	ErrDuplicateEffect        = errors.New("duplicate tool effect resolver")
+	ErrContextConfigured      = errors.New("context policy is already configured")
+	ErrGateBroadened          = errors.New("tool gate middleware broadened a prior decision")
+	ErrUnknownTool            = errors.New("capability tool is not registered")
+	ErrDuplicateSelection     = errors.New("duplicate selected capability tool")
+	ErrDuplicatePlanner       = errors.New("duplicate capability resume planner")
+	ErrInstructionsConfigured = errors.New("exchange instruction provider is already configured")
 )
 
 // Ordering declares capability graph edges by stable capability ID.
@@ -117,6 +118,7 @@ type Registry struct {
 	eventMiddleware   []event.Middleware
 	lifecycleHooks    []harnessruntime.LifecycleHook
 	resumePlanners    map[string]harnessruntime.ResumePlanner
+	instructions      harnessruntime.ExchangeInstructionProvider
 }
 
 func newRegistry() *Registry {
@@ -329,6 +331,22 @@ func (r *Registry) AddLifecycleHook(hook harnessruntime.LifecycleHook) error {
 	return nil
 }
 
+// AddExchangeInstructionProvider registers the single trusted, non-user
+// instruction provider for each application-level exchange.
+func (r *Registry) AddExchangeInstructionProvider(provider harnessruntime.ExchangeInstructionProvider) error {
+	if err := r.mutable(); err != nil {
+		return err
+	}
+	if provider == nil {
+		return errors.New("exchange instruction provider must not be nil")
+	}
+	if r.instructions != nil {
+		return ErrInstructionsConfigured
+	}
+	r.instructions = provider
+	return nil
+}
+
 // AddResumePlanner registers one capability-owned suspension kind.
 func (r *Registry) AddResumePlanner(kind string, planner harnessruntime.ResumePlanner) error {
 	if err := r.mutable(); err != nil {
@@ -365,6 +383,7 @@ type Plan struct {
 	lifecycleHooks  []harnessruntime.LifecycleHook
 	delegationTools []string
 	resumePlanner   harnessruntime.ResumePlanner
+	instructions    harnessruntime.ExchangeInstructionProvider
 }
 
 func (p Plan) IDs() []string {
@@ -397,6 +416,10 @@ func (p Plan) LifecycleHooks() []harnessruntime.LifecycleHook {
 }
 
 func (p Plan) ResumePlanner() harnessruntime.ResumePlanner { return p.resumePlanner }
+
+func (p Plan) ExchangeInstructionProvider() harnessruntime.ExchangeInstructionProvider {
+	return p.instructions
+}
 
 // DelegationTools returns the stable names of topology-changing tools.
 func (p Plan) DelegationTools() []string {
@@ -443,6 +466,7 @@ func Compile(capabilities ...Capability) (Plan, error) {
 		lifecycleHooks:  append([]harnessruntime.LifecycleHook(nil), registry.lifecycleHooks...),
 		delegationTools: delegationTools,
 		resumePlanner:   resumePlanner,
+		instructions:    registry.instructions,
 	}, nil
 }
 

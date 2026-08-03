@@ -26,6 +26,10 @@ func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agent
 	if err != nil {
 		return nil, err
 	}
+	instructions, err := s.resolveExchangeInstructions(ctx, runID)
+	if err != nil {
+		return nil, fmt.Errorf("resolve exchange instructions: %w", err)
+	}
 
 	s.mu.Lock()
 	if err := s.promptErrorLocked(); err != nil {
@@ -43,7 +47,9 @@ func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agent
 	}
 	next := s.queueByKindsLocked(QueueNextTurn)
 	batch := newEntryBatch(s.codec, 2+2*len(next))
-	batch.Add(kindRunOpened, runOpenedPayload{ID: runID, Mode: "start", Limits: cloneLimitsPointer(limits)})
+	batch.Add(kindRunOpened, runOpenedPayload{
+		ID: runID, Mode: "start", Limits: cloneLimitsPointer(limits), Instructions: instructions,
+	})
 	for _, entry := range next {
 		batch.Add(kindQueueDrained, queueMutationPayload{ID: entry.ID})
 		batch.Add(kindMessage, messagePayload{Message: entry.Message, Source: string(QueueNextTurn), QueueID: entry.ID})
@@ -76,6 +82,7 @@ func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agent
 		expected:           []agentic.Message{promptCopy},
 		contextMarkerCount: len(s.contextMarkers),
 		limits:             cloneLimitsPointer(limits),
+		instructions:       instructions,
 	}
 	s.transitionLocked(Running)
 	s.mu.Unlock()
@@ -89,6 +96,17 @@ func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agent
 		Prompt:  &inputPrompt,
 	}, s.runOptions(limits)...)
 	return s.finishExecution(execution, runErr)
+}
+
+func (s *Session[O]) resolveExchangeInstructions(ctx context.Context, runID string) (string, error) {
+	if s.instructions == nil {
+		return "", nil
+	}
+	return s.instructions.ResolveExchangeInstructions(ctx, harnessruntime.ExchangeContext{
+		SessionID: s.id,
+		RunID:     runID,
+		Scope:     s.scope,
+	})
 }
 
 func (s *Session[O]) promptErrorLocked() error {

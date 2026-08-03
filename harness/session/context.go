@@ -36,6 +36,7 @@ func (s *Session[O]) projectHistory(ctx context.Context, rootMessages []agentic.
 		return nil, cause
 	}
 	currentCompaction := cloneContextCompaction(s.compaction)
+	instructions := s.run.instructions
 	s.mu.Unlock()
 
 	projection, err := s.context.Project(ctx, contextpolicy.ProjectionRequest{
@@ -99,11 +100,30 @@ func (s *Session[O]) projectHistory(ctx context.Context, rootMessages []agentic.
 	s.mu.Unlock()
 	s.publishOwn(committed, agentic.EventAuthoritative)
 
-	repaired, err := repair.Process(projection.Messages, repair.CloseInterruptedFrontier, repair.PendingCalls{})
+	projectedMessages := appendExchangeInstructions(projection.Messages, instructions)
+	repaired, err := repair.Process(projectedMessages, repair.CloseInterruptedFrontier, repair.PendingCalls{})
 	if err != nil {
 		return nil, err
 	}
 	return repaired, nil
+}
+
+func appendExchangeInstructions(messages []agentic.Message, instructions string) []agentic.Message {
+	result := cloneMessages(messages)
+	if instructions == "" {
+		return result
+	}
+	for index := range result {
+		if result[index].Role != agentic.RoleSystem {
+			continue
+		}
+		result[index].Content = append(result[index].Content, agentic.Part{
+			Type: agentic.ContentText,
+			Text: "\n\n" + instructions,
+		})
+		return result
+	}
+	return append([]agentic.Message{agentic.NewTextMessage(agentic.RoleSystem, instructions)}, result...)
 }
 
 func (s *Session[O]) contextViewsLocked(rootMessages []agentic.Message) ([]agentic.Message, []agentic.Message) {

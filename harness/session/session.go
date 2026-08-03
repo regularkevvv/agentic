@@ -37,6 +37,7 @@ type activeRun struct {
 	resumeEventSeen     bool
 	publicNewStart      int
 	childUsageCharged   bool
+	instructions        string
 }
 
 type contextMarker struct {
@@ -45,25 +46,26 @@ type contextMarker struct {
 }
 
 type Session[O any] struct {
-	id          string
-	driver      agentic.Driver[O]
-	journal     store.Journal
-	codec       codec.Codec
-	environment env.Lease
-	processor   agentic.ToolResultProcessor
-	clock       harnessruntime.Clock
-	ids         harnessruntime.IDGenerator
-	grace       time.Duration
-	bus         event.Hub
-	toolsets    []agentic.Toolset
-	toolGate    agentic.ToolGate
-	context     contextpolicy.Projector
-	eventSink   agentic.EventSink
-	lifecycle   []harnessruntime.LifecycleHook
-	resume      harnessruntime.ResumePlanner
-	scope       harnessruntime.Scope
-	delegation  []string
-	compaction  *contextpolicy.Compaction
+	id           string
+	driver       agentic.Driver[O]
+	journal      store.Journal
+	codec        codec.Codec
+	environment  env.Lease
+	processor    agentic.ToolResultProcessor
+	clock        harnessruntime.Clock
+	ids          harnessruntime.IDGenerator
+	grace        time.Duration
+	bus          event.Hub
+	toolsets     []agentic.Toolset
+	toolGate     agentic.ToolGate
+	context      contextpolicy.Projector
+	eventSink    agentic.EventSink
+	lifecycle    []harnessruntime.LifecycleHook
+	resume       harnessruntime.ResumePlanner
+	instructions harnessruntime.ExchangeInstructionProvider
+	scope        harnessruntime.Scope
+	delegation   []string
+	compaction   *contextpolicy.Compaction
 
 	closeMu           sync.Mutex
 	childBudget       chan struct{}
@@ -197,30 +199,31 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 		bus.PublishDurable(scopeRecord(scope, ownRecord(entry, nature)))
 	}
 	session := &Session[O]{
-		id:          config.ID,
-		driver:      config.Driver,
-		journal:     journal,
-		codec:       config.Codec,
-		environment: environment,
-		processor:   processor,
-		clock:       config.Clock,
-		ids:         config.IDs,
-		grace:       grace,
-		bus:         bus,
-		toolsets:    append([]agentic.Toolset(nil), config.Toolsets...),
-		toolGate:    config.ToolGate,
-		context:     contextProjector,
-		lifecycle:   append([]harnessruntime.LifecycleHook(nil), config.LifecycleHooks...),
-		resume:      resumePlanner,
-		scope:       scope,
-		delegation:  append([]string(nil), config.DelegationTools...),
-		childBudget: make(chan struct{}, 1),
-		state:       Idle,
-		stateChange: make(chan struct{}),
-		cursor:      commit.Cursor,
-		messages:    cloneMessages(initialHistory),
-		budget:      settings.budget,
-		drainAll:    settings.drainAll,
+		id:           config.ID,
+		driver:       config.Driver,
+		journal:      journal,
+		codec:        config.Codec,
+		environment:  environment,
+		processor:    processor,
+		clock:        config.Clock,
+		ids:          config.IDs,
+		grace:        grace,
+		bus:          bus,
+		toolsets:     append([]agentic.Toolset(nil), config.Toolsets...),
+		toolGate:     config.ToolGate,
+		context:      contextProjector,
+		lifecycle:    append([]harnessruntime.LifecycleHook(nil), config.LifecycleHooks...),
+		resume:       resumePlanner,
+		instructions: config.Instructions,
+		scope:        scope,
+		delegation:   append([]string(nil), config.DelegationTools...),
+		childBudget:  make(chan struct{}, 1),
+		state:        Idle,
+		stateChange:  make(chan struct{}),
+		cursor:       commit.Cursor,
+		messages:     cloneMessages(initialHistory),
+		budget:       settings.budget,
+		drainAll:     settings.drainAll,
 	}
 	session.childBudget <- struct{}{}
 	sink, err := event.Chain(session, config.EventMiddleware...)
@@ -274,9 +277,14 @@ func (s *Session[O]) Snapshot(ctx context.Context) (Snapshot, error) {
 		pending[i] = entry
 		pending[i].Message = cloneMessages([]agentic.Message{entry.Message})[0]
 	}
+	runID := ""
+	if s.run != nil {
+		runID = s.run.id
+	}
 	return Snapshot{
 		Cursor:     s.cursor.Seq,
 		State:      s.state,
+		RunID:      runID,
 		Messages:   cloneMessages(s.messages),
 		Pending:    pending,
 		Suspension: cloneSuspension(s.suspension),

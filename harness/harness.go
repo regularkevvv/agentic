@@ -55,6 +55,7 @@ type Harness[O any] struct {
 	eventPolicy  []event.Middleware
 	lifecycle    []harnessruntime.LifecycleHook
 	resume       harnessruntime.ResumePlanner
+	instructions harnessruntime.ExchangeInstructionProvider
 	scope        harnessruntime.Scope
 	delegation   []string
 
@@ -191,6 +192,7 @@ func newHarness[O any](runner agentic.Runner[O], config RuntimeConfig, plan capa
 		eventPolicy:  plan.EventMiddleware(),
 		lifecycle:    plan.LifecycleHooks(),
 		resume:       resumePlanner,
+		instructions: plan.ExchangeInstructionProvider(),
 		scope:        config.Scope,
 		delegation:   plan.DelegationTools(),
 		live:         make(map[string]*Session[O]),
@@ -277,6 +279,7 @@ func (h *Harness[O]) sessionConfig(id string) session.Config[O] {
 		EventMiddleware:       append([]event.Middleware(nil), h.eventPolicy...),
 		LifecycleHooks:        append([]harnessruntime.LifecycleHook(nil), h.lifecycle...),
 		ResumePlanner:         h.resume,
+		Instructions:          h.instructions,
 		Scope:                 scope,
 		DelegationTools:       append([]string(nil), h.delegation...),
 	}

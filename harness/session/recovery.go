@@ -122,6 +122,7 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 		context:        contextProjector,
 		lifecycle:      append([]harnessruntime.LifecycleHook(nil), config.LifecycleHooks...),
 		resume:         resumePlanner,
+		instructions:   config.Instructions,
 		scope:          scope,
 		delegation:     append([]string(nil), config.DelegationTools...),
 		childBudget:    make(chan struct{}, 1),
@@ -277,6 +278,7 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 				history:            providerHistory(state.messages, state.contextMarkers),
 				contextMarkerCount: len(state.contextMarkers),
 				limits:             cloneLimitsPointer(payload.Limits),
+				instructions:       payload.Instructions,
 			}
 			state.state = Running
 			state.suspension = nil
@@ -619,6 +621,7 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 	}
 	added := repaired[len(s.messages):]
 	oldRunID := s.run.id
+	instructions := s.run.instructions
 	newRunID, idErr := s.ids.New("run")
 	if idErr != nil {
 		s.mu.Unlock()
@@ -640,10 +643,11 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 		batch.Add(kindRepair, messagePayload{Message: message, Source: "recovery_repair"})
 	}
 	batch.Add(kindRunOpened, runOpenedPayload{
-		ID:       newRunID,
-		Mode:     "continue",
-		Recovery: true,
-		Limits:   cloneLimitsPointer(limits),
+		ID:           newRunID,
+		Mode:         "continue",
+		Recovery:     true,
+		Limits:       cloneLimitsPointer(limits),
+		Instructions: instructions,
 	})
 	pendingEntries, encodeErr := batch.Result()
 	if encodeErr != nil {
@@ -663,6 +667,7 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 		history:            providerHistory(repaired, s.contextMarkers),
 		contextMarkerCount: len(s.contextMarkers),
 		limits:             cloneLimitsPointer(limits),
+		instructions:       instructions,
 	}
 	s.suspension = nil
 	s.transitionLocked(Running)
