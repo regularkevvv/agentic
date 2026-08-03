@@ -18,6 +18,9 @@ all. Read them for the reasoning, not for the shape.
   durable-harness design, phases 1–4
 - [design/harness-phase5.md](design/harness-phase5.md) — code execution, memory,
   skills, and evals
+- [design/harness-tui-spike.md](design/harness-tui-spike.md) — a reusable Go
+  terminal client for compatible durable harnesses, including the required
+  observation and approval seams
 - [design/multi-representation-inference-plan.md](design/multi-representation-inference-plan.md)
   — the encoding plan, with an amendment noting the two things it describes that
   no longer exist
