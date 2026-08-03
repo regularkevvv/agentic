@@ -64,6 +64,25 @@ func TestExchangeInstructionsResolveOnceAndRefreshNextPrompt(t *testing.T) {
 	}
 }
 
+func TestExchangeInstructionsCreateSystemMessageWhenRunnerHasNone(t *testing.T) {
+	model := &scriptedModel{steps: []modelStep{textStep("done")}}
+	config := sessionConfig(t, agentic.NewAgent("", model), storememory.New(), artifactmemory.New(), spill.Config{})
+	config.Instructions = harnessruntime.ExchangeInstructionProviderFunc(func(context.Context, harnessruntime.ExchangeContext) (string, error) {
+		return "trusted-only", nil
+	})
+	current, err := New(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.Prompt(context.Background(), agentic.NewTextMessage(agentic.RoleUser, "hello")); err != nil {
+		t.Fatal(err)
+	}
+	calls := model.Calls()
+	if len(calls) != 1 || requestSystem(calls[0]) != "trusted-only" {
+		t.Fatalf("calls = %+v", calls)
+	}
+}
+
 func TestExchangeInstructionFailureLeavesNoStartedRun(t *testing.T) {
 	repository := storememory.New()
 	driver := &countingDriver{}

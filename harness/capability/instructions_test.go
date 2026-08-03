@@ -3,6 +3,7 @@ package capability
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
@@ -27,5 +28,14 @@ func TestCompileExchangeInstructionProvider(t *testing.T) {
 	}}
 	if _, err := Compile(value, duplicate); !errors.Is(err, ErrInstructionsConfigured) {
 		t.Fatalf("duplicate provider error = %v", err)
+	}
+}
+
+func TestCompileRejectsNilExchangeInstructionProvider(t *testing.T) {
+	value := Func{Name: "nil-instructions", Apply: func(registry *Registry) error {
+		return registry.AddExchangeInstructionProvider(nil)
+	}}
+	if _, err := Compile(value); err == nil || !strings.Contains(err.Error(), "must not be nil") {
+		t.Fatalf("error = %v", err)
 	}
 }
