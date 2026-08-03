@@ -32,6 +32,7 @@ type Config[O any] struct {
 	EventMiddleware       []event.Middleware
 	LifecycleHooks        []harnessruntime.LifecycleHook
 	ResumePlanner         harnessruntime.ResumePlanner
+	Instructions          harnessruntime.ExchangeInstructionProvider
 	Scope                 harnessruntime.Scope
 	DelegationTools       []string
 }
@@ -117,10 +118,11 @@ type sessionCreatedPayload struct {
 }
 
 type runOpenedPayload struct {
-	ID       string
-	Mode     string
-	Recovery bool
-	Limits   *agentic.UsageLimits
+	ID           string
+	Mode         string
+	Recovery     bool
+	Limits       *agentic.UsageLimits
+	Instructions string
 }
 
 type runClosedPayload struct {

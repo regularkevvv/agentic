@@ -12,6 +12,8 @@ Agentic `v0.5.1`. It currently provides:
 - Local and Memory environments plus `ToolRuntime` context plumbing;
 - session-scoped artifact storage and oversized tool-result spill;
 - an immutable capability DAG and public registry extension points;
+- one optional capability-owned `ExchangeInstructionProvider` for trusted,
+  per-exchange system instructions that remain stable through resume;
 - durable/ephemeral context policy with structured and optional LLM
   compactors;
 - most-specific, default-deny permission policy with `ReadOnly` and
@@ -75,6 +77,14 @@ runtime, err = harness.New(
     harness.WithCapabilities(applicationCapabilities...),
 ).Build()
 ```
+
+A capability may call `Registry.AddExchangeInstructionProvider` to install the
+single trusted instruction source. Harness resolves it exactly once before the
+first durable entry of each application exchange, appends the returned value as
+a system message (creating one when the runner has none), preserves that value
+across suspension/resume, and resolves a fresh value for the next prompt. A
+resolution error aborts before the model runs or the exchange is journaled. It
+is not a user-message injection mechanism.
 
 The same core accepts other conforming adapters without modification. Reusable
 conformance suites live in `store/storetest`, `event/eventtest`, `env/envtest`,

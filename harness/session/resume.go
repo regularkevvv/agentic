@@ -208,6 +208,7 @@ func (s *Session[O]) resumeIndeterminate(
 		return nil, idErr
 	}
 	batch := newEntryBatch(s.codec, len(added)+4)
+	instructions := s.run.instructions
 	batch.Add(kindResolutionAccepted, resolutionAcceptedPayload{
 		SuspensionID: suspension.ID,
 		Request:      cloneResumeRequest(request),
@@ -224,10 +225,11 @@ func (s *Session[O]) resumeIndeterminate(
 		batch.Add(kindMessage, messagePayload{Message: *request.Prompt, Source: "resume_prompt"})
 	}
 	batch.Add(kindRunOpened, runOpenedPayload{
-		ID:       runID,
-		Mode:     "continue",
-		Recovery: true,
-		Limits:   cloneLimitsPointer(limits),
+		ID:           runID,
+		Mode:         "continue",
+		Recovery:     true,
+		Limits:       cloneLimitsPointer(limits),
+		Instructions: instructions,
 	})
 	pendingEntries, encodeErr := batch.Result()
 	if encodeErr != nil {
@@ -252,6 +254,7 @@ func (s *Session[O]) resumeIndeterminate(
 		history:            history,
 		contextMarkerCount: len(s.contextMarkers),
 		limits:             cloneLimitsPointer(limits),
+		instructions:       instructions,
 	}
 	s.suspension = nil
 	s.cursor = commit.Cursor

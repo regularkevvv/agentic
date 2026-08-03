@@ -70,6 +70,7 @@ type QueueReceipt struct {
 type Snapshot struct {
 	Cursor     uint64
 	State      State
+	RunID      string
 	Messages   []agentic.Message
 	Pending    []QueueEntry
 	Suspension *agentic.Suspension
