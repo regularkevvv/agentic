@@ -6,6 +6,10 @@ or attach an already assembled Agentic Harness through `tui/adapter/harness`.
 The core TUI never chooses a provider, executes a tool, or broadens permission
 policy.
 
+The standard command's status line explicitly labels execution as
+`local-host governance (not an OS sandbox)`. Permission prompts govern effects;
+they do not add kernel isolation.
+
 Run the credential-free demonstration:
 
 ```sh
@@ -48,9 +52,16 @@ journals. Set it to false or pass `--resume ID` for explicit control.
 
 Interaction keys are shown in the footer. `Enter` submits, `Alt+S` steers,
 `Alt+F` queues a follow-up, `Alt+N` queues the next turn, `Ctrl+C` interrupts,
+`Shift+Enter` or `Ctrl+J` inserts a newline, Up/Down navigates input history,
 and `Ctrl+E` opens `$VISUAL`/`$EDITOR` after Bubble Tea releases the terminal.
 `Ctrl+T` cycles thinking visibility and `Ctrl+G` toggles safe tool summaries.
 Commands include `/new`, `/resume ID`, `/help`, `/clear`, `/export`,
-`/thinking`, `/tools`, and `/quit`. Export is a redacted plain-text value derived from the conservative
-snapshot unless the host supplies its own exporter; raw tool arguments and
-results are not part of the default view.
+`/thinking`, `/tools`, and `/quit`. Export is a redacted plain-text value derived
+from the conservative snapshot unless the host supplies its own exporter; raw
+tool arguments and results are not part of the default view.
+
+The tag-triggered release workflow additionally copies `testdata/consumer` to
+a fresh directory, turns its `go.mod.template` into a standalone module with no
+`replace`, and runs a compatible host through the published TUI API. Keeping
+the manifest as a template avoids adding another repository module while
+preserving a reproducible clean-consumer proof.

@@ -146,6 +146,12 @@ func New(host uit.Host, options Options) (*Model, error) {
 	composer.MaxHeight = 8
 	composer.SetHeight(3)
 	composer.SetWidth(80)
+	if config.NoColor {
+		composer.Placeholder = "Describe a task..."
+		composer.Prompt = "> "
+		composer.SetStyles(textarea.Styles{})
+		composer.SetVirtualCursor(false)
+	}
 	composer.Focus()
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(16))
 	vp.SoftWrap = true
@@ -348,6 +354,9 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		return nil, true
 	case "enter":
 		return m.dispatchDraft("submit"), true
+	case "shift+enter", "ctrl+j":
+		m.composer.InsertString("\n")
+		return nil, true
 	case "alt+s":
 		return m.dispatchDraft("steer"), true
 	case "alt+f":
@@ -355,9 +364,24 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	case "alt+n":
 		return m.dispatchDraft("next-turn"), true
 	case "up":
-		if len(m.history) > 0 && m.composer.Value() == "" {
-			m.historyIndex = len(m.history) - 1
+		if len(m.history) > 0 && (m.historyIndex >= 0 || m.composer.Value() == "") {
+			if m.historyIndex < 0 {
+				m.historyIndex = len(m.history) - 1
+			} else if m.historyIndex > 0 {
+				m.historyIndex--
+			}
 			m.composer.SetValue(m.history[m.historyIndex])
+			return nil, true
+		}
+	case "down":
+		if m.historyIndex >= 0 {
+			if m.historyIndex < len(m.history)-1 {
+				m.historyIndex++
+				m.composer.SetValue(m.history[m.historyIndex])
+			} else {
+				m.historyIndex = -1
+				m.composer.Reset()
+			}
 			return nil, true
 		}
 	case "esc":
@@ -472,15 +496,28 @@ func (m *Model) command(value string) tea.Cmd {
 func (m *Model) switchSessionCmd(id string) tea.Cmd {
 	old, oldBridge := m.session, m.bridge
 	return func() tea.Msg {
-		if oldBridge != nil {
-			oldBridge.Close()
+		ready, ok := openSessionCmd(m.ctx, m.host, id, m.config)().(sessionReadyMsg)
+		if !ok {
+			return sessionReadyMsg{err: errors.New("session opener returned an invalid message")}
+		}
+		if ready.err != nil {
+			return ready
 		}
 		if old != nil {
 			if err := old.Close(m.ctx); err != nil {
+				if ready.bridge != nil {
+					ready.bridge.Close()
+				}
+				if ready.session != nil {
+					_ = ready.session.Close(context.WithoutCancel(m.ctx))
+				}
 				return sessionReadyMsg{err: err}
 			}
 		}
-		return openSessionCmd(m.ctx, m.host, id, m.config)()
+		if oldBridge != nil {
+			oldBridge.Close()
+		}
+		return ready
 	}
 }
 
@@ -496,13 +533,13 @@ func (m *Model) interruptCmd() tea.Cmd {
 func (m *Model) closeCmd() tea.Cmd {
 	session, bridge := m.session, m.bridge
 	return func() tea.Msg {
-		if bridge != nil {
-			bridge.Close()
-		}
 		if session != nil {
 			if err := session.Close(m.ctx); err != nil {
 				return operationDoneMsg{err: err}
 			}
+		}
+		if bridge != nil {
+			bridge.Close()
 		}
 		return operationDoneMsg{quit: true}
 	}
@@ -674,6 +711,15 @@ func (m *Model) resize(width, height int) {
 }
 
 func (m *Model) syncViewport() {
+	if m.height > 0 {
+		bottomRows := m.composer.Height()
+		if m.snapshot.Suspension != nil {
+			bottomRows = len(m.snapshot.Suspension.Approvals) + 3
+		} else if m.help {
+			bottomRows = 2
+		}
+		m.viewport.SetHeight(max(1, m.height-bottomRows-4))
+	}
 	entries := m.snapshot.Transcript
 	if m.clearBefore > len(entries) {
 		m.clearBefore = len(entries)
@@ -691,20 +737,34 @@ func (m *Model) syncViewport() {
 
 func (m *Model) View() tea.View {
 	parts := []string{m.viewport.View()}
+	composerVisible := false
 	if m.snapshot.Suspension != nil {
-		parts = append(parts, render.Approval(m.snapshot.Suspension, m.approvalIndex, m.decisions, m.config.NoColor))
+		parts = append(parts, render.Approval(m.snapshot.Suspension, m.approvalIndex, m.decisions, m.config.NoColor, m.width))
 	} else if m.help {
-		parts = append(parts, "Commands: /new /resume ID /help /clear /export /thinking /tools /quit\nKeys: enter submit, alt+s steer, alt+f follow-up, alt+n next turn, ctrl+t thinking, ctrl+g tools, ctrl+e editor, ctrl+c interrupt")
+		parts = append(parts, "Commands: /new /resume ID /help /clear /export /thinking /tools /quit\nKeys: enter submit, shift+enter/ctrl+j newline, alt+s steer, alt+f follow-up, alt+n next turn, ctrl+t thinking, ctrl+g tools, ctrl+e editor, ctrl+c interrupt")
 	} else {
+		composerVisible = true
 		parts = append(parts, m.composer.View())
 	}
-	if banner := render.Banner(m.banner, m.failure, m.config.NoColor); banner != "" {
+	if banner := render.Banner(m.banner, m.failure, m.config.NoColor, m.width); banner != "" {
 		parts = append(parts, banner)
 	}
-	parts = append(parts, render.Status(m.snapshot, m.inflight > 0, m.config.NoColor), render.Footer(m.snapshot.State, m.config.NoColor))
+	parts = append(parts,
+		render.Status(m.snapshot, m.inflight > 0, m.config.NoColor, m.width),
+		render.Footer(m.snapshot.State, m.config.NoColor, m.width),
+	)
 	view := tea.NewView(strings.Join(parts, "\n"))
 	view.AltScreen = ResolveAltScreen(m.config.AlternateScreen, m.environ)
 	view.WindowTitle = "Agentic Harness — " + m.snapshot.SessionID
+	if m.config.NoColor {
+		view.WindowTitle = "Agentic Harness - " + m.snapshot.SessionID
+		if composerVisible {
+			view.Cursor = m.composer.Cursor()
+			if view.Cursor != nil {
+				view.Cursor.Y += m.viewport.Height() + 1
+			}
+		}
+	}
 	return view
 }
 

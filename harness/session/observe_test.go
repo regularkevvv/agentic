@@ -178,6 +178,10 @@ func TestProjectHarnessToolAndUnknownObservations(t *testing.T) {
 	if err != nil || tool.Kind != observe.KindToolUpdate || tool.Tool == nil || tool.Tool.Summary != "safe summary" {
 		t.Fatalf("tool = %#v, %v", tool, err)
 	}
+	bounded, err := session.projectObservation(event.Record{Source: "tool", Name: strings.Repeat("x", maxToolSummaryRunes+10)})
+	if err != nil || bounded.Tool == nil || len([]rune(bounded.Tool.Summary)) != maxToolSummaryRunes+1 || !strings.HasSuffix(bounded.Tool.Summary, "…") {
+		t.Fatalf("bounded tool summary = %#v, %v", bounded.Tool, err)
+	}
 	unknown, err := session.projectObservation(event.Record{Source: "custom"})
 	if err != nil || unknown.Kind != observe.Kind("event") {
 		t.Fatalf("unknown = %#v, %v", unknown, err)

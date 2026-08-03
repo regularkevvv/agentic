@@ -18,12 +18,16 @@ import (
 type config struct {
 	profileLabel string
 	workspace    string
+	execution    string
 }
 
 type Option func(*config)
 
 func WithProfileLabel(value string) Option { return func(c *config) { c.profileLabel = value } }
 func WithWorkspace(value string) Option    { return func(c *config) { c.workspace = value } }
+func WithExecutionLabel(value string) Option {
+	return func(c *config) { c.execution = value }
+}
 
 type host[O any] struct {
 	runtime *harnesscore.Harness[O]
@@ -80,6 +84,7 @@ func (s *session[O]) Snapshot(ctx context.Context) (uit.Snapshot, error) {
 	result := uit.Snapshot{
 		SessionID: s.ID(), Cursor: value.Cursor, State: state(value.State), Transcript: messages(value.Messages),
 		Usage: usage(value.Usage), ProfileLabel: s.config.profileLabel, Workspace: s.config.workspace,
+		Execution: s.config.execution,
 	}
 	result.Pending = make([]uit.QueuedInput, len(value.Pending))
 	for index, pending := range value.Pending {

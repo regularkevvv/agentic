@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -74,7 +75,7 @@ func TestNewConfigAndAltScreenValidation(t *testing.T) {
 		t.Fatal("alternate screen resolution incorrect")
 	}
 	model, err := New(host, Options{Environ: []string{"NO_COLOR=1", "TERM=xterm"}})
-	if err != nil || !model.config.NoColor {
+	if err != nil || !model.config.NoColor || model.composer.VirtualCursor() {
 		t.Fatalf("NO_COLOR model = %#v, %v", model, err)
 	}
 	model.cancel()
@@ -89,13 +90,24 @@ func TestSubmitPasteQueueHistoryAndNonblockingUpdate(t *testing.T) {
 		return nil
 	})
 	model.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
-	model.Update(tea.PasteMsg{Content: "large\npaste"})
+	model.composer.SetValue("first line")
+	model.Update(key(tea.KeyEnter, "", tea.ModShift))
+	model.Update(key('j', "j", tea.ModCtrl))
+	if model.composer.Value() != "first line\n\n" {
+		t.Fatalf("multiline composer = %q", model.composer.Value())
+	}
+	model.composer.Reset()
+	largePaste := strings.Repeat("large paste line\n", 4096)
+	model.Update(tea.PasteMsg{Content: largePaste})
+	if model.composer.Value() != largePaste {
+		t.Fatalf("large bracketed paste was truncated: got=%d want=%d", len(model.composer.Value()), len(largePaste))
+	}
 	start := time.Now()
 	_, command := model.Update(key(tea.KeyEnter, "", 0))
 	if elapsed := time.Since(start); elapsed > 50*time.Millisecond {
 		t.Fatalf("Update blocked for %v", elapsed)
 	}
-	if command == nil || model.composer.Value() != "" || len(model.history) != 1 {
+	if command == nil || model.composer.Value() != "" || len(model.history) != 1 || model.history[0] != largePaste {
 		t.Fatalf("submit dispatch state = value %q history %#v", model.composer.Value(), model.history)
 	}
 	done := make(chan tea.Msg, 1)
@@ -123,6 +135,18 @@ func TestSubmitPasteQueueHistoryAndNonblockingUpdate(t *testing.T) {
 	model.Update(key(tea.KeyUp, "", 0))
 	if model.composer.Value() != "next" {
 		t.Fatalf("history recall = %q", model.composer.Value())
+	}
+	model.Update(key(tea.KeyUp, "", 0))
+	if model.composer.Value() != "follow" {
+		t.Fatalf("history previous = %q", model.composer.Value())
+	}
+	model.Update(key(tea.KeyDown, "", 0))
+	if model.composer.Value() != "next" {
+		t.Fatalf("history next = %q", model.composer.Value())
+	}
+	model.Update(key(tea.KeyDown, "", 0))
+	if model.composer.Value() != "" || model.historyIndex != -1 {
+		t.Fatalf("history exit = %q index=%d", model.composer.Value(), model.historyIndex)
 	}
 }
 
@@ -210,6 +234,11 @@ func TestCommandsEditorExportSwitchAndClose(t *testing.T) {
 	if model.session.ID() != oldID {
 		t.Fatalf("resume ID = %s", model.session.ID())
 	}
+	current, currentBridge := model.session, model.bridge
+	execute(t, model, model.command("/resume missing"))
+	if model.session != current || model.bridge != currentBridge || !model.failure {
+		t.Fatal("failed resume discarded the current session")
+	}
 	quit := model.command("/quit")
 	message := quit()
 	_, quitCommand := model.Update(message)
@@ -226,6 +255,17 @@ func TestPermissionOverlayAndResolution(t *testing.T) {
 	execute(t, model, command)
 	if model.snapshot.Suspension == nil || model.snapshot.State != uit.StateSuspended {
 		t.Fatalf("suspension = %#v", model.snapshot)
+	}
+	model.resize(20, 8)
+	narrow := model.View().Content
+	lines := strings.Split(narrow, "\n")
+	if len(lines) > 8 {
+		t.Fatalf("narrow approval uses %d rows: %q", len(lines), narrow)
+	}
+	for _, line := range lines {
+		if len([]rune(line)) > 20 {
+			t.Fatalf("narrow approval line exceeds width: %q", line)
+		}
 	}
 	model.handleApprovalKey("enter")
 	if !model.failure {
@@ -335,10 +375,11 @@ func TestTerminalLayoutSnapshotsAtNarrowNormalAndWideSizes(t *testing.T) {
 		name          string
 		width, height int
 		want          string
+		wantSHA       string
 	}{
-		{name: "narrow", width: 20, height: 8, want: "20x8 viewport=20x1 composer=16x3"},
-		{name: "normal", width: 80, height: 24, want: "80x24 viewport=80x16 composer=76x4"},
-		{name: "wide", width: 160, height: 50, want: "160x50 viewport=160x41 composer=156x5"},
+		{name: "narrow", width: 20, height: 8, want: "20x8 viewport=20x1 composer=16x3", wantSHA: "e4d9c87cd79c8ca8b1286d8be8cdfc49ce5a8d264ee5fc5886d17f4e75be4725"},
+		{name: "normal", width: 80, height: 24, want: "80x24 viewport=80x16 composer=76x4", wantSHA: "30bba916c17f8852244c4f024a1f6b18742faeb65a030a09474f5ae9e3c74e19"},
+		{name: "wide", width: 160, height: 50, want: "160x50 viewport=160x41 composer=156x5", wantSHA: "f178eeb4f2277fa8c31859a4d8d3a12dd5c16e1e3fabf0033e7d8c5c6770f717"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -357,7 +398,23 @@ func TestTerminalLayoutSnapshotsAtNarrowNormalAndWideSizes(t *testing.T) {
 			if got != test.want {
 				t.Fatalf("layout snapshot = %q, want %q", got, test.want)
 			}
-			content := model.View().Content
+			view := model.View()
+			content := view.Content
+			if gotSHA := fmt.Sprintf("%x", sha256.Sum256([]byte(content))); gotSHA != test.wantSHA {
+				t.Fatalf("view snapshot hash = %s, want %s\n%s", gotSHA, test.wantSHA, content)
+			}
+			if strings.Contains(content, "\x1b") || view.Cursor == nil || view.Cursor.X < 0 || view.Cursor.Y < 0 || view.Cursor.Y >= model.height {
+				t.Fatalf("no-color cursor/view is not terminal-safe: cursor=%#v content=%q", view.Cursor, content)
+			}
+			lines := strings.Split(content, "\n")
+			if len(lines) > test.height {
+				t.Fatalf("view has %d rows at height %d", len(lines), test.height)
+			}
+			for _, line := range lines {
+				if len([]rune(line)) > test.width {
+					t.Fatalf("view line exceeds width %d: %q", test.width, line)
+				}
+			}
 			for _, stable := range []string{"probe", "session layout", "enter send"} {
 				if !strings.Contains(content, stable) {
 					t.Fatalf("view at %s omitted %q: %q", test.name, stable, content)

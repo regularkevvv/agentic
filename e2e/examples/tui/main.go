@@ -28,7 +28,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Printf("session=%s cursor=%d transcript=%d requests=%d cache_read=%d cache_hit=%.1f%% approvals=deny+approve marker=%q\n",
+	fmt.Printf("session=%s cursor=%d transcript=%d requests=%d cache_read=%d cache_hit=%.1f%% approvals=deny+approve interrupt=%t child_events=%d marker=%q\n",
 		report.SessionID, report.Cursor, report.TranscriptEntries, report.ModelRequests,
-		report.CacheReadTokens, report.CacheHitPercent, report.ApprovedMarker)
+		report.CacheReadTokens, report.CacheHitPercent, report.Interrupted, report.ChildEvents, report.ApprovedMarker)
 }

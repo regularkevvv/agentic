@@ -7,6 +7,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,7 +29,9 @@ func TestLiveProviderHarnessTUIFlow(t *testing.T) {
 	}
 	workspace := t.TempDir()
 	prompt := filepath.Join(t.TempDir(), "system.md")
-	if err := os.WriteFile(prompt, []byte("Follow the operator's request. Use run_command when explicitly asked."), 0o600); err != nil {
+	systemPrompt := `You are running a live Harness/TUI acceptance test. When the operator asks for a shell command, call run_command exactly once with name /bin/sh and the exact -c argument supplied. Never simulate execution. After the tool result, answer briefly.` + "\n" +
+		strings.Repeat("Stable cache anchor: preserve this instruction prefix exactly across every turn.\n", 768)
+	if err := os.WriteFile(prompt, []byte(systemPrompt), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
@@ -76,32 +80,87 @@ func TestLiveProviderHarnessTUIFlow(t *testing.T) {
 	}()
 
 	marker := "tui-live-marker.txt"
-	request := "Run /bin/sh with arguments -c and 'printf live-approved > " + marker + "'. Do not simulate it; request the run_command tool."
-	if err := session.Submit(ctx, uit.Input{Text: request}); err != nil {
+	markerPath := filepath.Join(workspace, marker)
+	if err := session.Submit(ctx, uit.Input{Text: "Call run_command with name /bin/sh and args [-c, 'printf live-denied > " + marker + "']. I will deny permission."}); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, err := session.Snapshot(ctx)
+	denied, err := session.Snapshot(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.State != uit.StateSuspended || snapshot.Suspension == nil || len(snapshot.Suspension.Approvals) != 1 {
-		t.Fatalf("provider did not reach one permission suspension: %#v", snapshot)
+	if denied.State != uit.StateSuspended || denied.Suspension == nil || len(denied.Suspension.Approvals) != 1 {
+		t.Fatalf("provider did not reach the denial suspension: %#v", denied)
 	}
-	approval := snapshot.Suspension.Approvals[0]
+	approval := denied.Suspension.Approvals[0]
 	if err := session.Resolve(ctx, uit.Resolution{
-		SuspensionID: snapshot.Suspension.ID,
+		SuspensionID: denied.Suspension.ID,
+		Decisions:    []uit.Decision{{CallID: approval.CallID, Action: uit.DecisionDeny, Reason: "live e2e denial"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(markerPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("denied command changed marker state: %v", err)
+	}
+
+	if err := session.Submit(ctx, uit.Input{Text: "Call run_command with name /bin/sh and args [-c, 'printf live-approved > " + marker + "']. I will approve permission."}); err != nil {
+		t.Fatal(err)
+	}
+	approved, err := session.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.State != uit.StateSuspended || approved.Suspension == nil || len(approved.Suspension.Approvals) != 1 {
+		t.Fatalf("provider did not reach the approval suspension: %#v", approved)
+	}
+	approval = approved.Suspension.Approvals[0]
+	if err := session.Resolve(ctx, uit.Resolution{
+		SuspensionID: approved.Suspension.ID,
 		Decisions:    []uit.Decision{{CallID: approval.CallID, Action: uit.DecisionApprove}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	contents, err := os.ReadFile(filepath.Join(workspace, marker))
+	contents, err := os.ReadFile(markerPath)
 	if err != nil || string(contents) != "live-approved" {
 		t.Fatalf("live marker = %q, %v", contents, err)
 	}
+	beforeClose, err := session.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeClose.State != uit.StateIdle || beforeClose.Usage.Requests < 4 {
+		t.Fatalf("live flow did not finish four provider requests: %#v", beforeClose)
+	}
+	if beforeClose.Usage.CacheReadTokens == 0 || beforeClose.Usage.CacheHitPercent() < 25 {
+		t.Fatalf("live prompt cache was ineffective: usage=%#v hit=%.1f%%", beforeClose.Usage, beforeClose.Usage.CacheHitPercent())
+	}
+
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	for events.Load() < 8 {
+		select {
+		case <-deadline.C:
+			t.Fatalf("live flow emitted only %d TUI events", events.Load())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	subscription.Close()
+	<-eventDone
 	if value := observationErr.Load(); value != nil {
 		t.Fatal(value.(error))
 	}
-	if events.Load() == 0 {
-		t.Fatal(errors.New("live flow emitted no TUI events"))
+	if err := session.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := assembly.Host.ResumeSession(ctx, session.ID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close(context.WithoutCancel(ctx)) }()
+	afterReopen, err := reopened.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterReopen.Cursor < beforeClose.Cursor || !reflect.DeepEqual(afterReopen.Transcript, beforeClose.Transcript) || afterReopen.Usage != beforeClose.Usage {
+		t.Fatalf("live durable reopen mismatch: before=%#v after=%#v", beforeClose, afterReopen)
 	}
 }

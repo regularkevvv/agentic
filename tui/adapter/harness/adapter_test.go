@@ -98,7 +98,7 @@ func TestHarnessAdapterSessionLifecycle(t *testing.T) {
 	if _, err := New(runtime, nil); err == nil {
 		t.Fatal("nil option succeeded")
 	}
-	port, err := New(runtime, WithProfileLabel("work"), WithWorkspace("/workspace"))
+	port, err := New(runtime, WithProfileLabel("work"), WithWorkspace("/workspace"), WithExecutionLabel("local host"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,7 +116,7 @@ func TestHarnessAdapterSessionLifecycle(t *testing.T) {
 	}
 	subscription := created.Subscribe(uit.SubscribeOptions{Buffer: 32, Preview: true})
 	snapshot, err := created.Snapshot(context.Background())
-	if err != nil || snapshot.SessionID != created.ID() || snapshot.ProfileLabel != "work" || snapshot.Workspace != "/workspace" {
+	if err != nil || snapshot.SessionID != created.ID() || snapshot.ProfileLabel != "work" || snapshot.Workspace != "/workspace" || snapshot.Execution != "local host" {
 		t.Fatalf("snapshot = %#v, %v", snapshot, err)
 	}
 	if err := created.Submit(context.Background(), uit.Input{}); err == nil {

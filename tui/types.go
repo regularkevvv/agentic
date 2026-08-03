@@ -100,13 +100,17 @@ func (u Usage) CacheHitPercent() float64 {
 }
 
 type Approval struct {
-	CallID            string
-	ToolName          string
-	Capability        string
-	Action            string
-	ResourceScheme    string
+	CallID         string
+	ToolName       string
+	Capability     string
+	Action         string
+	ResourceScheme string
+	// CanonicalResource is the validated policy identity. Default renderers
+	// must not display it because it can contain normalized sensitive details.
 	CanonicalResource string
-	ResourceDisplay   string
+	// ResourceDisplay is the capability-owned bounded label safe for operator
+	// presentation.
+	ResourceDisplay string
 }
 
 type Suspension struct {
@@ -127,6 +131,7 @@ type Snapshot struct {
 	Usage        Usage
 	ProfileLabel string
 	Workspace    string
+	Execution    string
 }
 
 type DecisionAction string

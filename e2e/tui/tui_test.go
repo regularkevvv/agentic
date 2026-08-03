@@ -21,7 +21,8 @@ func TestHarnessTUIEndToEnd(t *testing.T) {
 	if report.DeniedMarkerAbsent != true || report.ApprovedMarker != "approved" || report.SessionID == "" || report.Cursor == 0 {
 		t.Fatalf("runtime report = %#v", report)
 	}
-	if report.ModelRequests != 4 || !report.StableCacheKeys || !report.AppendOnlyPrefixes || report.CacheHitPercent <= 0 {
+	if report.ModelRequests != 5 || !report.StableCacheKeys || !report.AppendOnlyPrefixes || report.CacheHitPercent <= 0 ||
+		!report.Interrupted || report.InterruptionEvents == 0 || report.ThinkingPreviews == 0 || report.ChildEvents == 0 {
 		t.Fatalf("cache report = %#v", report)
 	}
 }

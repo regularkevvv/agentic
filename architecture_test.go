@@ -93,6 +93,20 @@ func repoRoot(t *testing.T) string {
 	return filepath.Dir(filename)
 }
 
+// requireRepositoryCheckout skips repository-topology assertions when this
+// package is being tested from a published module archive. Go module archives
+// intentionally omit nested modules and VCS metadata, so those assertions can
+// only describe a source checkout. Package-boundary tests still run in both
+// environments.
+func requireRepositoryCheckout(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(repoRoot(t), ".git")); os.IsNotExist(err) {
+		t.Skip("repository topology is unavailable in a published module archive")
+	} else if err != nil {
+		t.Fatalf("inspect repository metadata: %v", err)
+	}
+}
+
 // TestRepositoryHasExactlyTheDocumentedModules fails when a go.mod appears or
 // disappears without ARCHITECTURE.md and the map above being updated with it.
 //
@@ -100,6 +114,7 @@ func repoRoot(t *testing.T) string {
 // module could be left out of go.work and out of this file at once, and the
 // workspace test below would happily pass over a module it had never heard of.
 func TestRepositoryHasExactlyTheDocumentedModules(t *testing.T) {
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	root := repoRoot(t)
 
@@ -152,6 +167,7 @@ func TestRepositoryHasExactlyTheDocumentedModules(t *testing.T) {
 // Runtime, which is how a repository becomes unpleasant to check out. Both are
 // silent, and both are one line.
 func TestWorkspaceListsEveryNonCGOModule(t *testing.T) {
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	root := repoRoot(t)
 
@@ -216,6 +232,7 @@ func TestWorkspaceListsEveryNonCGOModule(t *testing.T) {
 // The others replace the root because they are not consumers, they are parts of
 // this repository that happen to need their own dependency graph.
 func TestNestedModulesResolveTheRootAsDocumented(t *testing.T) {
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	root := repoRoot(t)
 
@@ -306,6 +323,7 @@ func TestInternalHoldsOnlyDocumentedPackages(t *testing.T) {
 // because something did not obviously belong anywhere, which is the moment a
 // layout starts costing people time.
 func TestTopLevelDirectoriesAreDocumented(t *testing.T) {
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	assertDirectoryMatches(t, repoRoot(t), topLevelDirectories,
 		"%s/ is a new top-level directory and ARCHITECTURE.md does not name it. "+
@@ -423,6 +441,7 @@ func TestNoCompiledBinariesAreTracked(t *testing.T) {
 // headings and their slug rules, which is more machinery than the problem
 // deserves.
 func TestMarkdownLinksResolve(t *testing.T) {
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	root := repoRoot(t)
 

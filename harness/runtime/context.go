@@ -12,6 +12,9 @@ import (
 )
 
 type ToolUpdate struct {
+	// Kind is a capability-owned, non-sensitive presentation label. Harness
+	// bounds it before observation; Payload remains opaque and is never included
+	// in the default presentation projection.
 	Kind    string
 	Payload []byte
 }

@@ -179,7 +179,12 @@ func Build(ctx context.Context, registry *Registry, config Config) (Assembly, er
 	if err != nil {
 		return Assembly{}, err
 	}
-	host, err := harnessui.New(runtime, harnessui.WithProfileLabel(config.ProfileName), harnessui.WithWorkspace(config.WorkspaceRoot))
+	host, err := harnessui.New(
+		runtime,
+		harnessui.WithProfileLabel(config.ProfileName),
+		harnessui.WithWorkspace(config.WorkspaceRoot),
+		harnessui.WithExecutionLabel("local-host governance (not an OS sandbox)"),
+	)
 	if err != nil {
 		return Assembly{}, err
 	}

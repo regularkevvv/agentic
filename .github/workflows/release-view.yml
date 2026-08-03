@@ -87,3 +87,11 @@ jobs:
       - run: GOWORK=off go vet ./...
       - run: GOWORK=off CGO_ENABLED=0 go build ./...
       - run: GOWORK=off make coverage-check
+      - name: Run a fresh no-replace compatible-host consumer
+        run: |
+          consumer="${RUNNER_TEMP}/agentic-tui-consumer"
+          mkdir -p "${consumer}"
+          cp -R testdata/consumer/. "${consumer}/"
+          mv "${consumer}/go.mod.template" "${consumer}/go.mod"
+          cd "${consumer}"
+          GOWORK=off GOPROXY=direct go run -mod=mod .

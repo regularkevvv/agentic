@@ -36,7 +36,9 @@ func (h *Host) NewSession(_ context.Context, _ uit.SessionOptions) (uit.Session,
 	h.next++
 	id := fmt.Sprintf("offline-%03d", h.next)
 	session := &Session{
-		id: id, host: h, snapshot: uit.Snapshot{SessionID: id, State: uit.StateIdle, ProfileLabel: "offline", Workspace: "/offline"},
+		id: id, host: h, snapshot: uit.Snapshot{
+			SessionID: id, State: uit.StateIdle, ProfileLabel: "offline", Workspace: "/offline", Execution: "offline test host",
+		},
 		subscribers: make(map[*subscription]struct{}),
 	}
 	h.sessions[id] = session

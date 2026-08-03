@@ -92,7 +92,7 @@ func TestBuildCreatesWorkingHarnessAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot, _ := session.Snapshot(context.Background())
-	if snapshot.ProfileLabel != "work" || snapshot.Workspace != config.WorkspaceRoot || len(snapshot.Transcript) < 2 {
+	if snapshot.ProfileLabel != "work" || snapshot.Workspace != config.WorkspaceRoot || snapshot.Execution != "local-host governance (not an OS sandbox)" || len(snapshot.Transcript) < 2 {
 		t.Fatalf("snapshot = %#v", snapshot)
 	}
 	_ = session.Close(context.Background())

@@ -35,7 +35,7 @@ func (s *Session[O]) projectObservation(record event.Record) (observe.Event, err
 		return s.projectAgenticObservation(result, record)
 	case "tool":
 		result.Kind = observe.KindToolUpdate
-		result.Tool = &observe.Tool{State: observe.ToolRunning, Summary: record.Name}
+		result.Tool = &observe.Tool{State: observe.ToolRunning, Summary: boundedToolSummary(record.Name)}
 		return result, nil
 	case "harness":
 		return s.projectHarnessObservation(result, record)
@@ -46,6 +46,16 @@ func (s *Session[O]) projectObservation(record event.Record) (observe.Event, err
 		}
 		return result, nil
 	}
+}
+
+const maxToolSummaryRunes = 256
+
+func boundedToolSummary(value string) string {
+	runes := []rune(value)
+	if len(runes) <= maxToolSummaryRunes {
+		return value
+	}
+	return string(runes[:maxToolSummaryRunes]) + "…"
 }
 
 func (s *Session[O]) projectAgenticObservation(result observe.Event, record event.Record) (observe.Event, error) {
