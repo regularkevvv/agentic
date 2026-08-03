@@ -286,6 +286,7 @@ func (c *agentCore) buildRequest(ls *loopState, stream bool) (*ChatRequest, erro
 		MaxTokens:   firstNonNil(ls.options.maxTokens, c.config.maxTokens),
 		TopP:        firstNonNil(ls.options.topP, c.config.topP),
 		Stream:      stream,
+		PromptCache: clonePromptCache(firstNonNil(ls.options.promptCache, c.config.promptCache)),
 	}
 	if ls.registry.Count() > 0 {
 		availableTools := ls.registry.Tools()
@@ -302,6 +303,14 @@ func (c *agentCore) buildRequest(ls *loopState, stream bool) (*ChatRequest, erro
 	request.ResponseFormat = c.responseFormat
 	request.Thinking = c.config.thinking
 	return request, nil
+}
+
+func clonePromptCache(value *PromptCacheConfig) *PromptCacheConfig {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func (ls *loopState) checkPreRequestLimits() error {

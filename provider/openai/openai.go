@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"github.com/regularkevvv/agentic/internal/core"
 
@@ -256,6 +257,9 @@ func (m *Model) buildParams(req *core.ChatRequest) openai.ChatCompletionNewParam
 		Messages: messages,
 		Model:    shared.ChatModel(m.model),
 	}
+	if req.PromptCache.Enabled() {
+		params.PromptCacheKey = openai.String(clampPromptCacheKey(req.PromptCache.Key, 64))
+	}
 
 	thinkingEnabled := req.Thinking != nil && req.Thinking.Enabled
 
@@ -311,6 +315,14 @@ func (m *Model) buildParams(req *core.ChatRequest) openai.ChatCompletionNewParam
 	}
 
 	return params
+}
+
+func clampPromptCacheKey(value string, limit int) string {
+	if limit <= 0 || utf8.RuneCountInString(value) <= limit {
+		return value
+	}
+	runes := []rune(value)
+	return string(runes[:limit])
 }
 
 // convertResponseFormat converts core.ResponseFormat to OpenAI format.

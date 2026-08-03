@@ -15,6 +15,7 @@ The commands below are run from the repository root, where the committed
 | `retrieval/` | Hybrid retrieval: dense and learned sparse from one call |
 | `sparse/` | What a learned sparse vector is, and what it costs |
 | `codemode/` | Full Harness session through Codemode, GoMonty, a Monty worker, and a nested Go tool |
+| `tui/` | Real Harness-to-TUI adapter with streaming, permission deny/approve, cache proof, and durable recovery |
 
 ## Setup
 
@@ -31,6 +32,19 @@ go run ./e2e/examples/structured
 go run ./e2e/examples/retrieval  # needs DEEPINFRA_TOKEN
 go run ./e2e/examples/sparse     # needs DEEPINFRA_TOKEN
 go run ./e2e/examples/codemode   # no credential; explicitly downloads and verifies GoMonty
+go run ./e2e/examples/tui        # no credential; deterministic local acceptance flow
+```
+
+An opt-in live TUI smoke asks a configured real provider to request a shell
+tool, approves the exact durable suspension, and verifies the workspace effect:
+
+```bash
+cd e2e
+AGENTIC_TUI_LIVE=1 \
+AGENTIC_TUI_LIVE_PROVIDER=anthropic \
+AGENTIC_TUI_LIVE_MODEL=claude-sonnet-4-6 \
+ANTHROPIC_API_KEY=... \
+go test -tags=e2e -run TestLiveProviderHarnessTUIFlow ./tui
 ```
 
 The Codemode example is deterministic and does not call an LLM provider. Its

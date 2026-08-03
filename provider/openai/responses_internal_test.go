@@ -2,6 +2,7 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/openai/openai-go/responses"
@@ -9,6 +10,23 @@ import (
 
 	"github.com/regularkevvv/agentic/internal/core"
 )
+
+func TestResponsesPromptCacheKey(t *testing.T) {
+	model := &ResponsesModel{model: "gpt-4.1"}
+	params := model.buildParams(&core.ChatRequest{
+		Model: "gpt-4.1", Messages: []core.Message{core.NewTextMessage(core.RoleUser, "hi")},
+		PromptCache: &core.PromptCacheConfig{Key: "session", Retention: core.PromptCacheLong},
+	})
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(raw, &body)
+	if body["prompt_cache_key"] != "session" {
+		t.Fatalf("prompt cache key = %#v", body["prompt_cache_key"])
+	}
+}
 
 func TestResponsesRequestValidationErrors(t *testing.T) {
 	model := &ResponsesModel{model: "gpt-4.1"}

@@ -1,13 +1,14 @@
-.PHONY: test lint lint-all lint-cgo vet build fmt check clean test-e2e coverage coverage-check
+.PHONY: test lint lint-all lint-cgo vet build fmt check clean test-e2e coverage coverage-check coverage-all
 
 GOLANGCI_LINT_VERSION := v2.1.6
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 COVERAGE_PACKAGES := $(shell go list ./... | grep -vE '/(internal/testutil|provider/test/conformance)($$|/)')
 COVERAGE_THRESHOLD := 97.0
+WORKSPACE_PACKAGES := ./... ./harness/... ./harness/codemode/gomonty/... ./tui/... ./e2e/...
 
 # Run all tests
 test:
-	go test -race -count=1 -timeout 60s ./...
+	go test -race -count=1 -timeout 60s $(WORKSPACE_PACKAGES)
 
 # Run end-to-end tests (requires API keys). They are their own module, so they
 # are invisible to every other target here.
@@ -30,6 +31,13 @@ coverage-check: coverage
 		printf("coverage %.1f%% meets required %.1f%%\n", pct + 0, threshold + 0); \
 	}'
 
+# Each released production module owns an independent 97% gate. E2E and test
+# hosts prove integration behavior and are intentionally not coverage padding.
+coverage-all: coverage-check
+	$(MAKE) -C harness coverage-check
+	$(MAKE) -C harness/codemode/gomonty coverage-check
+	$(MAKE) -C tui coverage-check
+
 # Lint every module that builds without a native toolchain (same version as CI).
 #
 # The e2e run passes -e2e explicitly: the live tests are the only files in
@@ -37,8 +45,10 @@ coverage-check: coverage
 # reports a clean result over a package it never read.
 lint:
 	$(GOLANGCI_LINT) run ./...
-	cd harness && GOWORK=off $(GOLANGCI_LINT) run ./...
-	cd e2e && GOWORK=off $(GOLANGCI_LINT) run --build-tags=e2e ./...
+	cd harness && $(GOLANGCI_LINT) run ./...
+	cd harness/codemode/gomonty && $(GOLANGCI_LINT) run ./...
+	cd tui && $(GOLANGCI_LINT) run ./...
+	cd e2e && $(GOLANGCI_LINT) run --build-tags=e2e ./...
 
 # The two CGO modules are linted apart from the others, not forgotten by them.
 # Linting compiles, and compiling these means linking cgo against ONNX Runtime
@@ -55,11 +65,11 @@ lint-all: lint lint-cgo
 
 # Run go vet
 vet:
-	go vet ./...
+	go vet $(WORKSPACE_PACKAGES)
 
 # Build all packages
 build:
-	go build ./...
+	CGO_ENABLED=0 go build $(WORKSPACE_PACKAGES)
 
 # Format code
 fmt:
@@ -67,7 +77,7 @@ fmt:
 	go run golang.org/x/tools/cmd/goimports@latest -w -local github.com/regularkevvv/agentic .
 
 # Run all checks (test + lint + vet)
-check: fmt vet lint test
+check: fmt vet lint test coverage-all
 
 # Remove build artifacts
 clean:

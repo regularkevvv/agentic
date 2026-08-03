@@ -1,13 +1,16 @@
-# Agentic Harness (experimental Phase 5)
+# Agentic Harness (experimental)
 
-This nested module contains the experimental `v0.1` harness surface for
-Agentic `v0.5.1`. It currently provides:
+This nested module contains the experimental `v0.2` harness surface for
+Agentic `v0.6.0`. It currently provides:
 
 - write-ahead `Harness`/`Session` execution with steering, follow-up,
   next-turn queues, interruption, snapshots, budgets, and crash recovery;
 - generic journal/codec/event/environment/result-processing ports;
 - memory and JSONL journal adapters with durable cursors and exclusive leases;
 - a bounded nonblocking in-process event adapter;
+- a presentation-neutral typed observation projection with copy-owned events,
+  conservative tool data, dropped-preview reporting, and public permission
+  suspension inspection;
 - deterministic terminal transcript repair;
 - Local and Memory environments plus `ToolRuntime` context plumbing;
 - session-scoped artifact storage and oversized tool-result spill;
@@ -20,6 +23,8 @@ Agentic `v0.5.1`. It currently provides:
   `WorkspaceWrite` presets;
 - exact, write-ahead deferred resume through the released root `Driver`;
 - an explicit local `Default` assembly;
+- stable session-scoped prompt-cache identity, portable cache-retention intent,
+  and opt-in model streaming for interactive clients;
 - capture-restricted, in-process child agents with separate durable sessions
   and addressed inbox routing;
 - shared or narrowed history, environment, tools, permissions, dependencies,
@@ -28,7 +33,8 @@ Agentic `v0.5.1`. It currently provides:
   and bounded UTF-8 child summaries;
 - an opt-in code-execution capability over a generic checkpointed `Executor`,
   with selected-tool hiding, durable nested calls, exact approval resume, and
-  fixed-binary subprocess and GoMonty adapters;
+  a fixed-binary subprocess adapter; the GoMonty backend is an optional nested
+  module at `codemode/gomonty`;
 - bounded, host-scoped cross-session memory ports with in-memory and durable
   JSONL adapters, optimistic concurrency, idempotent mutation, on-demand tools,
   and optional ephemeral prompt injection;
@@ -185,27 +191,30 @@ delegation remains the topology boundary. Phase 5 adds opt-in code execution,
 cross-session memory, skills, and evals without changing `harness.Default`.
 Out-of-process workers, topology presets, automatic suspended-child
 orchestration, a bundled interpreter, vector database, provider-specific
-evaluator, CLI, TUI, and hosted service remain deferred to later work described in
+evaluator, and hosted service remain deferred. The reusable terminal client and
+standard CLI now live in the separate `../tui` module described in
+[`../tui/README.md`](../tui/README.md); earlier design context remains in
 [`../docs/design/spike-harness-framework.md`](../docs/design/spike-harness-framework.md).
 
 The module requires the released root module:
 
 ```text
-github.com/regularkevvv/agentic v0.5.1
+github.com/regularkevvv/agentic v0.6.0
 ```
 
-Its optional GoMonty adapter pins:
+The separately released optional GoMonty adapter pins:
 
 ```text
 github.com/regularkevvv/gomonty v0.0.15
 ```
 
-Local development uses the committed repository `go.work`; the module does not
-contain a `replace` directive. To verify both release and workspace views:
+Local development uses the committed repository `go.work`; release modules do
+not contain `replace` directives. To verify the workspace and, after the
+ordered Agentic/Harness publications, the Harness release view:
 
 ```sh
-GOWORK=off go test -race -count=1 ./...
+make test
+make coverage-all
 (cd harness && GOWORK=off go test -race -count=1 ./...)
-go test -race -count=1 ./... ./harness/...
 (cd harness && GOWORK=off make coverage-check)
 ```

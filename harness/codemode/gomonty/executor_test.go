@@ -298,6 +298,26 @@ func TestExecutorStartReturnsCheckpointedCallAndCopiesInput(t *testing.T) {
 	}
 }
 
+func TestCheckpointEncodingFailureIsReported(t *testing.T) {
+	want := errors.New("encode failed")
+	previous := marshalCheckpoint
+	marshalCheckpoint = func(any) ([]byte, error) { return nil, want }
+	t.Cleanup(func() { marshalCheckpoint = previous })
+	_, err := checkpointCall(
+		&frontier{
+			kind:    frontierCall,
+			call:    callFrontier{ID: "7", Name: "tool"},
+			dump:    func() ([]byte, error) { return []byte("snapshot"), nil },
+			abandon: func() error { return nil },
+		},
+		[]string{"tool"},
+		map[string]struct{}{"tool": {}},
+	)
+	if !errors.Is(err, want) {
+		t.Fatalf("checkpoint encode error = %v", err)
+	}
+}
+
 func TestExecutorStartAndAdvanceFailures(t *testing.T) {
 	var nilExecutor *Executor
 	if _, err := nilExecutor.Start(context.Background(), codemode.Request{}); err == nil {

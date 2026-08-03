@@ -132,6 +132,18 @@ func (s *Session[O]) runOptions(limits *agentic.UsageLimits) []agentic.RunOption
 		agentic.WithRunToolResultProcessor(s.processor),
 		agentic.WithRunToolCancellationGrace(s.grace),
 	}
+	if s.streaming {
+		options = append(options, agentic.WithRunModelStreaming(true))
+	}
+	if s.promptCache != agentic.PromptCacheNone {
+		retention := s.promptCache
+		if retention == "" {
+			retention = agentic.PromptCacheShort
+		}
+		options = append(options, agentic.WithRunPromptCache(agentic.PromptCacheConfig{
+			Key: s.id, Retention: retention,
+		}))
+	}
 	if len(s.toolsets) > 0 {
 		options = append(options, agentic.WithRunToolsets(s.toolsets...))
 	}

@@ -35,6 +35,8 @@ type Config[O any] struct {
 	Instructions          harnessruntime.ExchangeInstructionProvider
 	Scope                 harnessruntime.Scope
 	DelegationTools       []string
+	PromptCacheRetention  agentic.PromptCacheRetention
+	ModelStreaming        bool
 }
 
 func (c Config[O]) validate() error {
@@ -77,6 +79,11 @@ func (c Config[O]) validate() error {
 	}
 	if c.ToolCancellationGrace < 0 {
 		return errors.New("tool cancellation grace cannot be negative")
+	}
+	if c.PromptCacheRetention != "" && c.PromptCacheRetention != agentic.PromptCacheNone &&
+		c.PromptCacheRetention != agentic.PromptCacheShort &&
+		c.PromptCacheRetention != agentic.PromptCacheLong {
+		return errors.New("session prompt-cache retention is invalid")
 	}
 	scope := c.Scope
 	if scope.SessionID == "" {

@@ -43,7 +43,7 @@ jobs:
         run: GOWORK=off go build ./...
 
   harness:
-    name: Harness release view
+    name: Harness workspace view
     runs-on: ubuntu-latest
     timeout-minutes: 10
     defaults:
@@ -54,21 +54,19 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: harness/go.mod
-      - name: Test against released Agentic
-        run: GOWORK=off go test -race -count=1 -timeout 60s ./...
+      - name: Test against the coordinated workspace
+        run: go test -race -count=1 -timeout 60s ./...
       - name: Vet
-        run: GOWORK=off go vet ./...
+        run: go vet ./...
       - name: Check build
-        run: GOWORK=off go build ./...
+        run: CGO_ENABLED=0 go build ./...
       - name: Enforce coverage threshold
-        run: GOWORK=off make coverage-check
+        run: make coverage-check
 
   harness-lint:
     name: Harness lint
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      GOWORK: "off"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -79,6 +77,74 @@ jobs:
           version: v2.1.6
           install-mode: goinstall
           working-directory: harness
+
+  gomonty-module:
+    name: Optional GoMonty adapter
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: harness/codemode/gomonty
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: harness/codemode/gomonty/go.mod
+      - name: Race test
+        run: go test -race -count=1 -timeout 60s ./...
+      - name: Vet and pure-Go build
+        run: go vet ./... && CGO_ENABLED=0 go build ./...
+      - name: Enforce coverage threshold
+        run: make coverage-check
+
+  gomonty-lint:
+    name: Optional GoMonty adapter lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: harness/codemode/gomonty/go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+          working-directory: harness/codemode/gomonty
+
+  tui-module:
+    name: TUI module
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tui/go.mod
+      - name: Race test
+        run: go test -race -count=1 -timeout 60s ./...
+      - name: Vet and pure-Go build
+        run: go vet ./... && CGO_ENABLED=0 go build ./...
+      - name: Enforce coverage threshold
+        run: make coverage-check
+
+  tui-lint:
+    name: TUI module lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: tui/go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+          working-directory: tui
 
   # The live tests and the examples are their own module, so they have left the
   # root's `go build ./...`. Without this job an incompatible API change would
@@ -99,11 +165,11 @@ jobs:
         with:
           go-version-file: e2e/go.mod
       - name: Typecheck the live tests and the examples
-        run: GOWORK=off go vet -tags=e2e ./...
+        run: go vet -tags=e2e ./...
       - name: Check build
-        run: GOWORK=off go build ./...
+        run: CGO_ENABLED=0 go build ./...
       - name: Enforce the module boundary
-        run: GOWORK=off go test -count=1 ./...
+        run: go test -count=1 ./...
 
   # While the examples and live tests were packages of the root module, the Lint
   # job above covered them. Leaving the module took them out of that net, so this
@@ -114,8 +180,6 @@ jobs:
     name: E2E module lint
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    env:
-      GOWORK: "off"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -142,7 +206,6 @@ jobs:
         working-directory: e2e
     env:
       GOMONTY_E2E: "1"
-      GOWORK: "off"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -230,8 +293,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Test all three modules
-        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./e2e/...
+      - name: Test all five non-CGO modules
+        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./harness/codemode/gomonty/... ./tui/... ./e2e/...
 
   coverage:
     name: Coverage
@@ -243,7 +306,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Enforce coverage threshold
-        run: make coverage-check
+        run: make coverage-all
 
   vet:
     name: Vet
@@ -254,7 +317,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: go vet ./...
+      - run: make vet
 
   # Golden fixtures are meant to be derived from sanitized real responses, so a
   # sanitization miss commits a live credential to a public repository. This

@@ -65,6 +65,8 @@ type Session[O any] struct {
 	instructions harnessruntime.ExchangeInstructionProvider
 	scope        harnessruntime.Scope
 	delegation   []string
+	promptCache  agentic.PromptCacheRetention
+	streaming    bool
 	compaction   *contextpolicy.Compaction
 
 	closeMu           sync.Mutex
@@ -217,6 +219,8 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 		instructions: config.Instructions,
 		scope:        scope,
 		delegation:   append([]string(nil), config.DelegationTools...),
+		promptCache:  config.PromptCacheRetention,
+		streaming:    config.ModelStreaming,
 		childBudget:  make(chan struct{}, 1),
 		state:        Idle,
 		stateChange:  make(chan struct{}),

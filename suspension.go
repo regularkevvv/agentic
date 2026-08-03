@@ -54,6 +54,7 @@ func (c *agentCore) executionFingerprint(ls *loopState) string {
 		RetryConfig          RetryConfig
 		MaxValidationRetries int
 		ToolChoice           *ToolChoice
+		PromptCache          *PromptCacheConfig
 	}{
 		Version:              1,
 		Model:                c.model.Name(),
@@ -66,6 +67,7 @@ func (c *agentCore) executionFingerprint(ls *loopState) string {
 		RetryConfig:          c.config.retryConfig,
 		MaxValidationRetries: c.config.maxValidationRetries,
 		ToolChoice:           firstNonNil(ls.options.toolChoice, c.config.toolChoice),
+		PromptCache:          clonePromptCache(firstNonNil(ls.options.promptCache, c.config.promptCache)),
 	}
 	encoded, _ := json.Marshal(payload)
 	hash := sha256.Sum256(encoded)

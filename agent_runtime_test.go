@@ -82,6 +82,28 @@ func TestAgentWithRunOptions(t *testing.T) {
 	}
 }
 
+func TestAgentPromptCacheRunOverrideReachesModel(t *testing.T) {
+	model := test.NewTestModel(test.ModelResponse{Text: "ok"}, test.ModelResponse{Text: "ok"})
+	agent := agentic.NewAgent("test", model, agentic.WithPromptCache(agentic.PromptCacheConfig{
+		Key: "agent", Retention: agentic.PromptCacheLong,
+	}))
+	if _, err := agent.Run(context.Background(), "one"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.Run(context.Background(), "two", agentic.WithRunPromptCache(agentic.PromptCacheConfig{
+		Key: "session", Retention: agentic.PromptCacheShort,
+	})); err != nil {
+		t.Fatal(err)
+	}
+	calls := model.Calls()
+	if calls[0].PromptCache == nil || calls[0].PromptCache.Key != "agent" || calls[0].PromptCache.Retention != agentic.PromptCacheLong {
+		t.Fatalf("static cache = %#v", calls[0].PromptCache)
+	}
+	if calls[1].PromptCache == nil || calls[1].PromptCache.Key != "session" || calls[1].PromptCache.Retention != agentic.PromptCacheShort {
+		t.Fatalf("run cache = %#v", calls[1].PromptCache)
+	}
+}
+
 func TestAgentWithMessagesContainingSystemPrompt(t *testing.T) {
 	model := test.NewTestModel(test.ModelResponse{Text: "ok"})
 	agent := agentic.NewAgent("test", model)

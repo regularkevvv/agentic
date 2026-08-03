@@ -2,6 +2,8 @@ package openai
 
 import (
 	"context"
+	"encoding/json"
+	"strings"
 	"testing"
 
 	sdkopenai "github.com/openai/openai-go"
@@ -10,6 +12,27 @@ import (
 
 	"github.com/regularkevvv/agentic/internal/core"
 )
+
+func TestChatPromptCacheKeyAndClamp(t *testing.T) {
+	model := &Model{model: "gpt-4.1"}
+	long := strings.Repeat("界", 80)
+	params := model.buildParams(&core.ChatRequest{
+		Model: "gpt-4.1", Messages: []core.Message{core.NewTextMessage(core.RoleUser, "hi")},
+		PromptCache: &core.PromptCacheConfig{Key: long, Retention: core.PromptCacheShort},
+	})
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	_ = json.Unmarshal(raw, &body)
+	if key, ok := body["prompt_cache_key"].(string); !ok || len([]rune(key)) != 64 {
+		t.Fatalf("prompt cache key = %#v", body["prompt_cache_key"])
+	}
+	if clampPromptCacheKey("abc", 0) != "abc" || clampPromptCacheKey("abc", 5) != "abc" {
+		t.Fatal("short key was changed")
+	}
+}
 
 func TestWithRequestOptions(t *testing.T) {
 	cfg := &config{}

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/regularkevvv/agentic/internal/core"
@@ -39,6 +40,26 @@ func TestBuildParamsOmitsMaxTokensWhenUnset(t *testing.T) {
 	}
 	if _, present := body["max_completion_tokens"]; present {
 		t.Errorf("max_completion_tokens must never be sent, got %#v", body)
+	}
+}
+
+func TestBuildParamsPromptCacheKey(t *testing.T) {
+	m := &Model{model: "m"}
+	long := strings.Repeat("é", 80)
+	body := marshalParams(t, m.buildParams(&core.ChatRequest{
+		Model: "m", Messages: []core.Message{core.NewTextMessage(core.RoleUser, "hi")},
+		PromptCache: &core.PromptCacheConfig{Key: long, Retention: core.PromptCacheShort},
+	}))
+	key, ok := body["prompt_cache_key"].(string)
+	if !ok || len([]rune(key)) != 64 {
+		t.Fatalf("prompt_cache_key = %#v", body["prompt_cache_key"])
+	}
+	without := marshalParams(t, m.buildParams(&core.ChatRequest{
+		Model: "m", Messages: []core.Message{core.NewTextMessage(core.RoleUser, "hi")},
+		PromptCache: &core.PromptCacheConfig{Retention: core.PromptCacheNone},
+	}))
+	if _, present := without["prompt_cache_key"]; present {
+		t.Fatalf("disabled cache key present: %#v", without)
 	}
 }
 

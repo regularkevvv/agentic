@@ -125,6 +125,8 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 		instructions:   config.Instructions,
 		scope:          scope,
 		delegation:     append([]string(nil), config.DelegationTools...),
+		promptCache:    config.PromptCacheRetention,
+		streaming:      config.ModelStreaming,
 		childBudget:    make(chan struct{}, 1),
 		compaction:     folded.compaction,
 		state:          folded.state,

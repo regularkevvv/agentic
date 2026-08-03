@@ -15,6 +15,7 @@ import (
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
+	"github.com/regularkevvv/agentic/harness/observe"
 	"github.com/regularkevvv/agentic/harness/repair"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 	"github.com/regularkevvv/agentic/harness/session"
@@ -33,6 +34,8 @@ type RuntimeConfig struct {
 	IDs                   harnessruntime.IDGenerator
 	ToolCancellationGrace time.Duration
 	Scope                 harnessruntime.Scope
+	PromptCacheRetention  agentic.PromptCacheRetention
+	ModelStreaming        bool
 }
 
 // Harness has immutable execution configuration and is safe for concurrent
@@ -58,6 +61,8 @@ type Harness[O any] struct {
 	instructions harnessruntime.ExchangeInstructionProvider
 	scope        harnessruntime.Scope
 	delegation   []string
+	promptCache  agentic.PromptCacheRetention
+	streaming    bool
 
 	mu      sync.Mutex
 	live    map[string]*Session[O]
@@ -82,6 +87,9 @@ type ResolutionAction = session.ResolutionAction
 type SubscribeOptions = event.SubscribeOptions
 type Subscription = event.Subscription
 type Event = event.Record
+type Observation = observe.Event
+type ObservationSubscription = observe.Subscription
+type ObserveOptions = observe.SubscribeOptions
 
 const (
 	SessionIdle         = session.Idle
@@ -100,6 +108,10 @@ const (
 	ResolutionApprove        = session.ResolutionApprove
 	ResolutionDeny           = session.ResolutionDeny
 	ResolutionExternalResult = session.ResolutionExternalResult
+
+	PromptCacheNone  = agentic.PromptCacheNone
+	PromptCacheShort = agentic.PromptCacheShort
+	PromptCacheLong  = agentic.PromptCacheLong
 )
 
 var (
@@ -163,6 +175,14 @@ func newHarness[O any](runner agentic.Runner[O], config RuntimeConfig, plan capa
 	if config.Scope.Depth < 0 {
 		return nil, errors.New("harness scope depth cannot be negative")
 	}
+	promptCache := config.PromptCacheRetention
+	if promptCache == "" {
+		promptCache = agentic.PromptCacheShort
+	}
+	if promptCache != agentic.PromptCacheNone && promptCache != agentic.PromptCacheShort &&
+		promptCache != agentic.PromptCacheLong {
+		return nil, errors.New("harness prompt-cache retention is invalid")
+	}
 	grace := config.ToolCancellationGrace
 	if grace == 0 {
 		grace = time.Second
@@ -195,6 +215,8 @@ func newHarness[O any](runner agentic.Runner[O], config RuntimeConfig, plan capa
 		instructions: plan.ExchangeInstructionProvider(),
 		scope:        config.Scope,
 		delegation:   plan.DelegationTools(),
+		promptCache:  promptCache,
+		streaming:    config.ModelStreaming,
 		live:         make(map[string]*Session[O]),
 		opening:      make(map[string]bool),
 	}, nil
@@ -282,6 +304,8 @@ func (h *Harness[O]) sessionConfig(id string) session.Config[O] {
 		Instructions:          h.instructions,
 		Scope:                 scope,
 		DelegationTools:       append([]string(nil), h.delegation...),
+		PromptCacheRetention:  h.promptCache,
+		ModelStreaming:        h.streaming,
 	}
 }
 
