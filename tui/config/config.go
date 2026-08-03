@@ -55,6 +55,7 @@ type Flags struct {
 	SystemPromptFile    string
 	Permission          string
 	WorkspaceRoot       string
+	WorkingDirectory    string
 	SessionDirectory    string
 	AlternateScreen     string
 	Color               string
@@ -116,6 +117,9 @@ func Resolve(document Document, profileName string, flags Flags, environ []strin
 		resolved.ResumeLast = *document.Session.ResumeLast
 	}
 	applyFlags(&resolved, flags)
+	if resolved.WorkspaceRoot == "" {
+		resolved.WorkspaceRoot = flags.WorkingDirectory
+	}
 	if resolved.Provider == "" || resolved.Model == "" || resolved.ContextWindowTokens <= 0 {
 		return Resolved{}, errors.New("profile provider, model, and positive context_window_tokens are required")
 	}
@@ -123,7 +127,7 @@ func Resolve(document Document, profileName string, flags Flags, environ []strin
 		return Resolved{}, errors.New("profile system_prompt_file is required")
 	}
 	if resolved.WorkspaceRoot == "" {
-		return Resolved{}, errors.New("profile workspace root is required")
+		return Resolved{}, errors.New("workspace root or working directory is required")
 	}
 	if resolved.Permission == "" {
 		resolved.Permission = "workspace-write"

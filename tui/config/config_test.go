@@ -102,6 +102,63 @@ func TestResolveDefaultsDerivedDirectoryAndUI(t *testing.T) {
 	}
 }
 
+func TestResolveWorkspacePrecedence(t *testing.T) {
+	directory := t.TempDir()
+	prompt := writeConfig(t, directory, "prompt.md", "system")
+	fallback := filepath.Join(directory, "fallback")
+	profileRoot := filepath.Join(directory, "profile")
+	override := filepath.Join(directory, "override")
+	base := Profile{
+		Provider: "anthropic", Model: "model", ContextWindowTokens: 100,
+		SystemPromptFile: prompt,
+	}
+
+	for _, test := range []struct {
+		name     string
+		profile  Profile
+		flags    Flags
+		expected string
+	}{
+		{
+			name: "working directory fallback", profile: base,
+			flags: Flags{WorkingDirectory: fallback}, expected: fallback,
+		},
+		{
+			name: "profile beats fallback",
+			profile: func() Profile {
+				value := base
+				value.Workspace.Root = profileRoot
+				return value
+			}(),
+			flags: Flags{WorkingDirectory: fallback}, expected: profileRoot,
+		},
+		{
+			name: "flag beats profile and fallback",
+			profile: func() Profile {
+				value := base
+				value.Workspace.Root = profileRoot
+				return value
+			}(),
+			flags: Flags{WorkspaceRoot: override, WorkingDirectory: fallback}, expected: override,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := Resolve(
+				Document{Profiles: map[string]Profile{"work": test.profile}},
+				"work",
+				test.flags,
+				nil,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resolved.WorkspaceRoot != test.expected {
+				t.Fatalf("workspace = %q, want %q", resolved.WorkspaceRoot, test.expected)
+			}
+		})
+	}
+}
+
 func TestLoadAndResolveErrors(t *testing.T) {
 	directory := t.TempDir()
 	malformed := writeConfig(t, directory, "bad.toml", "[broken")

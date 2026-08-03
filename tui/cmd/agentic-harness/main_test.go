@@ -7,6 +7,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -48,6 +49,35 @@ func TestRunRejectsBeforeTerminalStartup(t *testing.T) {
 		"--profile", "missing",
 	}, []string{"TERM=dumb"}, &bytes.Buffer{}, &output, &output); err == nil {
 		t.Fatal("missing live profile succeeded")
+	}
+}
+
+func TestRunDefaultsWorkspaceToCurrentDirectory(t *testing.T) {
+	directory := t.TempDir()
+	prompt := filepath.Join(directory, "system.md")
+	if err := os.WriteFile(prompt, []byte("You are helpful."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(directory, "config.toml")
+	payload := `[profile.work]
+provider = "anthropic"
+model = "claude-sonnet-4-6"
+context_window_tokens = 200000
+system_prompt_file = "` + prompt + `"
+permission = "read-only"
+`
+	if err := os.WriteFile(config, []byte(payload), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	var output bytes.Buffer
+	err := run(context.Background(), []string{
+		"--config", config,
+		"--workspace-config", filepath.Join(directory, "missing-workspace.toml"),
+		"--profile", "work",
+	}, []string{"TERM=dumb"}, &bytes.Buffer{}, &output, &output)
+	if err == nil || !strings.Contains(err.Error(), "credential ANTHROPIC_API_KEY is not available") {
+		t.Fatalf("run error = %v, want credential validation after cwd workspace resolution", err)
 	}
 }
 

@@ -317,10 +317,13 @@ screen-reader and log-friendly modes are first-class, not an afterthought.
 
 ### Standard application configuration: explicit model profile
 
-Provider, model, context-window size, system prompt, workspace root, session
-directory, and permission policy belong to the application assembly. They are
-not defaults in the reusable `tui` package because choosing a model silently
-chooses cost, capability, credential source, and context geometry.
+Provider, model, context-window size, system prompt, resolved workspace root,
+session directory, and permission policy belong to the application assembly.
+They are not defaults in the reusable `tui` package because choosing a model
+silently chooses cost, capability, credential source, and context geometry.
+The standard executable resolves its workspace from explicit `--workspace`,
+then an optional profile root, then its current working directory; the reusable
+Harness assembly still receives an explicit absolute boundary.
 
 `tui/standard` has a registry of explicit `ProviderFactory` values and a
 configurable named profile:
@@ -332,9 +335,6 @@ model = "claude-sonnet-4-6"
 context_window_tokens = 200000
 system_prompt_file = "~/.config/agentic/work.md"
 permission = "workspace-write" # read-only | workspace-write | custom
-
-[profile.work.workspace]
-root = "/absolute/path/to/repository"
 ```
 
 The example is a template, not a claim that this model is universally

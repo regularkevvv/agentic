@@ -42,7 +42,7 @@ func parseFlags(arguments []string, output io.Writer) (flags, error) {
 	set.IntVar(&values.contextWindow, "context-window", 0, "override context window tokens")
 	set.StringVar(&values.systemPrompt, "system-prompt-file", "", "override system prompt file")
 	set.StringVar(&values.permission, "permission", "", "read-only or workspace-write")
-	set.StringVar(&values.workspace, "workspace", "", "override workspace root")
+	set.StringVar(&values.workspace, "workspace", "", "override workspace root (defaults to current directory)")
 	set.StringVar(&values.sessionDir, "session-dir", "", "override durable session directory")
 	set.IntVar(&values.previewHz, "preview-hz", 0, "preview coalescing rate")
 	set.StringVar(&values.thinking, "thinking", "", "visible, collapsed, or hidden")
@@ -117,7 +117,7 @@ func run(ctx context.Context, arguments, environ []string, input io.Reader, outp
 	resolved, err := appconfig.Resolve(document, values.profile, appconfig.Flags{
 		Provider: values.provider, Model: values.model, ContextWindowTokens: values.contextWindow,
 		SystemPromptFile: values.systemPrompt, Permission: values.permission,
-		WorkspaceRoot: values.workspace, SessionDirectory: values.sessionDir,
+		WorkspaceRoot: values.workspace, WorkingDirectory: cwd, SessionDirectory: values.sessionDir,
 		AlternateScreen: altScreen, Color: color, Thinking: values.thinking,
 		ToolDetails: values.toolDetails, PreviewHz: values.previewHz,
 	}, environ)

@@ -38,10 +38,25 @@ model = "claude-sonnet-4-6"
 context_window_tokens = 200000
 system_prompt_file = "~/.config/agentic/work.md"
 permission = "workspace-write"
-
-[profile.work.workspace]
-root = "/absolute/path/to/repository"
 ```
+
+Launch the command from the repository it should operate on. The standard
+executable uses its current working directory as the workspace root. An
+explicit `--workspace PATH` takes precedence, followed by an optional
+`[profile.work.workspace] root = "..."` profile setting, then the current
+directory. The Harness still canonicalizes the resolved root and confines its
+file environment to it.
+
+Install the command once from this module, then launch it from any repository:
+
+```sh
+go install ./cmd/agentic-harness
+cd /path/to/repository
+"$(go env GOPATH)/bin/agentic-harness" --profile work
+```
+
+No workspace flag is needed in the normal case; the second command operates on
+`/path/to/repository` because that is its current working directory.
 
 The standard launcher currently registers `anthropic`, `openai`, and
 `openrouter`. Configuration files never contain credentials. `NO_COLOR` is
