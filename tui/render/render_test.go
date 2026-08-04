@@ -18,13 +18,13 @@ func TestTranscriptModesAndTools(t *testing.T) {
 		Tools:    []uit.Tool{{Name: "read", State: uit.ToolDone, Summary: "safe"}, {State: uit.ToolRunning}},
 	}
 	visible := Transcript([]uit.Entry{entry, {Text: "event"}}, "more", Options{NoColor: true, Thinking: ThinkingVisible, ToolExpanded: true})
-	for _, want := range []string{"ASSISTANT", "answer", "thinking: secret plan", "thinking [redacted]", "[done] read: safe", "[running] tool", "more |", "EVENT"} {
+	for _, want := range []string{"ASSISTANT", "answer", "thinking\n  secret plan", "thinking [redacted]", "• Using tools", "├─ Read", "safe", "└─ Tool", "more |", "EVENT"} {
 		if !strings.Contains(visible, want) {
 			t.Fatalf("visible transcript lacks %q: %q", want, visible)
 		}
 	}
 	collapsed := Entry(entry, Options{NoColor: true, Thinking: ThinkingCollapsed})
-	if !strings.Contains(collapsed, "thinking (11 chars)") || strings.Contains(collapsed, "secret plan") {
+	if !strings.Contains(collapsed, "thinking collapsed (11 chars)") || strings.Contains(collapsed, "secret plan") {
 		t.Fatalf("collapsed entry = %q", collapsed)
 	}
 	hidden := Entry(entry, Options{NoColor: true, Thinking: ThinkingHidden})
@@ -36,10 +36,119 @@ func TestTranscriptModesAndTools(t *testing.T) {
 	}
 }
 
+func TestTranscriptFoldsToolLifecycleAndFormatsMarkdown(t *testing.T) {
+	t.Parallel()
+	entries := []uit.Entry{
+		{Role: uit.RoleAssistant, Text: "The **answer** uses `Go`.", Tools: []uit.Tool{{CallID: "call", Name: "read_file", State: uit.ToolPlanned}}},
+		{Role: uit.RoleTool, Tools: []uit.Tool{{CallID: "call", Name: "read_file", State: uit.ToolDone, Presentation: uit.ToolPresentation{Category: uit.ToolCategoryExplore, Title: "Read README", Detail: "README.md"}}}},
+	}
+	plain := Transcript(entries, "", Options{NoColor: true, ToolExpanded: true})
+	for _, want := range []string{"The answer uses Go.", "✓ Explored Read README", "README.md"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("transcript lacks %q: %q", want, plain)
+		}
+	}
+	if strings.Count(plain, "Read README") != 1 || strings.Contains(plain, "planned") || strings.Contains(plain, "**") {
+		t.Fatalf("tool lifecycle was not folded: %q", plain)
+	}
+	colored := Transcript(entries, "", Options{ToolExpanded: true})
+	if !strings.Contains(colored, "\x1b[") {
+		t.Fatalf("formatted transcript has no ANSI styling: %q", colored)
+	}
+	markdownValue := markdown("# Heading\n- **bold**\n  * nested\n> quote\n```go\nfmt.Println()\n```\n```\nplain\n```\nunmatched ** marker\nunmatched ` code", true)
+	for _, want := range []string{"Heading", "• bold", "  • nested", "│ quote", "│ go", "│ fmt.Println()", "│ plain", "unmatched ** marker", "unmatched ` code"} {
+		if !strings.Contains(markdownValue, want) {
+			t.Fatalf("markdown lacks %q: %q", want, markdownValue)
+		}
+	}
+	if coloredMarkdown := markdown("## **Heading**\n> `quote`\n```go\ncode\n```", false); !strings.Contains(coloredMarkdown, "\x1b[") {
+		t.Fatalf("colored markdown has no styling: %q", coloredMarkdown)
+	}
+}
+
+func TestTranscriptGroupsAdjacentToolsAndCarriesSafeCommandPresentation(t *testing.T) {
+	t.Parallel()
+	entries := []uit.Entry{
+		{Role: uit.RoleAssistant, Text: "I will check."},
+		{Role: uit.RoleAssistant, Tools: []uit.Tool{{
+			CallID: "one", Name: "run_command", State: uit.ToolPlanned, Summary: "rg -n TODO README.md",
+			Presentation: uit.ToolPresentation{Category: uit.ToolCategoryExecute, Title: "rg -n TODO README.md"},
+		}}},
+		{Role: uit.RoleTool, Tools: []uit.Tool{{CallID: "one", Name: "run_command", State: uit.ToolDone, Presentation: uit.ToolPresentation{Category: uit.ToolCategoryExecute, Title: "Run command"}}}},
+		{Role: uit.RoleAssistant, Tools: []uit.Tool{{
+			CallID: "two", Name: "run_command", State: uit.ToolDone,
+			Presentation: uit.ToolPresentation{Category: uit.ToolCategoryExecute, Title: "go test ./..."},
+		}}},
+		{Role: uit.RoleTool, Tools: []uit.Tool{{
+			CallID: "three", Name: "read_file", State: uit.ToolDone,
+			Presentation: uit.ToolPresentation{Category: uit.ToolCategoryExplore, Title: "Read README.md"},
+		}}},
+		{Role: uit.RoleAssistant, Text: "Done."},
+	}
+	plain := Transcript(entries, "", Options{NoColor: true})
+	for _, want := range []string{"I will check.", "✓ Ran", "├─ rg -n TODO README.md", "└─ go test ./...", "✓ Explored Read README.md", "Done."} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("grouped transcript lacks %q: %q", want, plain)
+		}
+	}
+	if strings.Count(plain, "rg -n TODO README.md") != 1 || strings.Contains(plain, "Run command") {
+		t.Fatalf("tool lifecycle did not preserve the safe command: %q", plain)
+	}
+}
+
+func TestToolPresentationStatesCategoriesAndFallbacks(t *testing.T) {
+	t.Parallel()
+	states := []uit.ToolState{uit.ToolPreview, uit.ToolPlanned, uit.ToolRunning, uit.ToolDone, uit.ToolError}
+	for _, state := range states {
+		tool := uit.Tool{State: state, Summary: "safe detail"}
+		plain := Tool(tool, Options{NoColor: true, ToolExpanded: true})
+		if !strings.Contains(plain, "Tool") || !strings.Contains(plain, "safe detail") {
+			t.Fatalf("plain %s tool = %q", state, plain)
+		}
+		if colored := Tool(tool, Options{ToolExpanded: true}); !strings.Contains(colored, "\x1b[") {
+			t.Fatalf("colored %s tool = %q", state, colored)
+		}
+	}
+	tools := []uit.Tool{
+		{Name: "read_file", State: uit.ToolDone},
+		{Name: "run_command", State: uit.ToolRunning},
+		{Name: "write_file", State: uit.ToolError},
+		{Name: "custom_name", State: uit.ToolPlanned},
+		{Name: "custom_category", State: uit.ToolDone, Presentation: uit.ToolPresentation{Category: uit.ToolCategory("database")}},
+	}
+	plain := Tools(tools, Options{NoColor: true})
+	for _, want := range []string{"✓ Explored", "• Running", "✗ Change failed", "○ Using tools", "✓ Used tools", "Read file", "Run command", "Write file", "Custom name"} {
+		if !strings.Contains(plain, want) {
+			t.Fatalf("grouped tools lack %q: %q", want, plain)
+		}
+	}
+	if got := aggregateToolState([]uit.Tool{{State: uit.ToolDone}, {State: uit.ToolPlanned}}); got != uit.ToolPlanned {
+		t.Fatalf("planned aggregate = %s", got)
+	}
+	if got := aggregateToolState([]uit.Tool{{State: uit.ToolRunning}, {State: uit.ToolError}}); got != uit.ToolError {
+		t.Fatalf("error aggregate = %s", got)
+	}
+	for name, want := range map[string]uit.ToolCategory{
+		"list_files": uit.ToolCategoryExplore, "stat_file": uit.ToolCategoryExplore,
+		"read_artifact": uit.ToolCategoryExplore, "make_directory": uit.ToolCategoryChange,
+		"remove_path": uit.ToolCategoryChange,
+	} {
+		if got := inferCategory(name); got != want {
+			t.Fatalf("%s category = %s", name, got)
+		}
+	}
+}
+
 func TestApprovalStatusFooterAndBanner(t *testing.T) {
 	t.Parallel()
 	if Approval(nil, 0, nil, true) != "" {
 		t.Fatal("nil approval rendered")
+	}
+	if got := ApprovalResolving(true, 12); got != "Applying ..." {
+		t.Fatalf("resolving approval = %q", got)
+	}
+	if got := ApprovalResolving(false); !strings.Contains(got, "\x1b[") {
+		t.Fatalf("colored resolving approval = %q", got)
 	}
 	unsupported := Approval(&uit.Suspension{Kind: "custom", Description: "handoff"}, 0, nil, true)
 	if !strings.Contains(unsupported, "custom") || !strings.Contains(unsupported, "handoff") {
@@ -76,7 +185,7 @@ func TestApprovalStatusFooterAndBanner(t *testing.T) {
 	if !strings.Contains(defaultStatus, "custom") || !strings.Contains(defaultStatus, "\x1b[") {
 		t.Fatalf("default status = %q", defaultStatus)
 	}
-	if !strings.Contains(Footer(uit.StateIdle, true), "enter send") || !strings.Contains(Footer(uit.StateSuspended, false), "permission review") {
+	if !strings.Contains(Footer(uit.StateIdle, true), "enter send") || !strings.Contains(Footer(uit.StateIdle, true), "pgup/pgdn scroll") || !strings.Contains(Footer(uit.StateSuspended, false), "permission review") {
 		t.Fatal("footer variants missing")
 	}
 	if got := Status(snapshot, false, true, 20); len([]rune(got)) != 20 || !strings.HasSuffix(got, "...") {

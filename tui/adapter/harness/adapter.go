@@ -16,9 +16,10 @@ import (
 )
 
 type config struct {
-	profileLabel string
-	workspace    string
-	execution    string
+	profileLabel  string
+	workspace     string
+	execution     string
+	toolPresenter uit.ToolPresenter
 }
 
 type Option func(*config)
@@ -27,6 +28,9 @@ func WithProfileLabel(value string) Option { return func(c *config) { c.profileL
 func WithWorkspace(value string) Option    { return func(c *config) { c.workspace = value } }
 func WithExecutionLabel(value string) Option {
 	return func(c *config) { c.execution = value }
+}
+func WithToolPresenter(value uit.ToolPresenter) Option {
+	return func(c *config) { c.toolPresenter = value }
 }
 
 type host[O any] struct {
@@ -82,8 +86,9 @@ func (s *session[O]) Snapshot(ctx context.Context) (uit.Snapshot, error) {
 		return uit.Snapshot{}, err
 	}
 	result := uit.Snapshot{
-		SessionID: s.ID(), Cursor: value.Cursor, State: state(value.State), Transcript: messages(value.Messages),
-		Usage: usage(value.Usage), ProfileLabel: s.config.profileLabel, Workspace: s.config.workspace,
+		SessionID: s.ID(), Cursor: value.Cursor, State: state(value.State),
+		Transcript: messagesWithSummary(value.Messages, s.config.toolPresenter, s.session.ToolSummary),
+		Usage:      usage(value.Usage), ProfileLabel: s.config.profileLabel, Workspace: s.config.workspace,
 		Execution: s.config.execution,
 	}
 	result.Pending = make([]uit.QueuedInput, len(value.Pending))
@@ -105,7 +110,7 @@ func (s *session[O]) Subscribe(options uit.SubscribeOptions) uit.Subscription {
 	source := s.session.Observe(observe.SubscribeOptions{
 		AfterCursor: options.AfterCursor, Buffer: options.Buffer, Preview: options.Preview,
 	})
-	return mapSubscription(source, s)
+	return mapSubscription(source, s, s.config.toolPresenter)
 }
 
 func (s *session[O]) Submit(ctx context.Context, input uit.Input) error {
@@ -225,10 +230,18 @@ func suspension(value agentic.Suspension) (*uit.Suspension, error) {
 	return result, nil
 }
 
-func messages(values []agentic.Message) []uit.Entry {
+func messages(values []agentic.Message, presenters ...uit.ToolPresenter) []uit.Entry {
+	return messagesWithSummary(values, firstPresenter(presenters), nil)
+}
+
+func messagesWithSummary(
+	values []agentic.Message,
+	presenter uit.ToolPresenter,
+	summarize func(agentic.ToolUse) string,
+) []uit.Entry {
 	result := make([]uit.Entry, 0, len(values))
 	for _, value := range values {
-		entry := message(value)
+		entry := messageWithSummary(value, presenter, summarize)
 		if entry.Role == uit.RoleSystem {
 			continue
 		}
@@ -237,7 +250,11 @@ func messages(values []agentic.Message) []uit.Entry {
 	return result
 }
 
-func message(value agentic.Message) uit.Entry {
+func messageWithSummary(
+	value agentic.Message,
+	presenter uit.ToolPresenter,
+	summarize func(agentic.ToolUse) string,
+) uit.Entry {
 	result := uit.Entry{Role: uit.Role(value.Role)}
 	for _, part := range value.Content {
 		switch part.Type {
@@ -252,7 +269,14 @@ func message(value agentic.Message) uit.Entry {
 			}
 		case agentic.ContentToolUse:
 			if part.ToolUse != nil {
-				result.Tools = append(result.Tools, uit.Tool{CallID: part.ToolUse.ID, Name: part.ToolUse.Name, State: uit.ToolPlanned})
+				summary := ""
+				if summarize != nil {
+					summary = summarize(*part.ToolUse)
+				}
+				result.Tools = append(result.Tools, presentTool(uit.Tool{
+					CallID: part.ToolUse.ID, Name: part.ToolUse.Name,
+					State: uit.ToolPlanned, Summary: summary,
+				}, presenter))
 			}
 		case agentic.ContentToolResult:
 			if part.ToolResult != nil {
@@ -260,7 +284,7 @@ func message(value agentic.Message) uit.Entry {
 				if part.ToolResult.IsError {
 					toolState = uit.ToolError
 				}
-				result.Tools = append(result.Tools, uit.Tool{CallID: part.ToolResult.ToolUseID, Name: part.ToolResult.Name, State: toolState})
+				result.Tools = append(result.Tools, presentTool(uit.Tool{CallID: part.ToolResult.ToolUseID, Name: part.ToolResult.Name, State: toolState}, presenter))
 			}
 		}
 	}
@@ -269,7 +293,8 @@ func message(value agentic.Message) uit.Entry {
 
 func mapObservation(value observe.Event, owner interface {
 	Snapshot(context.Context) (uit.Snapshot, error)
-}) (uit.Event, error) {
+}, presenters ...uit.ToolPresenter) (uit.Event, error) {
+	presenter := firstPresenter(presenters)
 	result := uit.Event{
 		Cursor: value.Cursor, Ordinal: value.Ordinal, Durable: value.Nature != agentic.EventPreview,
 		SessionID: value.SessionID, ParentID: value.ParentID, Agent: value.Agent,
@@ -277,22 +302,22 @@ func mapObservation(value observe.Event, owner interface {
 		TextDelta: value.TextDelta, State: uit.State(value.State), Dropped: value.Dropped,
 	}
 	if value.Message != nil {
-		entry := observedMessage(*value.Message)
+		entry := observedMessage(*value.Message, presenter)
 		result.Entry = &entry
 	}
 	for _, current := range value.Messages {
-		result.Entries = append(result.Entries, observedMessage(current))
+		result.Entries = append(result.Entries, observedMessage(current, presenter))
 	}
 	if value.Thinking != nil {
 		thinking := uit.Thinking{Text: value.Thinking.Text, ProviderName: value.Thinking.ProviderName, ThinkingID: value.Thinking.ThinkingID, Redacted: value.Thinking.Redacted}
 		result.Thinking = &thinking
 	}
 	if value.Tool != nil {
-		tool := observedTool(*value.Tool)
+		tool := observedTool(*value.Tool, presenter)
 		result.Tool = &tool
 	}
 	for _, current := range value.Tools {
-		result.Tools = append(result.Tools, observedTool(current))
+		result.Tools = append(result.Tools, observedTool(current, presenter))
 	}
 	if value.Usage != nil {
 		mapped := uit.Usage{
@@ -325,21 +350,37 @@ func mapObservation(value observe.Event, owner interface {
 	return result, nil
 }
 
-func observedMessage(value observe.Message) uit.Entry {
+func observedMessage(value observe.Message, presenters ...uit.ToolPresenter) uit.Entry {
 	result := uit.Entry{Role: uit.Role(value.Role), Text: value.Text}
+	presenter := firstPresenter(presenters)
 	for _, current := range value.Thinking {
 		result.Thinking = append(result.Thinking, uit.Thinking{
 			Text: current.Text, ProviderName: current.ProviderName, ThinkingID: current.ThinkingID, Redacted: current.Redacted,
 		})
 	}
 	for _, current := range value.Tools {
-		result.Tools = append(result.Tools, observedTool(current))
+		result.Tools = append(result.Tools, observedTool(current, presenter))
 	}
 	return result
 }
 
-func observedTool(value observe.Tool) uit.Tool {
-	return uit.Tool{CallID: value.CallID, Name: value.Name, State: uit.ToolState(value.State), Attempt: value.Attempt, Summary: value.Summary}
+func observedTool(value observe.Tool, presenters ...uit.ToolPresenter) uit.Tool {
+	tool := uit.Tool{CallID: value.CallID, Name: value.Name, State: uit.ToolState(value.State), Attempt: value.Attempt, Summary: value.Summary}
+	return presentTool(tool, firstPresenter(presenters))
+}
+
+func presentTool(tool uit.Tool, presenter uit.ToolPresenter) uit.Tool {
+	if presenter != nil {
+		tool.Presentation = presenter.PresentTool(tool)
+	}
+	return tool
+}
+
+func firstPresenter(values []uit.ToolPresenter) uit.ToolPresenter {
+	if len(values) == 0 {
+		return nil
+	}
+	return values[0]
 }
 
 type mappedSubscription struct {
@@ -360,7 +401,8 @@ func (s *mappedSubscription) Close() {
 
 func mapSubscription(source observe.Subscription, owner interface {
 	Snapshot(context.Context) (uit.Snapshot, error)
-}) uit.Subscription {
+}, presenters ...uit.ToolPresenter) uit.Subscription {
+	presenter := firstPresenter(presenters)
 	events := make(chan uit.Event)
 	errors := make(chan error, 1)
 	done := make(chan struct{})
@@ -391,7 +433,7 @@ func mapSubscription(source observe.Subscription, owner interface {
 					observations = nil
 					continue
 				}
-				mapped, err := mapObservation(value, owner)
+				mapped, err := mapObservation(value, owner, presenter)
 				if err != nil {
 					errors <- err
 					return

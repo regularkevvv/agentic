@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	agentic "github.com/regularkevvv/agentic"
@@ -108,6 +109,7 @@ type Config struct {
 	Permission           string
 	PermissionPolicy     *permission.Policy
 	PromptCacheRetention agentic.PromptCacheRetention
+	ToolPresenter        uit.ToolPresenter
 }
 
 func FromResolved(value appconfig.Resolved) Config {
@@ -184,11 +186,54 @@ func Build(ctx context.Context, registry *Registry, config Config) (Assembly, er
 		harnessui.WithProfileLabel(config.ProfileName),
 		harnessui.WithWorkspace(config.WorkspaceRoot),
 		harnessui.WithExecutionLabel("local-host governance (not an OS sandbox)"),
+		harnessui.WithToolPresenter(resolveToolPresenter(config.ToolPresenter)),
 	)
 	if err != nil {
 		return Assembly{}, err
 	}
 	return Assembly{Host: host, Runtime: runtime}, nil
+}
+
+func resolveToolPresenter(custom uit.ToolPresenter) uit.ToolPresenter {
+	if custom != nil {
+		return custom
+	}
+	return uit.ToolPresenterFunc(func(tool uit.Tool) uit.ToolPresentation {
+		presentation := uit.ToolPresentation{}
+		switch tool.Name {
+		case "read_file":
+			presentation.Category, presentation.Title = uit.ToolCategoryExplore, toolTitle("Read", "Read file", tool.Summary)
+		case "list_files":
+			presentation.Category, presentation.Title = uit.ToolCategoryExplore, toolTitle("List", "List files", tool.Summary)
+		case "stat_file":
+			presentation.Category, presentation.Title = uit.ToolCategoryExplore, toolTitle("Inspect", "Inspect path", tool.Summary)
+		case "read_artifact":
+			presentation.Category, presentation.Title = uit.ToolCategoryExplore, toolTitle("Read artifact", "Read artifact", tool.Summary)
+		case "run_command":
+			presentation.Category, presentation.Title = uit.ToolCategoryExecute, toolTitle("", "Run command", tool.Summary)
+		case "write_file":
+			presentation.Category, presentation.Title = uit.ToolCategoryChange, toolTitle("Write", "Write file", tool.Summary)
+		case "make_directory":
+			presentation.Category, presentation.Title = uit.ToolCategoryChange, toolTitle("Create directory", "Create directory", tool.Summary)
+		case "remove_path":
+			presentation.Category, presentation.Title = uit.ToolCategoryChange, toolTitle("Remove", "Remove path", tool.Summary)
+		default:
+			presentation.Category = uit.ToolCategoryOther
+			presentation.Title = strings.TrimSpace(tool.Summary)
+		}
+		return presentation
+	})
+}
+
+func toolTitle(verb, fallback, summary string) string {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return fallback
+	}
+	if verb == "" {
+		return summary
+	}
+	return verb + " " + summary
 }
 
 func resolvePermission(name string, custom *permission.Policy) (*permission.Policy, error) {

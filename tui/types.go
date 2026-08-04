@@ -52,12 +52,49 @@ const (
 	ToolError   ToolState = "error"
 )
 
+// ToolCategory is a presentation hint supplied by the host. The terminal
+// chooses state-aware wording and styling; it never infers or decodes tool
+// arguments to produce this value.
+type ToolCategory string
+
+const (
+	ToolCategoryExplore ToolCategory = "explore"
+	ToolCategoryExecute ToolCategory = "execute"
+	ToolCategoryChange  ToolCategory = "change"
+	ToolCategoryOther   ToolCategory = "other"
+)
+
+// ToolPresentation contains only bounded, explicitly safe display data. A
+// compatible host may populate it to replace raw tool names with domain-aware
+// labels without exposing tool arguments or results to the terminal.
+type ToolPresentation struct {
+	Category ToolCategory
+	Title    string
+	Detail   string
+}
+
+// ToolPresenter lets an application-owned adapter attach safe presentation
+// metadata after its harness has already projected away sensitive values.
+type ToolPresenter interface {
+	PresentTool(Tool) ToolPresentation
+}
+
+type ToolPresenterFunc func(Tool) ToolPresentation
+
+func (f ToolPresenterFunc) PresentTool(tool Tool) ToolPresentation {
+	if f == nil {
+		return ToolPresentation{}
+	}
+	return f(tool)
+}
+
 type Tool struct {
-	CallID  string
-	Name    string
-	State   ToolState
-	Attempt int
-	Summary string
+	CallID       string
+	Name         string
+	State        ToolState
+	Attempt      int
+	Summary      string
+	Presentation ToolPresentation
 }
 
 type Entry struct {

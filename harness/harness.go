@@ -36,6 +36,7 @@ type RuntimeConfig struct {
 	Scope                 harnessruntime.Scope
 	PromptCacheRetention  agentic.PromptCacheRetention
 	ModelStreaming        bool
+	ToolSummarizer        observe.ToolSummarizer
 }
 
 // Harness has immutable execution configuration and is safe for concurrent
@@ -63,6 +64,7 @@ type Harness[O any] struct {
 	delegation   []string
 	promptCache  agentic.PromptCacheRetention
 	streaming    bool
+	summarize    observe.ToolSummarizer
 
 	mu      sync.Mutex
 	live    map[string]*Session[O]
@@ -217,6 +219,7 @@ func newHarness[O any](runner agentic.Runner[O], config RuntimeConfig, plan capa
 		delegation:   plan.DelegationTools(),
 		promptCache:  promptCache,
 		streaming:    config.ModelStreaming,
+		summarize:    config.ToolSummarizer,
 		live:         make(map[string]*Session[O]),
 		opening:      make(map[string]bool),
 	}, nil
@@ -306,6 +309,7 @@ func (h *Harness[O]) sessionConfig(id string) session.Config[O] {
 		DelegationTools:       append([]string(nil), h.delegation...),
 		PromptCacheRetention:  h.promptCache,
 		ModelStreaming:        h.streaming,
+		ToolSummarizer:        h.summarize,
 	}
 }
 

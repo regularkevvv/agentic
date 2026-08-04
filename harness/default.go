@@ -153,6 +153,7 @@ func AssembleDefault(config DefaultConfig) (DefaultAssembly, error) {
 			ToolCancellationGrace: grace,
 			PromptCacheRetention:  config.PromptCacheRetention,
 			ModelStreaming:        config.ModelStreaming,
+			ToolSummarizer:        environmentcapability.ToolSummary,
 		},
 		Capabilities: []Capability{
 			environmentCapability,

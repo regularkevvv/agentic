@@ -140,6 +140,29 @@ func TestObservationProjectsUsageFallbackAndSuccessfulToolResult(t *testing.T) {
 	}
 }
 
+func TestObservationUsesApplicationOwnedToolSummary(t *testing.T) {
+	t.Parallel()
+	session := observationSession()
+	session.summarize = func(call agentic.ToolUse) string { return "safe " + call.Name + strings.Repeat("x", 300) }
+	call := agentic.ToolUse{ID: "call", Name: "run_command", Input: map[string]any{"token": "raw-secret"}}
+	message := agentic.Message{Role: agentic.RoleAssistant, Content: []agentic.Part{{Type: agentic.ContentToolUse, ToolUse: &call}}}
+	projected := projectMessage(message, session.summarize)
+	if len(projected.Tools) != 1 || !strings.HasPrefix(projected.Tools[0].Summary, "safe run_command") || len([]rune(projected.Tools[0].Summary)) != maxToolSummaryRunes+1 {
+		t.Fatalf("projected summary = %#v", projected.Tools)
+	}
+	started, err := session.projectObservation(observationRecord(
+		t, session.codec, "agentic", agentic.EventTypeToolStarted, "",
+		event.ToolStartedPayload{Call: call, Attempt: 1},
+	))
+	if err != nil || started.Tool == nil || started.Tool.Summary == "" {
+		t.Fatalf("started = %#v, %v", started, err)
+	}
+	encoded, _ := json.Marshal([]any{projected, started})
+	if strings.Contains(string(encoded), "raw-secret") {
+		t.Fatalf("summary projection leaked raw input: %s", encoded)
+	}
+}
+
 func TestProjectHarnessToolAndUnknownObservations(t *testing.T) {
 	t.Parallel()
 	session := observationSession()

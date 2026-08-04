@@ -110,6 +110,9 @@ func TestSubmitPasteQueueHistoryAndNonblockingUpdate(t *testing.T) {
 	if command == nil || model.composer.Value() != "" || len(model.history) != 1 || model.history[0] != largePaste {
 		t.Fatalf("submit dispatch state = value %q history %#v", model.composer.Value(), model.history)
 	}
+	if len(model.snapshot.Transcript) != 1 || model.snapshot.Transcript[0].Role != uit.RoleUser || model.snapshot.Transcript[0].Text != largePaste {
+		t.Fatalf("submitted text was not shown immediately: %#v", model.snapshot.Transcript)
+	}
 	done := make(chan tea.Msg, 1)
 	go func() { done <- command() }()
 	model.composer.SetValue("steer now")
@@ -277,6 +280,12 @@ func TestPermissionOverlayAndResolution(t *testing.T) {
 	model.handleApprovalKey("esc")
 	model.handleApprovalKey("a")
 	resolve := model.handleApprovalKey("enter")
+	if model.resolvingApprovalID == "" || strings.Contains(model.View().Content, "Permission required") || !strings.Contains(model.View().Content, "Applying") {
+		t.Fatalf("approval overlay remained while resolving: %q", model.View().Content)
+	}
+	if command, handled := model.handleKey(key('x', "x", 0)); !handled || command != nil {
+		t.Fatal("input was not suppressed while approval resolution was active")
+	}
 	execute(t, model, resolve)
 	if model.snapshot.Suspension != nil || model.snapshot.State != uit.StateIdle {
 		t.Fatalf("resolved snapshot = %#v", model.snapshot)
@@ -287,6 +296,111 @@ func TestPermissionOverlayAndResolution(t *testing.T) {
 	if !strings.Contains(model.banner, "handoff") {
 		t.Fatalf("unsupported banner = %q", model.banner)
 	}
+	model.snapshot.Suspension = &uit.Suspension{ID: "retry", Supported: true, Approvals: []uit.Approval{{CallID: "call"}}}
+	model.decisions["call"] = uit.DecisionApprove
+	model.resolvingApprovalID = "retry"
+	model.Update(operationDoneMsg{approval: true, err: errors.New("resolve failed")})
+	if model.resolvingApprovalID != "" || !strings.Contains(model.View().Content, "Permission required") {
+		t.Fatalf("failed resolution did not restore approval: %q", model.View().Content)
+	}
+}
+
+func TestComposerStartsCompactAndGrowsWithContent(t *testing.T) {
+	t.Parallel()
+	model := readyModel(t, nil)
+	model.resize(80, 24)
+	if model.composer.Height() != 1 || model.viewport.Height() != 19 {
+		t.Fatalf("empty layout composer=%d viewport=%d", model.composer.Height(), model.viewport.Height())
+	}
+	model.composer.InsertString("one\ntwo\nthree")
+	model.syncViewport()
+	if model.composer.Height() != 3 || model.viewport.Height() != 17 {
+		t.Fatalf("grown layout composer=%d viewport=%d", model.composer.Height(), model.viewport.Height())
+	}
+	model.composer.Reset()
+	model.syncViewport()
+	if model.composer.Height() != 1 || model.viewport.Height() != 19 {
+		t.Fatalf("reset layout composer=%d viewport=%d", model.composer.Height(), model.viewport.Height())
+	}
+}
+
+func TestSubmittedTextReconcilesWithoutDuplicatesAndRollsBackOnRejection(t *testing.T) {
+	t.Parallel()
+	model := readyModel(t, nil)
+	model.composer.SetValue("visible immediately")
+	_, command := model.Update(key(tea.KeyEnter, "", 0))
+	if command == nil || len(model.optimistic) != 1 || !strings.Contains(model.View().Content, "USER") || !strings.Contains(model.View().Content, "visible immediately") {
+		t.Fatalf("optimistic submission was not rendered: pending=%#v view=%q", model.optimistic, model.View().Content)
+	}
+
+	entry := uit.Entry{Role: uit.RoleUser, Text: "visible immediately"}
+	model.applyEvent(uit.Event{Kind: uit.EventMessagesInjected, Entries: []uit.Entry{entry}})
+	if len(model.optimistic) != 0 || len(model.snapshot.Transcript) != 1 {
+		t.Fatalf("durable input duplicated optimistic input: pending=%#v transcript=%#v", model.optimistic, model.snapshot.Transcript)
+	}
+
+	snapshotEntry := uit.Entry{Role: uit.RoleUser, Text: "from snapshot"}
+	snapshotID := model.appendOptimistic(snapshotEntry.Text)
+	snapshot := uit.Snapshot{Transcript: []uit.Entry{entry, snapshotEntry}}
+	model.Update(operationDoneMsg{snapshot: &snapshot, optimisticID: snapshotID, operationApplied: true})
+	if len(model.optimistic) != 0 || len(model.snapshot.Transcript) != 2 {
+		t.Fatalf("snapshot duplicated optimistic input: pending=%#v transcript=%#v", model.optimistic, model.snapshot.Transcript)
+	}
+
+	rejectedID := model.appendOptimistic("rejected")
+	model.Update(operationDoneMsg{err: errors.New("rejected"), optimisticID: rejectedID})
+	if len(model.optimistic) != 0 || len(model.snapshot.Transcript) != 2 {
+		t.Fatalf("rejected optimistic input remained: pending=%#v transcript=%#v", model.optimistic, model.snapshot.Transcript)
+	}
+
+	pendingID := model.appendOptimistic("not durable yet")
+	model.snapshot.Transcript = []uit.Entry{entry, snapshotEntry}
+	model.reconcileOptimistic()
+	if len(model.optimistic) != 1 || model.snapshot.Transcript[len(model.snapshot.Transcript)-1].Text != "not durable yet" {
+		t.Fatalf("missing optimistic input was not restored: pending=%#v transcript=%#v", model.optimistic, model.snapshot.Transcript)
+	}
+	model.rollbackOptimistic(999)
+	model.rollbackOptimistic(pendingID)
+}
+
+func TestViewportMouseScrollPausesFollowUntilReturningToBottom(t *testing.T) {
+	t.Parallel()
+	model := readyModel(t, nil)
+	for index := range 40 {
+		model.snapshot.Transcript = append(model.snapshot.Transcript, uit.Entry{Role: uit.RoleAssistant, Text: fmt.Sprintf("line %02d", index)})
+	}
+	model.resize(40, 12)
+	bottom := model.viewport.YOffset()
+	if bottom == 0 || !model.followOutput || !model.viewport.AtBottom() {
+		t.Fatalf("viewport did not start at bottom: offset=%d follow=%v", bottom, model.followOutput)
+	}
+	if model.View().MouseMode != tea.MouseModeCellMotion {
+		t.Fatal("mouse wheel events are not enabled")
+	}
+
+	model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
+	paused := model.viewport.YOffset()
+	if paused >= bottom || model.followOutput {
+		t.Fatalf("mouse scroll did not pause follow: before=%d after=%d follow=%v", bottom, paused, model.followOutput)
+	}
+	model.preview = "new streamed output"
+	model.syncViewport()
+	if model.viewport.YOffset() != paused {
+		t.Fatalf("streaming snapped a manually scrolled viewport: got=%d want=%d", model.viewport.YOffset(), paused)
+	}
+
+	model.composer.Reset()
+	model.Update(key('k', "k", 0))
+	if model.composer.Value() != "k" || model.viewport.YOffset() != paused {
+		t.Fatalf("typing affected viewport: composer=%q offset=%d want=%d", model.composer.Value(), model.viewport.YOffset(), paused)
+	}
+	model.composer.Reset()
+	for range 20 {
+		model.Update(key(tea.KeyPgDown, "", 0))
+	}
+	if !model.followOutput || !model.viewport.AtBottom() {
+		t.Fatalf("page down did not resume follow: offset=%d follow=%v", model.viewport.YOffset(), model.followOutput)
+	}
 }
 
 func TestEventReductionRenderingAndHelpers(t *testing.T) {
@@ -294,7 +408,10 @@ func TestEventReductionRenderingAndHelpers(t *testing.T) {
 	model := readyModel(t, nil)
 	entry := uit.Entry{Role: uit.RoleAssistant, Text: "committed"}
 	thinking := uit.Thinking{Text: "thought"}
-	tool := uit.Tool{CallID: "one", Name: "tool", State: uit.ToolRunning}
+	tool := uit.Tool{
+		CallID: "one", Name: "tool", State: uit.ToolRunning, Summary: "pwd",
+		Presentation: uit.ToolPresentation{Title: "pwd"},
+	}
 	usage := uit.Usage{TotalTokens: 10}
 	queue := uit.QueuedInput{ID: "q", Text: "queued"}
 	suspension := uit.Suspension{ID: "s", Kind: "permission", Supported: true}
@@ -313,6 +430,8 @@ func TestEventReductionRenderingAndHelpers(t *testing.T) {
 		{Kind: uit.EventRunStarted},
 		{Kind: uit.EventRunSuspended, Suspension: &suspension},
 		{Kind: uit.EventRunCompleted},
+		{Kind: uit.EventRunEnded},
+		{Kind: uit.EventRunInterrupted},
 		{Kind: uit.EventRunFailed, Failure: "failed"},
 		{Kind: uit.EventSessionFaulted},
 		{Kind: uit.EventSessionClosed},
@@ -326,19 +445,56 @@ func TestEventReductionRenderingAndHelpers(t *testing.T) {
 	model.applyBridge(bridgeUpdate{snapshot: &uit.Snapshot{SessionID: "fresh", State: uit.StateIdle}})
 	model.applyBridge(bridgeUpdate{events: []uit.Event{{Kind: uit.EventRunInterrupted}}})
 	model.applyBridge(bridgeUpdate{err: errors.New("bridge")})
+	model.snapshot.Suspension = &suspension
+	model.resolvingApprovalID = suspension.ID
+	model.applyEvent(uit.Event{Kind: uit.EventRunStarted})
+	if model.snapshot.Suspension != nil || model.resolvingApprovalID != "" {
+		t.Fatal("resumed run retained approval state")
+	}
+	wantApproval := errors.New("approval")
+	approvalResult := model.approvalOperationCmd(func(context.Context) error { return wantApproval })().(operationDoneMsg)
+	if !approvalResult.approval || !errors.Is(approvalResult.err, wantApproval) {
+		t.Fatalf("approval worker = %#v", approvalResult)
+	}
+	model.applyBridge(bridgeUpdate{err: errors.New("bridge")})
 	model.resize(1, 1)
 	view := model.View()
 	if !strings.Contains(view.Content, "bridge") || view.AltScreen {
 		t.Fatalf("view = %#v", view)
 	}
+	model.config.Thinking = render.ThinkingHidden
+	model.cycleThinking()
+	if model.config.Thinking != render.ThinkingVisible {
+		t.Fatalf("thinking cycle = %s", model.config.Thinking)
+	}
 	if got := upsertTool(nil, tool); len(got) != 1 {
 		t.Fatalf("upsert append = %#v", got)
 	}
-	if got := upsertTool([]uit.Tool{tool}, uit.Tool{CallID: "one", State: uit.ToolDone}); got[0].State != uit.ToolDone {
+	if got := upsertTool([]uit.Tool{tool}, uit.Tool{
+		CallID: "one", State: uit.ToolDone,
+		Presentation: uit.ToolPresentation{Title: "Run command"},
+	}); got[0].State != uit.ToolDone || got[0].Presentation.Title != tool.Presentation.Title {
 		t.Fatalf("upsert replace = %#v", got)
 	}
 	if got := removeQueue([]uit.QueuedInput{{ID: "a"}, {ID: "b"}}, "a"); len(got) != 1 || got[0].ID != "b" {
 		t.Fatalf("remove queue = %#v", got)
+	}
+}
+
+func TestRunLifecycleStatusDoesNotOverwriteInterruption(t *testing.T) {
+	t.Parallel()
+	model := readyModel(t, nil)
+	model.banner, model.failure = "old failure", true
+
+	model.applyEvent(uit.Event{Kind: uit.EventRunStarted})
+	if model.banner != "" || model.failure {
+		t.Fatalf("run start retained status: banner=%q failure=%v", model.banner, model.failure)
+	}
+
+	model.applyEvent(uit.Event{Kind: uit.EventRunInterrupted})
+	model.applyEvent(uit.Event{Kind: uit.EventRunEnded})
+	if model.banner != "Interrupted." || model.failure {
+		t.Fatalf("run end overwrote interruption: banner=%q failure=%v", model.banner, model.failure)
 	}
 }
 
@@ -377,9 +533,9 @@ func TestTerminalLayoutSnapshotsAtNarrowNormalAndWideSizes(t *testing.T) {
 		want          string
 		wantSHA       string
 	}{
-		{name: "narrow", width: 20, height: 8, want: "20x8 viewport=20x1 composer=16x3", wantSHA: "e4d9c87cd79c8ca8b1286d8be8cdfc49ce5a8d264ee5fc5886d17f4e75be4725"},
-		{name: "normal", width: 80, height: 24, want: "80x24 viewport=80x16 composer=76x4", wantSHA: "30bba916c17f8852244c4f024a1f6b18742faeb65a030a09474f5ae9e3c74e19"},
-		{name: "wide", width: 160, height: 50, want: "160x50 viewport=160x41 composer=156x5", wantSHA: "f178eeb4f2277fa8c31859a4d8d3a12dd5c16e1e3fabf0033e7d8c5c6770f717"},
+		{name: "narrow", width: 20, height: 8, want: "20x8 viewport=20x3 composer=16x1", wantSHA: "6dd2edd22bdee8b47b08fc0b2ebe774aa5eacc1b516630e8601066b33b6b4d36"},
+		{name: "normal", width: 80, height: 24, want: "80x24 viewport=80x19 composer=76x1", wantSHA: "64f29b6b7b3579b2f7f37621c2c9417f6a94a12f59ef16d83a026a78f904abe7"},
+		{name: "wide", width: 160, height: 50, want: "160x50 viewport=160x45 composer=156x1", wantSHA: "230ba71931bbe489e8e8936d18445bf6e68f3197e364d8456659dcce0ee24ce5"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -532,6 +688,21 @@ func TestSessionAndOperationFailureWorkers(t *testing.T) {
 	result = model.operationCmd(func(context.Context) error { return wantOperation }, "ok")().(operationDoneMsg)
 	if !errors.Is(result.err, wantOperation) {
 		t.Fatalf("operation error = %v", result.err)
+	}
+	reconciled := readyModel(t, nil)
+	optimisticID := reconciled.appendOptimistic("request")
+	finalSnapshot := uit.Snapshot{State: uit.StateIdle, Transcript: []uit.Entry{
+		{Role: uit.RoleUser, Text: "request"},
+		{Role: uit.RoleTool, Tools: []uit.Tool{{CallID: "call", Name: "run_command", State: uit.ToolDone}}},
+	}}
+	reconciled.session = &errorSession{id: "reconciled", snapshot: finalSnapshot}
+	result = reconciled.operationCmd(func(context.Context) error { return wantOperation }, "", optimisticID)().(operationDoneMsg)
+	if result.snapshot == nil || !result.operationApplied || !errors.Is(result.err, wantOperation) {
+		t.Fatalf("error reconciliation result = %#v", result)
+	}
+	reconciled.Update(result)
+	if !reconciled.failure || len(reconciled.optimistic) != 0 || len(reconciled.snapshot.Transcript) != 2 || reconciled.snapshot.Transcript[1].Tools[0].State != uit.ToolDone {
+		t.Fatalf("error reconciliation model = failure=%v optimistic=%#v snapshot=%#v", reconciled.failure, reconciled.optimistic, reconciled.snapshot)
 	}
 	closing := &errorSession{id: "closing", closeErr: errors.New("close")}
 	model.session, model.bridge = closing, nil

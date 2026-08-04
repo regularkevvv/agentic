@@ -70,6 +70,11 @@ type Tool struct {
 	Summary string
 }
 
+// ToolSummarizer converts a raw tool call into bounded, non-sensitive display
+// text. The owning application or capability supplies this function; terminal
+// clients never receive raw tool arguments merely to format them.
+type ToolSummarizer func(agentic.ToolUse) string
+
 // Message is a conservative transcript projection. Tool inputs, tool results,
 // provider metadata, signatures, and opaque parts are never copied into it.
 type Message struct {

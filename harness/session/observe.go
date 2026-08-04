@@ -86,7 +86,7 @@ func (s *Session[O]) projectAgenticObservation(result observe.Event, record even
 			return observe.Event{}, err
 		}
 		result.Kind = observe.KindToolPlanned
-		result.Tools = projectTools(payload.Calls, observe.ToolPreview)
+		result.Tools = projectTools(payload.Calls, observe.ToolPreview, s.summarize)
 	case agentic.EventTypeToolArgumentPreview:
 		payload, err := event.Decode[struct {
 			ToolCallID string
@@ -102,7 +102,7 @@ func (s *Session[O]) projectAgenticObservation(result observe.Event, record even
 		if err != nil {
 			return observe.Event{}, err
 		}
-		message := projectMessage(payload.Message)
+		message := projectMessage(payload.Message, s.summarize)
 		result.Kind, result.Message = observe.KindAssistantCommitted, &message
 	case agentic.EventTypeToolBatchPlanned:
 		payload, err := event.Decode[event.ToolBatchPayload](s.codec, record)
@@ -110,14 +110,17 @@ func (s *Session[O]) projectAgenticObservation(result observe.Event, record even
 			return observe.Event{}, err
 		}
 		result.Kind = observe.KindToolPlanned
-		result.Tools = projectTools(payload.Calls, observe.ToolPlanned)
+		result.Tools = projectTools(payload.Calls, observe.ToolPlanned, s.summarize)
 	case agentic.EventTypeToolStarted:
 		payload, err := event.Decode[event.ToolStartedPayload](s.codec, record)
 		if err != nil {
 			return observe.Event{}, err
 		}
 		result.Kind = observe.KindToolStarted
-		result.Tool = &observe.Tool{CallID: payload.Call.ID, Name: payload.Call.Name, State: observe.ToolRunning, Attempt: payload.Attempt}
+		result.Tool = &observe.Tool{
+			CallID: payload.Call.ID, Name: payload.Call.Name, State: observe.ToolRunning,
+			Attempt: payload.Attempt, Summary: s.ToolSummary(payload.Call),
+		}
 	case agentic.EventTypeToolResultCommitted:
 		payload, err := event.Decode[event.ToolResultPayload](s.codec, record)
 		if err != nil {
@@ -136,7 +139,7 @@ func (s *Session[O]) projectAgenticObservation(result observe.Event, record even
 		if err != nil {
 			return observe.Event{}, err
 		}
-		result.Kind, result.Messages = observe.KindMessagesInjected, projectMessages(payload.Messages)
+		result.Kind, result.Messages = observe.KindMessagesInjected, projectMessages(payload.Messages, s.summarize)
 	case agentic.EventTypeRunStarted:
 		result.Kind = observe.KindRunStarted
 	case agentic.EventTypeTurnStarted:
@@ -202,14 +205,14 @@ func (s *Session[O]) projectHarnessObservation(result observe.Event, record even
 		if err != nil {
 			return observe.Event{}, err
 		}
-		message := projectMessage(payload.Message)
+		message := projectMessage(payload.Message, s.summarize)
 		result.Message = &message
 	case kindContextMessage:
 		payload, err := event.Decode[contextMessagePayload](s.codec, record)
 		if err != nil {
 			return observe.Event{}, err
 		}
-		message := projectMessage(payload.Message)
+		message := projectMessage(payload.Message, s.summarize)
 		result.Message = &message
 	case kindQueueAccepted, kindQueueDrained, kindQueueCancelled:
 		payload, err := event.Decode[queueMutationPayload](s.codec, record)
@@ -226,7 +229,7 @@ func (s *Session[O]) projectHarnessObservation(result observe.Event, record even
 		}
 		result.Queue = &observe.Queue{ID: payload.ID}
 		if payload.Entry != nil {
-			message := projectMessage(payload.Entry.Message)
+			message := projectMessage(payload.Entry.Message, s.summarize)
 			result.Queue.Kind, result.Queue.Message = string(payload.Entry.Kind), &message
 		}
 	case kindUsageCommitted:
@@ -271,15 +274,15 @@ func (s *Session[O]) projectHarnessObservation(result observe.Event, record even
 	return result, nil
 }
 
-func projectMessages(messages []agentic.Message) []observe.Message {
+func projectMessages(messages []agentic.Message, summarizers ...observe.ToolSummarizer) []observe.Message {
 	result := make([]observe.Message, len(messages))
 	for index, message := range messages {
-		result[index] = projectMessage(message)
+		result[index] = projectMessage(message, summarizers...)
 	}
 	return result
 }
 
-func projectMessage(message agentic.Message) observe.Message {
+func projectMessage(message agentic.Message, summarizers ...observe.ToolSummarizer) observe.Message {
 	result := observe.Message{Role: string(message.Role)}
 	for _, part := range message.Content {
 		switch part.Type {
@@ -295,7 +298,10 @@ func projectMessage(message agentic.Message) observe.Message {
 			})
 		case agentic.ContentToolUse:
 			if part.ToolUse != nil {
-				result.Tools = append(result.Tools, observe.Tool{CallID: part.ToolUse.ID, Name: part.ToolUse.Name, State: observe.ToolPlanned})
+				result.Tools = append(result.Tools, observe.Tool{
+					CallID: part.ToolUse.ID, Name: part.ToolUse.Name, State: observe.ToolPlanned,
+					Summary: summarizeTool(*part.ToolUse, summarizers),
+				})
 			}
 		case agentic.ContentToolResult:
 			if part.ToolResult != nil {
@@ -310,10 +316,26 @@ func projectMessage(message agentic.Message) observe.Message {
 	return result
 }
 
-func projectTools(calls []agentic.ToolUse, state observe.ToolState) []observe.Tool {
+func projectTools(calls []agentic.ToolUse, state observe.ToolState, summarizers ...observe.ToolSummarizer) []observe.Tool {
 	result := make([]observe.Tool, len(calls))
 	for index, call := range calls {
-		result[index] = observe.Tool{CallID: call.ID, Name: call.Name, State: state}
+		result[index] = observe.Tool{CallID: call.ID, Name: call.Name, State: state, Summary: summarizeTool(call, summarizers)}
 	}
 	return result
+}
+
+func summarizeTool(call agentic.ToolUse, summarizers []observe.ToolSummarizer) string {
+	if len(summarizers) == 0 || summarizers[0] == nil {
+		return ""
+	}
+	return boundedToolSummary(summarizers[0](call))
+}
+
+// ToolSummary invokes the application-owned redactor without exposing raw
+// arguments through the observation or TUI contracts.
+func (s *Session[O]) ToolSummary(call agentic.ToolUse) string {
+	if s == nil || s.summarize == nil {
+		return ""
+	}
+	return boundedToolSummary(s.summarize(call))
 }

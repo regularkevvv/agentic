@@ -11,6 +11,7 @@ import (
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
+	"github.com/regularkevvv/agentic/harness/observe"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 	"github.com/regularkevvv/agentic/harness/store"
 )
@@ -37,6 +38,7 @@ type Config[O any] struct {
 	DelegationTools       []string
 	PromptCacheRetention  agentic.PromptCacheRetention
 	ModelStreaming        bool
+	ToolSummarizer        observe.ToolSummarizer
 }
 
 func (c Config[O]) validate() error {

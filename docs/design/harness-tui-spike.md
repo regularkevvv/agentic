@@ -104,9 +104,12 @@ last cursor and redraw. It is not a terminal schema and does not embed Bubble
 Tea, ANSI, markdown, or configuration.
 
 The projection must not make tool arguments automatically visible. The default
-tool event contains call identity and phase. A capability may attach an
-explicitly safe, bounded summary through a redactor/presenter port. This keeps
-secrets in a tool input or result out of a default terminal transcript.
+tool event contains call identity and phase. An application may set
+`RuntimeConfig.ToolSummarizer` at the capability boundary to attach an
+explicitly safe, bounded summary. A later `tui.ToolPresenter` sees only that
+projection and selects its category, title, and detail. This keeps secrets in
+a tool input or result out of a default terminal transcript while allowing
+tool-specific presentation without hardcoding it into the renderer.
 
 ### 2. Public operator view of a permission suspension
 

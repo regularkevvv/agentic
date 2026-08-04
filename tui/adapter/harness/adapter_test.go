@@ -98,7 +98,9 @@ func TestHarnessAdapterSessionLifecycle(t *testing.T) {
 	if _, err := New(runtime, nil); err == nil {
 		t.Fatal("nil option succeeded")
 	}
-	port, err := New(runtime, WithProfileLabel("work"), WithWorkspace("/workspace"), WithExecutionLabel("local host"))
+	port, err := New(runtime, WithProfileLabel("work"), WithWorkspace("/workspace"), WithExecutionLabel("local host"), WithToolPresenter(uit.ToolPresenterFunc(func(uit.Tool) uit.ToolPresentation {
+		return uit.ToolPresentation{Title: "tool"}
+	})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,6 +210,9 @@ func TestHarnessAdapterQueuesAndInterruptsRunningSession(t *testing.T) {
 
 func TestMappingConservativelyRedactsMessagesAndEvents(t *testing.T) {
 	t.Parallel()
+	presenter := uit.ToolPresenterFunc(func(tool uit.Tool) uit.ToolPresentation {
+		return uit.ToolPresentation{Category: uit.ToolCategoryExplore, Title: "Safe " + tool.Name}
+	})
 	toolUse := agentic.ToolUse{ID: "call", Name: "secret_tool", Input: map[string]any{"api_key": "do-not-render"}}
 	toolResult := agentic.ToolResult{ToolUseID: "call", Name: "secret_tool", Content: "raw secret", IsError: true}
 	messageValue := agentic.Message{Role: agentic.RoleAssistant, Content: []agentic.Part{
@@ -217,9 +222,11 @@ func TestMappingConservativelyRedactsMessagesAndEvents(t *testing.T) {
 		{Type: agentic.ContentToolResult, ToolResult: &toolResult},
 		{Type: agentic.ContentToolUse}, {Type: agentic.ContentToolResult}, {Type: agentic.ContentThinking},
 	}}
-	mapped := message(messageValue)
+	mapped := messageWithSummary(messageValue, presenter, func(call agentic.ToolUse) string {
+		return "safe summary for " + call.Name
+	})
 	serialized, _ := json.Marshal(mapped)
-	if mapped.Text != "safe" || len(mapped.Thinking) != 1 || !mapped.Thinking[0].Redacted || len(mapped.Tools) != 2 || mapped.Tools[1].State != uit.ToolError {
+	if mapped.Text != "safe" || len(mapped.Thinking) != 1 || !mapped.Thinking[0].Redacted || len(mapped.Tools) != 2 || mapped.Tools[1].State != uit.ToolError || mapped.Tools[0].Presentation.Title != "Safe secret_tool" || mapped.Tools[0].Summary != "safe summary for secret_tool" {
 		t.Fatalf("mapped = %#v", mapped)
 	}
 	if strings.Contains(string(serialized), "do-not-render") || strings.Contains(string(serialized), "raw secret") || strings.Contains(string(serialized), "signature") {
@@ -230,8 +237,8 @@ func TestMappingConservativelyRedactsMessagesAndEvents(t *testing.T) {
 		t.Fatalf("messages = %#v", values)
 	}
 	observed := observe.Message{Role: "assistant", Text: "safe", Thinking: []observe.Thinking{{Text: "t", Redacted: true}}, Tools: []observe.Tool{{CallID: "c", Name: "tool", State: observe.ToolDone}}}
-	entry := observedMessage(observed)
-	if len(entry.Thinking) != 1 || len(entry.Tools) != 1 || entry.Tools[0].State != uit.ToolDone {
+	entry := observedMessage(observed, presenter)
+	if len(entry.Thinking) != 1 || len(entry.Tools) != 1 || entry.Tools[0].State != uit.ToolDone || entry.Tools[0].Presentation.Category != uit.ToolCategoryExplore {
 		t.Fatalf("observed entry = %#v", entry)
 	}
 	if state(harnesscore.SessionIdle) != uit.StateIdle || usage(agentic.Usage{TotalTokens: 2}).TotalTokens != 2 {
@@ -246,8 +253,8 @@ func TestMappingConservativelyRedactsMessagesAndEvents(t *testing.T) {
 		Usage: &observe.Usage{PromptTokens: 2}, Suspension: &observe.Suspension{ID: "s"}, Failure: &observe.Failure{Message: "failure"},
 		Queue: &observe.Queue{ID: "q", Kind: "steer", Message: &observe.Message{Text: "queued"}}, State: "suspended", Dropped: 4,
 	}
-	event, err := mapObservation(observation, owner)
-	if err != nil || !event.Durable || event.Suspension == nil || event.Failure != "failure" || event.Queue.Text != "queued" || len(event.Entries) != 1 || len(event.Tools) != 1 {
+	event, err := mapObservation(observation, owner, presenter)
+	if err != nil || !event.Durable || event.Suspension == nil || event.Failure != "failure" || event.Queue.Text != "queued" || len(event.Entries) != 1 || len(event.Tools) != 1 || event.Tool.Presentation.Title != "Safe " {
 		t.Fatalf("event = %#v, %v", event, err)
 	}
 	preview, _ := mapObservation(observe.Event{Nature: agentic.EventPreview, Queue: &observe.Queue{}}, owner)

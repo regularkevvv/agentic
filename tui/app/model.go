@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
@@ -88,24 +89,28 @@ type Model struct {
 	terminalEditor TerminalEditor
 	environ        []string
 
-	composer      textarea.Model
-	viewport      viewport.Model
-	width         int
-	height        int
-	preview       string
-	thinking      string
-	liveTools     []uit.Tool
-	clearBefore   int
-	inflight      int
-	banner        string
-	failure       bool
-	help          bool
-	closing       bool
-	approvalIndex int
-	decisions     map[string]uit.DecisionAction
-	history       []string
-	historyIndex  int
-	lastExport    string
+	composer            textarea.Model
+	viewport            viewport.Model
+	followOutput        bool
+	width               int
+	height              int
+	preview             string
+	thinking            string
+	liveTools           []uit.Tool
+	clearBefore         int
+	inflight            int
+	banner              string
+	failure             bool
+	help                bool
+	closing             bool
+	approvalIndex       int
+	decisions           map[string]uit.DecisionAction
+	resolvingApprovalID string
+	optimistic          []optimisticSubmission
+	nextOptimisticID    uint64
+	history             []string
+	historyIndex        int
+	lastExport          string
 }
 
 func New(host uit.Host, options Options) (*Model, error) {
@@ -144,7 +149,9 @@ func New(host uit.Host, options Options) (*Model, error) {
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 1 << 20
 	composer.MaxHeight = 8
-	composer.SetHeight(3)
+	composer.MinHeight = 1
+	composer.DynamicHeight = true
+	composer.SetHeight(1)
 	composer.SetWidth(80)
 	if config.NoColor {
 		composer.Placeholder = "Describe a task..."
@@ -157,7 +164,7 @@ func New(host uit.Host, options Options) (*Model, error) {
 	vp.SoftWrap = true
 	return &Model{
 		host: host, ctx: ctx, cancel: cancel, config: config, resumeID: options.ResumeID,
-		editor: options.Editor, terminalEditor: options.TerminalEditor, environ: environ, composer: composer, viewport: vp,
+		editor: options.Editor, terminalEditor: options.TerminalEditor, environ: environ, composer: composer, viewport: vp, followOutput: true,
 		decisions: make(map[string]uit.DecisionAction), historyIndex: -1,
 	}, nil
 }
@@ -172,11 +179,20 @@ type sessionReadyMsg struct {
 }
 
 type operationDoneMsg struct {
-	snapshot *uit.Snapshot
-	message  string
-	export   string
-	err      error
-	quit     bool
+	snapshot         *uit.Snapshot
+	message          string
+	export           string
+	err              error
+	quit             bool
+	approval         bool
+	optimisticID     uint64
+	operationApplied bool
+}
+
+type optimisticSubmission struct {
+	id    uint64
+	index int
+	entry uit.Entry
 }
 
 type bridgeMsg struct {
@@ -253,14 +269,23 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		return m, waitBridgeCmd(msg.bridge)
 	case operationDoneMsg:
 		m.inflight = max(0, m.inflight-1)
+		if msg.approval {
+			m.resolvingApprovalID = ""
+		}
+		if msg.snapshot != nil {
+			m.snapshot = *msg.snapshot
+			m.reconcileOptimistic()
+			m.preview, m.thinking, m.liveTools = "", "", nil
+			m.resetApproval()
+		}
 		if msg.err != nil {
+			if msg.optimisticID != 0 && !msg.operationApplied {
+				m.rollbackOptimistic(msg.optimisticID)
+			}
 			m.setError(msg.err)
 		} else {
-			m.banner, m.failure = msg.message, false
-			if msg.snapshot != nil {
-				m.snapshot = *msg.snapshot
-				m.preview, m.thinking, m.liveTools = "", "", nil
-				m.resetApproval()
+			if msg.message != "" {
+				m.banner, m.failure = msg.message, false
 			}
 			if msg.export != "" {
 				m.lastExport = msg.export
@@ -278,6 +303,7 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			m.setError(msg.err)
 		} else {
 			m.composer.SetValue(msg.value)
+			m.syncViewport()
 		}
 		return m, nil
 	case editorPreparedMsg:
@@ -310,15 +336,27 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 
 	var commands []tea.Cmd
 	var command tea.Cmd
+	composerHeight := m.composer.Height()
 	m.composer, command = m.composer.Update(message)
 	commands = append(commands, command)
-	m.viewport, command = m.viewport.Update(message)
-	commands = append(commands, command)
+	if m.composer.Height() != composerHeight {
+		m.syncViewport()
+	}
+	if _, ok := message.(tea.MouseWheelMsg); ok {
+		command = m.updateViewport(message)
+		commands = append(commands, command)
+	}
 	return m, tea.Batch(commands...)
 }
 
 func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 	stroke := key.Keystroke()
+	if m.resolvingApprovalID != "" {
+		if stroke == "ctrl+c" {
+			return m.interruptCmd(), true
+		}
+		return nil, true
+	}
 	if m.snapshot.Suspension != nil {
 		return m.handleApprovalKey(stroke), true
 	}
@@ -352,10 +390,13 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 		m.banner, m.failure = "Tool details toggled.", false
 		m.syncViewport()
 		return nil, true
+	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+		return m.updateViewport(key), true
 	case "enter":
 		return m.dispatchDraft("submit"), true
 	case "shift+enter", "ctrl+j":
 		m.composer.InsertString("\n")
+		m.syncViewport()
 		return nil, true
 	case "alt+s":
 		return m.dispatchDraft("steer"), true
@@ -371,6 +412,7 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 				m.historyIndex--
 			}
 			m.composer.SetValue(m.history[m.historyIndex])
+			m.syncViewport()
 			return nil, true
 		}
 	case "down":
@@ -382,6 +424,7 @@ func (m *Model) handleKey(key tea.KeyPressMsg) (tea.Cmd, bool) {
 				m.historyIndex = -1
 				m.composer.Reset()
 			}
+			m.syncViewport()
 			return nil, true
 		}
 	case "esc":
@@ -398,6 +441,7 @@ func (m *Model) dispatchDraft(action string) tea.Cmd {
 	}
 	if strings.HasPrefix(strings.TrimSpace(text), "/") {
 		m.composer.Reset()
+		m.syncViewport()
 		return m.command(strings.TrimSpace(text))
 	}
 	if m.session == nil {
@@ -410,6 +454,14 @@ func (m *Model) dispatchDraft(action string) tea.Cmd {
 	m.history = append(m.history, text)
 	m.historyIndex = -1
 	m.inflight++
+	success := action + " accepted"
+	var optimisticID uint64
+	if action == "submit" {
+		success = ""
+		optimisticID = m.appendOptimistic(input.Text)
+		m.followOutput = true
+	}
+	m.syncViewport()
 	return m.operationCmd(func(ctx context.Context) error {
 		switch action {
 		case "steer":
@@ -421,18 +473,107 @@ func (m *Model) dispatchDraft(action string) tea.Cmd {
 		default:
 			return session.Submit(ctx, input)
 		}
-	}, action+" accepted")
+	}, success, optimisticID)
 }
 
-func (m *Model) operationCmd(operation func(context.Context) error, success string) tea.Cmd {
+func (m *Model) operationCmd(operation func(context.Context) error, success string, optimisticIDs ...uint64) tea.Cmd {
 	session := m.session
-	return func() tea.Msg {
-		if err := operation(m.ctx); err != nil {
-			return operationDoneMsg{err: err}
+	var optimisticID uint64
+	var optimisticEntry *uit.Entry
+	if len(optimisticIDs) > 0 {
+		optimisticID = optimisticIDs[0]
+		for _, pending := range m.optimistic {
+			if pending.id == optimisticID {
+				entry := pending.entry
+				optimisticEntry = &entry
+				break
+			}
 		}
-		snapshot, err := session.Snapshot(m.ctx)
-		return operationDoneMsg{snapshot: &snapshot, message: success, err: err}
 	}
+	return func() tea.Msg {
+		operationErr := operation(m.ctx)
+		snapshot, snapshotErr := session.Snapshot(m.ctx)
+		if snapshotErr != nil {
+			return operationDoneMsg{err: errors.Join(operationErr, snapshotErr), optimisticID: optimisticID}
+		}
+		applied := optimisticEntry == nil || transcriptContains(snapshot.Transcript, *optimisticEntry)
+		return operationDoneMsg{
+			snapshot: &snapshot, message: success, err: operationErr,
+			optimisticID: optimisticID, operationApplied: applied,
+		}
+	}
+}
+
+func transcriptContains(entries []uit.Entry, want uit.Entry) bool {
+	for _, entry := range entries {
+		if sameInputEntry(entry, want) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) appendOptimistic(text string) uint64 {
+	m.nextOptimisticID++
+	entry := uit.Entry{Role: uit.RoleUser, Text: text}
+	pending := optimisticSubmission{id: m.nextOptimisticID, index: len(m.snapshot.Transcript), entry: entry}
+	m.snapshot.Transcript = append(m.snapshot.Transcript, entry)
+	m.optimistic = append(m.optimistic, pending)
+	return pending.id
+}
+
+func (m *Model) confirmOptimistic(entry uit.Entry) bool {
+	for index, pending := range m.optimistic {
+		if !sameInputEntry(pending.entry, entry) || pending.index >= len(m.snapshot.Transcript) || !sameInputEntry(m.snapshot.Transcript[pending.index], entry) {
+			continue
+		}
+		m.optimistic = append(m.optimistic[:index], m.optimistic[index+1:]...)
+		return true
+	}
+	return false
+}
+
+func (m *Model) reconcileOptimistic() {
+	remaining := make([]optimisticSubmission, 0, len(m.optimistic))
+	for _, pending := range m.optimistic {
+		start := min(pending.index, len(m.snapshot.Transcript))
+		found := false
+		for _, entry := range m.snapshot.Transcript[start:] {
+			if sameInputEntry(pending.entry, entry) {
+				found = true
+				break
+			}
+		}
+		if found {
+			continue
+		}
+		pending.index = len(m.snapshot.Transcript)
+		m.snapshot.Transcript = append(m.snapshot.Transcript, pending.entry)
+		remaining = append(remaining, pending)
+	}
+	m.optimistic = remaining
+}
+
+func (m *Model) rollbackOptimistic(id uint64) {
+	for optimisticIndex, pending := range m.optimistic {
+		if pending.id != id {
+			continue
+		}
+		if pending.index < len(m.snapshot.Transcript) && sameInputEntry(m.snapshot.Transcript[pending.index], pending.entry) {
+			m.snapshot.Transcript = append(m.snapshot.Transcript[:pending.index], m.snapshot.Transcript[pending.index+1:]...)
+			for index := range m.optimistic {
+				if m.optimistic[index].index > pending.index {
+					m.optimistic[index].index--
+				}
+			}
+		}
+		m.optimistic = append(m.optimistic[:optimisticIndex], m.optimistic[optimisticIndex+1:]...)
+		return
+	}
+}
+
+func sameInputEntry(left, right uit.Entry) bool {
+	return left.Role == uit.RoleUser && right.Role == uit.RoleUser && left.Text == right.Text
 }
 
 func (m *Model) command(value string) tea.Cmd {
@@ -579,12 +720,26 @@ func (m *Model) handleApprovalKey(stroke string) tea.Cmd {
 			resolution.Decisions = append(resolution.Decisions, uit.Decision{CallID: approval.CallID, Action: m.decisions[approval.CallID]})
 		}
 		session := m.session
+		m.resolvingApprovalID = suspension.ID
+		m.banner, m.failure = "", false
 		m.inflight++
-		return m.operationCmd(func(ctx context.Context) error { return session.Resolve(ctx, resolution) }, "Suspension resolved.")
+		m.syncViewport()
+		return m.approvalOperationCmd(func(ctx context.Context) error { return session.Resolve(ctx, resolution) })
 	case "esc":
 		m.banner, m.failure = "Suspension left unresolved for safe handoff.", false
 	}
 	return nil
+}
+
+func (m *Model) approvalOperationCmd(operation func(context.Context) error) tea.Cmd {
+	session := m.session
+	return func() tea.Msg {
+		if err := operation(m.ctx); err != nil {
+			return operationDoneMsg{err: err, approval: true}
+		}
+		snapshot, err := session.Snapshot(m.ctx)
+		return operationDoneMsg{snapshot: &snapshot, err: err, approval: true}
+	}
 }
 
 func (m *Model) applyBridge(update bridgeUpdate) {
@@ -594,8 +749,12 @@ func (m *Model) applyBridge(update bridgeUpdate) {
 	}
 	if update.snapshot != nil {
 		m.snapshot = *update.snapshot
+		m.reconcileOptimistic()
 		m.preview, m.thinking, m.liveTools = "", "", nil
-		m.resetApproval()
+		if m.snapshot.Suspension == nil || m.snapshot.Suspension.ID != m.resolvingApprovalID {
+			m.resolvingApprovalID = ""
+			m.resetApproval()
+		}
 	}
 	// An operation worker can reconcile a newer full snapshot before the bridge
 	// delivers an already-buffered preview/commit batch. Drop the complete stale
@@ -629,7 +788,9 @@ func (m *Model) applyEvent(event uit.Event) {
 	if event.Suspension != nil {
 		m.snapshot.Suspension = event.Suspension
 		m.snapshot.State = uit.StateSuspended
-		m.resetApproval()
+		if event.Suspension.ID != m.resolvingApprovalID {
+			m.resetApproval()
+		}
 	}
 	if event.Failure != "" {
 		m.banner, m.failure = event.Failure, true
@@ -647,7 +808,11 @@ func (m *Model) applyEvent(event uit.Event) {
 			m.snapshot.Transcript = append(m.snapshot.Transcript, *event.Entry)
 		}
 	case uit.EventMessagesInjected:
-		m.snapshot.Transcript = append(m.snapshot.Transcript, event.Entries...)
+		for _, entry := range event.Entries {
+			if !m.confirmOptimistic(entry) {
+				m.snapshot.Transcript = append(m.snapshot.Transcript, entry)
+			}
+		}
 	case uit.EventToolPlanned:
 		m.liveTools = append(m.liveTools, event.Tools...)
 		if event.Tool != nil {
@@ -667,11 +832,39 @@ func (m *Model) applyEvent(event uit.Event) {
 		}
 	case uit.EventRunStarted:
 		m.snapshot.State = uit.StateRunning
-	case uit.EventRunCompleted, uit.EventRunEnded, uit.EventRunInterrupted:
+		m.banner, m.failure = "", false
+		if m.resolvingApprovalID != "" {
+			m.snapshot.Suspension = nil
+			m.resolvingApprovalID = ""
+			m.resetApproval()
+		}
+	case uit.EventRunCompleted:
 		m.snapshot.State = uit.StateIdle
+		m.snapshot.Suspension = nil
+		m.resolvingApprovalID = ""
+		m.resetApproval()
 		m.preview, m.thinking, m.liveTools = "", "", nil
+		m.banner, m.failure = "Completed.", false
+	case uit.EventRunEnded:
+		m.snapshot.State = uit.StateIdle
+		m.snapshot.Suspension = nil
+		m.resolvingApprovalID = ""
+		m.resetApproval()
+		m.preview, m.thinking, m.liveTools = "", "", nil
+		if !m.failure && m.banner != "Interrupted." {
+			m.banner = "Completed."
+		}
+	case uit.EventRunInterrupted:
+		m.snapshot.State = uit.StateIdle
+		m.snapshot.Suspension = nil
+		m.resolvingApprovalID = ""
+		m.resetApproval()
+		m.preview, m.thinking, m.liveTools = "", "", nil
+		m.banner, m.failure = "Interrupted.", false
 	case uit.EventRunFailed, uit.EventSessionFaulted:
 		m.snapshot.State = uit.StateFaulted
+		m.snapshot.Suspension = nil
+		m.resolvingApprovalID = ""
 	case uit.EventSessionClosed:
 		m.snapshot.State = uit.StateClosed
 	}
@@ -682,9 +875,12 @@ func (m *Model) replaceSession(session uit.Session, snapshot uit.Snapshot, bridg
 		m.bridge.Close()
 	}
 	m.session, m.snapshot, m.bridge = session, snapshot, bridge
+	m.followOutput = true
+	m.optimistic = nil
 	m.clearBefore = 0
 	m.preview, m.thinking, m.liveTools = "", "", nil
 	m.banner, m.failure = "Session "+session.ID()+" ready.", false
+	m.resolvingApprovalID = ""
 	m.resetApproval()
 	m.syncViewport()
 }
@@ -702,25 +898,27 @@ func (m *Model) setError(err error) {
 
 func (m *Model) resize(width, height int) {
 	m.width, m.height = max(20, width), max(8, height)
+	m.composer.MaxHeight = min(8, max(1, m.height/3))
 	m.composer.SetWidth(max(10, m.width-2))
-	composerHeight := min(5, max(3, m.height/5))
-	m.composer.SetHeight(composerHeight)
+	m.composer.SetHeight(min(m.composer.MaxHeight, max(1, m.composer.LineCount())))
 	m.viewport.SetWidth(m.width)
-	m.viewport.SetHeight(max(1, m.height-composerHeight-4))
+	m.viewport.SetHeight(max(1, m.height-m.composer.Height()-4))
 	m.syncViewport()
 }
 
 func (m *Model) syncViewport() {
 	if m.height > 0 {
 		bottomRows := m.composer.Height()
-		if m.snapshot.Suspension != nil {
+		if m.resolvingApprovalID != "" {
+			bottomRows = 1
+		} else if m.snapshot.Suspension != nil {
 			bottomRows = len(m.snapshot.Suspension.Approvals) + 3
 		} else if m.help {
 			bottomRows = 2
 		}
 		m.viewport.SetHeight(max(1, m.height-bottomRows-4))
 	}
-	entries := m.snapshot.Transcript
+	entries := m.transcriptForDisplay()
 	if m.clearBefore > len(entries) {
 		m.clearBefore = len(entries)
 	}
@@ -732,13 +930,55 @@ func (m *Model) syncViewport() {
 	m.viewport.SetContent(render.Transcript(entries, m.preview, render.Options{
 		Width: m.width, NoColor: m.config.NoColor, Thinking: m.config.Thinking, ToolExpanded: m.config.ToolDetails,
 	}))
-	m.viewport.GotoBottom()
+	if m.followOutput {
+		m.viewport.GotoBottom()
+	}
+}
+
+func (m *Model) transcriptForDisplay() []uit.Entry {
+	if len(m.optimistic) == 0 {
+		return m.snapshot.Transcript
+	}
+	entries := append([]uit.Entry(nil), m.snapshot.Transcript...)
+	for _, pending := range m.optimistic {
+		if pending.index < len(entries) && sameInputEntry(entries[pending.index], pending.entry) {
+			entries[pending.index].Text = optimisticDisplayText(entries[pending.index].Text)
+		}
+	}
+	return entries
+}
+
+func optimisticDisplayText(value string) string {
+	const maxRunes = 4096
+	cut := len(value)
+	count := 0
+	for index := range value {
+		if count == maxRunes {
+			cut = index
+			break
+		}
+		count++
+	}
+	if cut == len(value) {
+		return value
+	}
+	remaining := utf8.RuneCountInString(value[cut:])
+	return value[:cut] + fmt.Sprintf("\n\n… (%d more characters submitted)", remaining)
+}
+
+func (m *Model) updateViewport(message tea.Msg) tea.Cmd {
+	var command tea.Cmd
+	m.viewport, command = m.viewport.Update(message)
+	m.followOutput = m.viewport.AtBottom()
+	return command
 }
 
 func (m *Model) View() tea.View {
 	parts := []string{m.viewport.View()}
 	composerVisible := false
-	if m.snapshot.Suspension != nil {
+	if m.resolvingApprovalID != "" {
+		parts = append(parts, render.ApprovalResolving(m.config.NoColor, m.width))
+	} else if m.snapshot.Suspension != nil {
 		parts = append(parts, render.Approval(m.snapshot.Suspension, m.approvalIndex, m.decisions, m.config.NoColor, m.width))
 	} else if m.help {
 		parts = append(parts, "Commands: /new /resume ID /help /clear /export /thinking /tools /quit\nKeys: enter submit, shift+enter/ctrl+j newline, alt+s steer, alt+f follow-up, alt+n next turn, ctrl+t thinking, ctrl+g tools, ctrl+e editor, ctrl+c interrupt")
@@ -749,12 +989,17 @@ func (m *Model) View() tea.View {
 	if banner := render.Banner(m.banner, m.failure, m.config.NoColor, m.width); banner != "" {
 		parts = append(parts, banner)
 	}
+	footerState := m.snapshot.State
+	if m.resolvingApprovalID != "" {
+		footerState = uit.StateRunning
+	}
 	parts = append(parts,
 		render.Status(m.snapshot, m.inflight > 0, m.config.NoColor, m.width),
-		render.Footer(m.snapshot.State, m.config.NoColor, m.width),
+		render.Footer(footerState, m.config.NoColor, m.width),
 	)
 	view := tea.NewView(strings.Join(parts, "\n"))
 	view.AltScreen = ResolveAltScreen(m.config.AlternateScreen, m.environ)
+	view.MouseMode = tea.MouseModeCellMotion
 	view.WindowTitle = "Agentic Harness — " + m.snapshot.SessionID
 	if m.config.NoColor {
 		view.WindowTitle = "Agentic Harness - " + m.snapshot.SessionID
@@ -815,6 +1060,17 @@ func ResolveAltScreen(mode AlternateScreen, environ []string) bool {
 func upsertTool(values []uit.Tool, tool uit.Tool) []uit.Tool {
 	for index := range values {
 		if values[index].CallID == tool.CallID && tool.CallID != "" {
+			missingSummary := tool.Summary == ""
+			if tool.Name == "" {
+				tool.Name = values[index].Name
+			}
+			if missingSummary {
+				tool.Summary = values[index].Summary
+			}
+			if tool.Presentation == (uit.ToolPresentation{}) ||
+				(missingSummary && values[index].Summary != "") {
+				tool.Presentation = values[index].Presentation
+			}
 			values[index] = tool
 			return values
 		}

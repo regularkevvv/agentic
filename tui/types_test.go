@@ -37,3 +37,17 @@ func TestUsageCacheHitPercent(t *testing.T) {
 		t.Fatalf("hit rate = %v", got)
 	}
 }
+
+func TestToolPresenterFunc(t *testing.T) {
+	t.Parallel()
+	tool := Tool{Name: "read_file"}
+	if got := (ToolPresenterFunc(nil)).PresentTool(tool); got != (ToolPresentation{}) {
+		t.Fatalf("nil presenter = %#v", got)
+	}
+	presenter := ToolPresenterFunc(func(value Tool) ToolPresentation {
+		return ToolPresentation{Category: ToolCategoryExplore, Title: value.Name}
+	})
+	if got := presenter.PresentTool(tool); got.Title != "read_file" || got.Category != ToolCategoryExplore {
+		t.Fatalf("presentation = %#v", got)
+	}
+}

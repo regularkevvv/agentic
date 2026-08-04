@@ -8,6 +8,7 @@ import (
 	"reflect"
 	"testing"
 
+	agentic "github.com/regularkevvv/agentic"
 	artifactcapability "github.com/regularkevvv/agentic/harness/capability/artifacts"
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 )
@@ -27,6 +28,11 @@ func TestAssembleDefaultIsPublicCapabilityComposition(t *testing.T) {
 	assembly, err := AssembleDefault(config)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if assembly.Runtime.ToolSummarizer == nil || assembly.Runtime.ToolSummarizer(agentic.ToolUse{
+		Name: "run_command", Input: map[string]any{"name": "go", "args": []any{"test", "./..."}},
+	}) != "go test ./..." {
+		t.Fatal("default environment tool summarizer is not installed")
 	}
 	reconstructed, err := New(
 		&facadeDriver{},

@@ -46,6 +46,40 @@ func TestRegistryAndFactoryValidation(t *testing.T) {
 	}
 }
 
+func TestStandardToolPresentationCanBeOverridden(t *testing.T) {
+	t.Parallel()
+	defaults := resolveToolPresenter(nil)
+	cases := []struct {
+		name     string
+		category uit.ToolCategory
+	}{
+		{"read_file", uit.ToolCategoryExplore},
+		{"list_files", uit.ToolCategoryExplore},
+		{"stat_file", uit.ToolCategoryExplore},
+		{"read_artifact", uit.ToolCategoryExplore},
+		{"run_command", uit.ToolCategoryExecute},
+		{"write_file", uit.ToolCategoryChange},
+		{"make_directory", uit.ToolCategoryChange},
+		{"remove_path", uit.ToolCategoryChange},
+		{"custom_tool", uit.ToolCategoryOther},
+	}
+	for _, test := range cases {
+		got := defaults.PresentTool(uit.Tool{Name: test.name, Summary: "safe"})
+		if got.Category != test.category || !strings.Contains(got.Title, "safe") || got.Detail != "" {
+			t.Fatalf("%s presentation = %#v", test.name, got)
+		}
+	}
+	if got := defaults.PresentTool(uit.Tool{Name: "run_command"}); got.Title != "Run command" {
+		t.Fatalf("command fallback = %#v", got)
+	}
+	custom := uit.ToolPresenterFunc(func(uit.Tool) uit.ToolPresentation {
+		return uit.ToolPresentation{Title: "Custom"}
+	})
+	if got := resolveToolPresenter(custom).PresentTool(uit.Tool{}); got.Title != "Custom" {
+		t.Fatalf("custom presentation = %#v", got)
+	}
+}
+
 func buildFixture(t *testing.T, factory ProviderFactory) (*Registry, Config) {
 	t.Helper()
 	base := t.TempDir()
