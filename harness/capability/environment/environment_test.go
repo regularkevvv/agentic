@@ -254,7 +254,7 @@ func TestEnvironmentEffectResolversCanonicalizeInputs(t *testing.T) {
 		Input: map[string]any{"name": "echo", "args": []any{"hello"}, "dir": "/workspace"},
 	}, environment)
 	if err != nil || effect.Capability != "shell" || effect.Action != "exec" ||
-		effect.Resource.Scheme != "command" || effect.Resource.Display != "echo" {
+		effect.Resource.Scheme != "command" || effect.Resource.Display != "echo hello · in /workspace" {
 		t.Fatalf("command effect = %#v, %v", effect, err)
 	}
 	if _, err := commandEffect(context.Background(), agentic.ToolUse{
@@ -264,5 +264,37 @@ func TestEnvironmentEffectResolversCanonicalizeInputs(t *testing.T) {
 	}
 	if mode, err := fileMode(0o600, 0o644); err != nil || mode != 0o600 {
 		t.Fatalf("explicit file mode = %v, %v", mode, err)
+	}
+}
+
+func TestToolSummaryShowsUsefulArgumentsWithoutSecrets(t *testing.T) {
+	t.Parallel()
+	call := agentic.ToolUse{Name: ToolRunCommand, Input: map[string]any{
+		"name": "curl",
+		"args": []any{
+			"-H", "Authorization: Bearer header-secret",
+			"--api-key", "flag-secret",
+			"--password=inline-secret",
+			"https://example.test/?token=query-secret&ok=yes",
+			"two words",
+		},
+		"dir": "/work tree", "env": []any{"API_KEY=env-secret"}, "stdin": "stdin-secret",
+	}}
+	got := ToolSummary(call)
+	for _, want := range []string{"curl", "-H", "Authorization", "--api-key", "--password=[redacted]", "token=[redacted]", `"two words"`, `· in "/work tree"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("summary lacks %q: %q", want, got)
+		}
+	}
+	for _, secret := range []string{"header-secret", "flag-secret", "inline-secret", "query-secret", "env-secret", "stdin-secret"} {
+		if strings.Contains(got, secret) {
+			t.Fatalf("summary leaked %q: %q", secret, got)
+		}
+	}
+	if path := ToolSummary(agentic.ToolUse{Name: ToolReadFile, Input: map[string]any{"path": "README.md"}}); path != "README.md" {
+		t.Fatalf("path summary = %q", path)
+	}
+	if unknown := ToolSummary(agentic.ToolUse{Name: "custom", Input: map[string]any{"token": "secret"}}); unknown != "" {
+		t.Fatalf("unknown summary = %q", unknown)
 	}
 }

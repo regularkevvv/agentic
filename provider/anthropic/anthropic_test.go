@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -21,6 +22,39 @@ func TestNew(t *testing.T) {
 	if model.Name() != "claude-sonnet-4-20250514" {
 		t.Errorf("expected name %q, got %q", "claude-sonnet-4-20250514", model.Name())
 	}
+}
+
+func TestGenericPromptCacheMarksStablePrefixes(t *testing.T) {
+	model := &Model{model: "claude-sonnet-4-20250514"}
+	params := model.buildParams(&core.ChatRequest{
+		Model: model.model,
+		Messages: []core.Message{
+			core.NewTextMessage(core.RoleSystem, "system one"),
+			core.NewTextMessage(core.RoleSystem, "system two"),
+			core.NewTextMessage(core.RoleUser, "first"),
+			core.NewTextMessage(core.RoleAssistant, "answer"),
+			core.NewTextMessage(core.RoleUser, "latest"),
+		},
+		Tools:       []core.Tool{{Type: core.ToolTypeFunction, Function: core.Function{Name: "tool", Parameters: map[string]any{"type": "object"}}}},
+		PromptCache: &core.PromptCacheConfig{Key: "session", Retention: core.PromptCacheLong},
+	})
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if count := strings.Count(text, `"cache_control"`); count != 3 {
+		t.Fatalf("cache-control count = %d: %s", count, text)
+	}
+	if count := strings.Count(text, `"ttl":"1h"`); count != 3 {
+		t.Fatalf("1h TTL count = %d: %s", count, text)
+	}
+	if value, ok := cacheControl("bad"); ok || value.Type != "" {
+		t.Fatalf("invalid cache control = %#v, %v", value, ok)
+	}
+	applyTextCacheControl(nil, "5m")
+	applyConversationCacheControl(nil, "5m")
+	applyConversationCacheControl(params.Messages, "bad")
 }
 
 func TestNewWithOptions(t *testing.T) {

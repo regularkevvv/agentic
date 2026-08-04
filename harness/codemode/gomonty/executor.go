@@ -31,6 +31,8 @@ import (
 
 const checkpointVersion = 1
 
+var marshalCheckpoint = json.Marshal
+
 // Config controls Monty compilation and execution limits. Native runtime
 // acquisition remains an explicit application concern through monty.Prepare
 // or the gomonty prepare command.
@@ -243,7 +245,7 @@ func checkpointCall(snapshot *frontier, tools []string, selected map[string]stru
 	if err := abandon(snapshot); err != nil {
 		return codemode.Step{}, err
 	}
-	encoded, err := json.Marshal(durableCheckpoint{
+	encoded, err := marshalCheckpoint(durableCheckpoint{
 		Version: checkpointVersion, Snapshot: dump, Tools: slices.Clone(tools),
 		CallID: snapshot.call.ID, CallName: snapshot.call.Name,
 	})

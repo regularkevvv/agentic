@@ -251,6 +251,9 @@ func (m *ResponsesModel) buildParams(req *core.ChatRequest) responses.ResponseNe
 	params := responses.ResponseNewParams{
 		Model: shared.ResponsesModel(m.model),
 	}
+	if req.PromptCache.Enabled() {
+		params.PromptCacheKey = openai.String(clampPromptCacheKey(req.PromptCache.Key, 64))
+	}
 
 	// Convert messages to input items, extracting system instructions. Every
 	// system message contributes: keeping only the last silently discards

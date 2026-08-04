@@ -560,7 +560,7 @@ func TestBedrockConvertResponseAndUsage(t *testing.T) {
 	if len(msg.GetToolUses()) != 1 || msg.GetToolUses()[0].Name != "lookup" {
 		t.Fatalf("unexpected tool uses %#v", msg.GetToolUses())
 	}
-	if chatResp.Usage.CacheReadTokens != 8 || chatResp.Usage.CacheCreationTokens != 5 {
+	if chatResp.Usage.PromptTokens != 113 || chatResp.Usage.TotalTokens != 153 || chatResp.Usage.CacheReadTokens != 8 || chatResp.Usage.CacheCreationTokens != 5 {
 		t.Fatalf("unexpected usage %#v", chatResp.Usage)
 	}
 }
@@ -652,6 +652,58 @@ func TestBuildParamsSystemCachePoint(t *testing.T) {
 	if cp.Value.Ttl != types.CacheTTLOneHour {
 		t.Fatalf("expected 1h TTL, got %q", cp.Value.Ttl)
 	}
+}
+
+func TestBuildParamsGeneratedPromptCachePoints(t *testing.T) {
+	model := &Model{modelID: "anthropic.test"}
+	for _, test := range []struct {
+		name      string
+		retention core.PromptCacheRetention
+		wantTTL   types.CacheTTL
+	}{
+		{"short", core.PromptCacheShort, types.CacheTTLFiveMinutes},
+		{"long", core.PromptCacheLong, types.CacheTTLOneHour},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			params, err := model.buildParams(&core.ChatRequest{
+				Model: "anthropic.test",
+				Messages: []core.Message{
+					core.NewTextMessage(core.RoleSystem, "instructions"),
+					core.NewTextMessage(core.RoleUser, "hi"),
+				},
+				PromptCache: &core.PromptCacheConfig{Key: "session", Retention: test.retention},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(params.system) != 2 || len(params.messages) != 1 || len(params.messages[0].Content) != 2 {
+				t.Fatalf("params = %#v", params)
+			}
+			systemPoint := params.system[1].(*types.SystemContentBlockMemberCachePoint)
+			messagePoint := params.messages[0].Content[1].(*types.ContentBlockMemberCachePoint)
+			if systemPoint.Value.Ttl != test.wantTTL || messagePoint.Value.Ttl != test.wantTTL {
+				t.Fatalf("TTLs = %q, %q", systemPoint.Value.Ttl, messagePoint.Value.Ttl)
+			}
+		})
+	}
+
+	explicit, err := model.buildParams(&core.ChatRequest{
+		Model: "anthropic.test",
+		Messages: []core.Message{
+			{Role: core.RoleSystem, Content: []core.Part{{Type: core.ContentText, Text: "system"}, {Type: core.ContentCachePoint, CachePoint: &core.CachePoint{TTL: "1h"}}}},
+			{Role: core.RoleUser, Content: []core.Part{{Type: core.ContentText, Text: "hi"}, {Type: core.ContentCachePoint, CachePoint: &core.CachePoint{TTL: "1h"}}}},
+		},
+		PromptCache: &core.PromptCacheConfig{Key: "session", Retention: core.PromptCacheShort},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(explicit.system) != 2 || len(explicit.messages[0].Content) != 2 {
+		t.Fatalf("explicit points duplicated: %#v", explicit)
+	}
+	appendGeneratedCachePoint(nil, &core.CachePoint{})
+	appendGeneratedCachePoint([]types.Message{{}}, &core.CachePoint{})
+	appendGeneratedCachePoint([]types.Message{{Content: []types.ContentBlock{&types.ContentBlockMemberText{Value: "x"}}}}, nil)
 }
 
 // The pinned SDK has ContentBlockMemberCachePoint and multimodal.go documents

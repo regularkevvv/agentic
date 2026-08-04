@@ -32,8 +32,8 @@ type moduleRule struct {
 	// at the repository root fail for anyone who has not installed those.
 	inWorkspace bool
 	// replacesRoot is whether its go.mod redirects the root module to this
-	// checkout. Every nested module does except harness, which requires a
-	// released version instead — see the test below.
+	// checkout. Release-consumer modules do not; repository acceptance and CGO
+	// modules do — see the test below.
 	replacesRoot bool
 }
 
@@ -41,11 +41,13 @@ type moduleRule struct {
 // something out of the dependency graph of `go get
 // github.com/regularkevvv/agentic`, and for no other reason.
 var modules = map[string]moduleRule{
-	".":                   {inWorkspace: true},
-	"harness":             {inWorkspace: true, replacesRoot: false},
-	"e2e":                 {inWorkspace: true, replacesRoot: true},
-	"provider/local/onnx": {inWorkspace: false, replacesRoot: true},
-	"e2e/localinference":  {inWorkspace: false, replacesRoot: true},
+	".":                        {inWorkspace: true},
+	"harness":                  {inWorkspace: true, replacesRoot: false},
+	"harness/codemode/gomonty": {inWorkspace: true, replacesRoot: false},
+	"tui":                      {inWorkspace: true, replacesRoot: false},
+	"e2e":                      {inWorkspace: true, replacesRoot: true},
+	"provider/local/onnx":      {inWorkspace: false, replacesRoot: true},
+	"e2e/localinference":       {inWorkspace: false, replacesRoot: true},
 }
 
 // internalPackages is every package directly under internal/. The list is short
@@ -69,6 +71,7 @@ var topLevelDirectories = map[string]string{
 	"provider": "every provider",
 	"testdata": "compile-failure fixtures",
 	"tool":     "tool builders and toolsets",
+	"tui":      "nested module: reusable terminal client",
 }
 
 // capabilityInterfaces are the contracts a provider package can satisfy. A
@@ -90,6 +93,20 @@ func repoRoot(t *testing.T) string {
 	return filepath.Dir(filename)
 }
 
+// requireRepositoryCheckout skips repository-topology assertions when this
+// package is being tested from a published module archive. Go module archives
+// intentionally omit nested modules and VCS metadata, so those assertions can
+// only describe a source checkout. Package-boundary tests still run in both
+// environments.
+func requireRepositoryCheckout(t *testing.T) {
+	t.Helper()
+	if _, err := os.Stat(filepath.Join(repoRoot(t), ".git")); os.IsNotExist(err) {
+		t.Skip("repository topology is unavailable in a published module archive")
+	} else if err != nil {
+		t.Fatalf("inspect repository metadata: %v", err)
+	}
+}
+
 // TestRepositoryHasExactlyTheDocumentedModules fails when a go.mod appears or
 // disappears without ARCHITECTURE.md and the map above being updated with it.
 //
@@ -97,6 +114,7 @@ func repoRoot(t *testing.T) string {
 // module could be left out of go.work and out of this file at once, and the
 // workspace test below would happily pass over a module it had never heard of.
 func TestRepositoryHasExactlyTheDocumentedModules(t *testing.T) {
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	root := repoRoot(t)
 
@@ -149,6 +167,7 @@ func TestRepositoryHasExactlyTheDocumentedModules(t *testing.T) {
 // Runtime, which is how a repository becomes unpleasant to check out. Both are
 // silent, and both are one line.
 func TestWorkspaceListsEveryNonCGOModule(t *testing.T) {
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	root := repoRoot(t)
 
@@ -205,18 +224,15 @@ func TestWorkspaceListsEveryNonCGOModule(t *testing.T) {
 // TestNestedModulesResolveTheRootAsDocumented protects a distinction that is
 // one line from being erased and leaves no trace when it is.
 //
-// harness deliberately has no `replace`: it requires a released Agentic, so
-// `GOWORK=off go test ./...` inside it is a rehearsal of what a user gets from
-// `go get`, which is the only way a released API is checked against a real
-// consumer before someone else finds the gap. That is what the "Harness release
-// view" CI job runs. go.work still overrides the requirement for local work, so
-// the difference is invisible day to day — adding a `replace` here would silence
-// the one job that would have caught a broken release, and every test would
-// still pass.
+// Harness, the optional GoMonty adapter, and TUI deliberately have no
+// `replace`: their ordered release checks rehearse what users obtain through
+// `go get`. go.work still supplies local modules during a coordinated change.
+// Adding a replace would make that consumer distinction disappear silently.
 //
 // The others replace the root because they are not consumers, they are parts of
 // this repository that happen to need their own dependency graph.
 func TestNestedModulesResolveTheRootAsDocumented(t *testing.T) {
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	root := repoRoot(t)
 
@@ -243,11 +259,9 @@ func TestNestedModulesResolveTheRootAsDocumented(t *testing.T) {
 				"a published version rather than this checkout, so a change here would not "+
 				"reach it until after a release.", module)
 		case !rule.replacesRoot && replaces:
-			t.Errorf("%s/go.mod replaces the root module, but it is documented as building "+
-				"against a released Agentic. That is the point of it: the release-view CI job "+
-				"is the only check that the published API still works for a real consumer, "+
-				"and a replace directive makes that job test this checkout instead — silently, "+
-				"while still passing. See ARCHITECTURE.md.", module)
+			t.Errorf("%s/go.mod replaces the root module, but it is documented as a release consumer. "+
+				"An ordered GOWORK=off release check must exercise published dependencies; "+
+				"a replace directive makes it test this checkout instead. See ARCHITECTURE.md.", module)
 		}
 	}
 }
@@ -309,6 +323,7 @@ func TestInternalHoldsOnlyDocumentedPackages(t *testing.T) {
 // because something did not obviously belong anywhere, which is the moment a
 // layout starts costing people time.
 func TestTopLevelDirectoriesAreDocumented(t *testing.T) {
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	assertDirectoryMatches(t, repoRoot(t), topLevelDirectories,
 		"%s/ is a new top-level directory and ARCHITECTURE.md does not name it. "+
@@ -426,6 +441,7 @@ func TestNoCompiledBinariesAreTracked(t *testing.T) {
 // headings and their slug rules, which is more machinery than the problem
 // deserves.
 func TestMarkdownLinksResolve(t *testing.T) {
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	root := repoRoot(t)
 

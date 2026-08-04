@@ -149,16 +149,13 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 
 			switch event.Type {
 			case "message_start":
-				// Extract input token usage from the initial message
-				if event.Message.Usage.InputTokens > 0 {
-					usage.PromptTokens = int(event.Message.Usage.InputTokens)
-				}
-				if event.Message.Usage.CacheReadInputTokens > 0 {
-					usage.CacheReadTokens = int(event.Message.Usage.CacheReadInputTokens)
-				}
-				if event.Message.Usage.CacheCreationInputTokens > 0 {
-					usage.CacheCreationTokens = int(event.Message.Usage.CacheCreationInputTokens)
-				}
+				// Anthropic reports uncached, cache-read, and cache-write input
+				// tokens as disjoint fields. Agentic normalizes PromptTokens to
+				// the complete request input so cache ratios remain portable.
+				usage.CacheReadTokens = int(event.Message.Usage.CacheReadInputTokens)
+				usage.CacheCreationTokens = int(event.Message.Usage.CacheCreationInputTokens)
+				usage.PromptTokens = int(event.Message.Usage.InputTokens) + usage.CacheReadTokens + usage.CacheCreationTokens
+				usage.TotalTokens = usage.PromptTokens
 
 			case "content_block_start":
 				block := event.ContentBlock
@@ -279,6 +276,7 @@ func (m *Model) buildParams(req *core.ChatRequest) anthropic.MessageNewParams {
 		Messages:  messages,
 		MaxTokens: defaultMaxTokens, // Required by Anthropic
 	}
+	cacheTTL := req.PromptCache.TTL()
 
 	if req.MaxTokens != nil {
 		params.MaxTokens = int64(*req.MaxTokens)
@@ -295,6 +293,10 @@ func (m *Model) buildParams(req *core.ChatRequest) anthropic.MessageNewParams {
 				Text: sysMsg.GetTextContent(),
 			})
 		}
+		// One breakpoint after the complete system prefix keeps the request under
+		// Anthropic's breakpoint limit even when callers use multiple system
+		// messages.
+		applyTextCacheControl(&blocks[len(blocks)-1], cacheTTL)
 		params.System = blocks
 	}
 
@@ -345,17 +347,62 @@ func (m *Model) buildParams(req *core.ChatRequest) anthropic.MessageNewParams {
 
 	if len(req.Tools) > 0 {
 		params.Tools = convertTools(req.Tools)
-		applyToolCacheControl(params.Tools, opts.CacheToolDefs)
+		toolTTL := cacheTTL
+		if opts.CacheToolDefs != "" {
+			toolTTL = opts.CacheToolDefs
+		}
+		applyToolCacheControl(params.Tools, toolTTL)
 		if req.ToolChoice != nil {
 			params.ToolChoice = convertToolChoice(*req.ToolChoice, thinkingEnabled)
 		}
 	}
+	applyConversationCacheControl(params.Messages, cacheTTL)
 
 	if req.ResponseFormat != nil {
 		params.OutputConfig = convertResponseFormat(req.ResponseFormat)
 	}
 
 	return params
+}
+
+func cacheControl(ttl string) (anthropic.CacheControlEphemeralParam, bool) {
+	var resolved anthropic.CacheControlEphemeralTTL
+	switch ttl {
+	case "5m":
+		resolved = anthropic.CacheControlEphemeralTTLTTL5m
+	case "1h":
+		resolved = anthropic.CacheControlEphemeralTTLTTL1h
+	default:
+		return anthropic.CacheControlEphemeralParam{}, false
+	}
+	return anthropic.CacheControlEphemeralParam{Type: "ephemeral", TTL: resolved}, true
+}
+
+func applyTextCacheControl(block *anthropic.TextBlockParam, ttl string) {
+	if block == nil {
+		return
+	}
+	if value, ok := cacheControl(ttl); ok {
+		block.CacheControl = value
+	}
+}
+
+func applyConversationCacheControl(messages []anthropic.MessageParam, ttl string) {
+	value, ok := cacheControl(ttl)
+	if !ok {
+		return
+	}
+	for messageIndex := len(messages) - 1; messageIndex >= 0; messageIndex-- {
+		if messages[messageIndex].Role != anthropic.MessageParamRoleUser {
+			continue
+		}
+		for blockIndex := len(messages[messageIndex].Content) - 1; blockIndex >= 0; blockIndex-- {
+			if current := messages[messageIndex].Content[blockIndex].GetCacheControl(); current != nil {
+				*current = value
+				return
+			}
+		}
+	}
 }
 
 // usesAdaptiveThinking reports whether a model belongs to a family that rejects
@@ -375,13 +422,8 @@ func usesAdaptiveThinking(model string) bool {
 // applyToolCacheControl places a cache breakpoint on the final tool definition,
 // which caches the whole tool block. An empty or unrecognized ttl is ignored.
 func applyToolCacheControl(tools []anthropic.ToolUnionParam, ttl string) {
-	var resolved anthropic.CacheControlEphemeralTTL
-	switch ttl {
-	case "5m":
-		resolved = anthropic.CacheControlEphemeralTTLTTL5m
-	case "1h":
-		resolved = anthropic.CacheControlEphemeralTTLTTL1h
-	default:
+	value, ok := cacheControl(ttl)
+	if !ok {
 		return
 	}
 	if len(tools) == 0 {
@@ -391,10 +433,7 @@ func applyToolCacheControl(tools []anthropic.ToolUnionParam, ttl string) {
 	if last == nil {
 		return
 	}
-	last.CacheControl = anthropic.CacheControlEphemeralParam{
-		Type: "ephemeral",
-		TTL:  resolved,
-	}
+	last.CacheControl = value
 }
 
 // convertResponseFormat converts core.ResponseFormat to Anthropic OutputConfigParam.
@@ -429,12 +468,15 @@ func (m *Model) convertResponse(resp *anthropic.Message) *core.ChatResponse {
 
 // extractAnthropicUsage extracts usage from an Anthropic response, including cache tokens.
 func extractAnthropicUsage(u anthropic.Usage) core.Usage {
+	cacheRead := int(u.CacheReadInputTokens)
+	cacheCreation := int(u.CacheCreationInputTokens)
+	prompt := int(u.InputTokens) + cacheRead + cacheCreation
 	usage := core.Usage{
-		PromptTokens:        int(u.InputTokens),
+		PromptTokens:        prompt,
 		CompletionTokens:    int(u.OutputTokens),
-		TotalTokens:         int(u.InputTokens + u.OutputTokens),
-		CacheReadTokens:     int(u.CacheReadInputTokens),
-		CacheCreationTokens: int(u.CacheCreationInputTokens),
+		TotalTokens:         prompt + int(u.OutputTokens),
+		CacheReadTokens:     cacheRead,
+		CacheCreationTokens: cacheCreation,
 	}
 	return usage
 }

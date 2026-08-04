@@ -8,6 +8,9 @@ the document does not, the document is wrong and should be fixed.
 - [multi-representation-inference.md](multi-representation-inference.md) — dense,
   learned sparse, and token multi-vector encoding: the interface, vector-space
   identity, and every provider that implements it
+- [Agentic Harness TUI](../tui/README.md) — embedding the provider-neutral
+  terminal client, running the offline example, configuring the standard
+  launcher, accessibility modes, and interaction keys
 
 **`docs/design/` records why.** These are written before or during the work and
 then left alone. They are not maintained and are not a description of the

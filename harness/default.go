@@ -40,6 +40,9 @@ type DefaultConfig struct {
 	SpillHead            int
 	SpillTail            int
 	DisableArtifactSpill bool
+	PromptCacheRetention agentic.PromptCacheRetention
+	ModelStreaming       bool
+	PermissionPolicy     *permission.Policy
 }
 
 // DefaultAssembly is the concrete substrate plus ordinary exported
@@ -125,8 +128,12 @@ func AssembleDefault(config DefaultConfig) (DefaultAssembly, error) {
 			}, structured)
 		},
 	}
+	permissionPolicy := config.PermissionPolicy
+	if permissionPolicy == nil {
+		permissionPolicy = permission.WorkspaceWrite()
+	}
 	permissionCapability, err := permission.NewCapability(
-		permission.WorkspaceWrite(),
+		permissionPolicy,
 		permission.WithOrdering(capability.Ordering{
 			After: []string{environmentcapability.ID, artifactcapability.ID},
 		}),
@@ -144,6 +151,9 @@ func AssembleDefault(config DefaultConfig) (DefaultAssembly, error) {
 			Clock:                 system.NewClock(),
 			IDs:                   system.NewIDs(),
 			ToolCancellationGrace: grace,
+			PromptCacheRetention:  config.PromptCacheRetention,
+			ModelStreaming:        config.ModelStreaming,
+			ToolSummarizer:        environmentcapability.ToolSummary,
 		},
 		Capabilities: []Capability{
 			environmentCapability,

@@ -11,6 +11,7 @@ import (
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
+	"github.com/regularkevvv/agentic/harness/observe"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 	"github.com/regularkevvv/agentic/harness/store"
 )
@@ -35,6 +36,9 @@ type Config[O any] struct {
 	Instructions          harnessruntime.ExchangeInstructionProvider
 	Scope                 harnessruntime.Scope
 	DelegationTools       []string
+	PromptCacheRetention  agentic.PromptCacheRetention
+	ModelStreaming        bool
+	ToolSummarizer        observe.ToolSummarizer
 }
 
 func (c Config[O]) validate() error {
@@ -77,6 +81,11 @@ func (c Config[O]) validate() error {
 	}
 	if c.ToolCancellationGrace < 0 {
 		return errors.New("tool cancellation grace cannot be negative")
+	}
+	if c.PromptCacheRetention != "" && c.PromptCacheRetention != agentic.PromptCacheNone &&
+		c.PromptCacheRetention != agentic.PromptCacheShort &&
+		c.PromptCacheRetention != agentic.PromptCacheLong {
+		return errors.New("session prompt-cache retention is invalid")
 	}
 	scope := c.Scope
 	if scope.SessionID == "" {

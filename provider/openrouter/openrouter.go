@@ -309,6 +309,9 @@ func (m *Model) buildParams(req *core.ChatRequest) openai.ChatCompletionNewParam
 		Messages: messages,
 		Model:    shared.ChatModel(m.model),
 	}
+	if req.PromptCache != nil && req.PromptCache.Enabled() {
+		params.PromptCacheKey = openai.String(promptCacheKey(req.PromptCache.Key))
+	}
 
 	if req.Temperature != nil {
 		params.Temperature = openai.Float(*req.Temperature)
@@ -341,6 +344,14 @@ func (m *Model) buildParams(req *core.ChatRequest) openai.ChatCompletionNewParam
 	}
 
 	return params
+}
+
+func promptCacheKey(value string) string {
+	runes := []rune(value)
+	if len(runes) > 64 {
+		runes = runes[:64]
+	}
+	return string(runes)
 }
 
 // Compile-time checks that Model implements both core interfaces.

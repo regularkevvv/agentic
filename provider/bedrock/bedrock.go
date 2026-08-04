@@ -438,6 +438,13 @@ func (m *Model) buildParams(req *core.ChatRequest) (converseParams, error) {
 		}
 	}
 	p.system = convertSystemBlocks(strings.Join(systemText, "\n\n"), systemCache)
+	if req.PromptCache != nil && req.PromptCache.Enabled() {
+		cachePoint := &core.CachePoint{TTL: req.PromptCache.TTL()}
+		if systemCache == nil && len(p.system) > 0 {
+			p.system = append(p.system, &types.SystemContentBlockMemberCachePoint{Value: cachePointBlock(cachePoint)})
+		}
+		appendGeneratedCachePoint(p.messages, cachePoint)
+	}
 
 	// Every message may have been dropped for holding only content Bedrock
 	// cannot carry. An empty Messages array is a ValidationException from the
@@ -574,6 +581,22 @@ func cachePointBlock(cp *core.CachePoint) types.CachePointBlock {
 		block.Ttl = types.CacheTTLOneHour
 	}
 	return block
+}
+
+// appendGeneratedCachePoint marks the longest stable conversational prefix.
+// It does not duplicate an explicit trailing marker supplied by an application.
+func appendGeneratedCachePoint(messages []types.Message, cp *core.CachePoint) {
+	if len(messages) == 0 || cp == nil {
+		return
+	}
+	last := &messages[len(messages)-1]
+	if len(last.Content) == 0 {
+		return
+	}
+	if _, explicit := last.Content[len(last.Content)-1].(*types.ContentBlockMemberCachePoint); explicit {
+		return
+	}
+	last.Content = append(last.Content, &types.ContentBlockMemberCachePoint{Value: cachePointBlock(cp)})
 }
 
 // convertSystemBlocks builds the Bedrock system content blocks from the joined
@@ -897,16 +920,16 @@ func convertStopReason(reason types.StopReason) core.FinishReason {
 
 // extractUsage converts Bedrock TokenUsage to agentic Usage.
 func extractUsage(tu *types.TokenUsage) core.Usage {
+	cacheRead := int(aws.ToInt32(tu.CacheReadInputTokens))
+	cacheCreation := int(aws.ToInt32(tu.CacheWriteInputTokens))
+	prompt := int(aws.ToInt32(tu.InputTokens)) + cacheRead + cacheCreation
+	completion := int(aws.ToInt32(tu.OutputTokens))
 	usage := core.Usage{
-		PromptTokens:     int(aws.ToInt32(tu.InputTokens)),
-		CompletionTokens: int(aws.ToInt32(tu.OutputTokens)),
-		TotalTokens:      int(aws.ToInt32(tu.TotalTokens)),
-	}
-	if tu.CacheReadInputTokens != nil {
-		usage.CacheReadTokens = int(aws.ToInt32(tu.CacheReadInputTokens))
-	}
-	if tu.CacheWriteInputTokens != nil {
-		usage.CacheCreationTokens = int(aws.ToInt32(tu.CacheWriteInputTokens))
+		PromptTokens:        prompt,
+		CompletionTokens:    completion,
+		TotalTokens:         prompt + completion,
+		CacheReadTokens:     cacheRead,
+		CacheCreationTokens: cacheCreation,
 	}
 	return usage
 }

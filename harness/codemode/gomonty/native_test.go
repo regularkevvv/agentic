@@ -81,6 +81,15 @@ func TestMontyEngineCompileStartRestoreBoundaries(t *testing.T) {
 	if defaults.compile == nil || defaults.restore == nil {
 		t.Fatal("default Monty engine is incomplete")
 	}
+	// The production factory must remain callable without preparing or
+	// downloading a runtime. An unprepared host returns an error; a developer
+	// cache may make the same probe compile successfully.
+	compiled, compileErr := defaults.compile("42", monty.CompileOptions{ScriptName: "coverage.py"})
+	if compileErr == nil {
+		if err := compiled.Close(); err != nil {
+			t.Fatalf("close production runner: %v", err)
+		}
+	}
 }
 
 func TestWrapMontyProgressVariantsWithoutNativeRuntime(t *testing.T) {

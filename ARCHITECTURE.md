@@ -35,6 +35,8 @@ agentic/                    the library — one import path for callers
     testutil/               doubles for the root package's own tests
 
   harness/                  nested module: durable sessions (experimental)
+    codemode/gomonty/       nested module: optional GoMonty executor
+  tui/                      nested module: reusable terminal client
   e2e/                      nested module: live tests and runnable examples
     localinference/         nested module (CGO): the example that uses onnx
 
@@ -76,11 +78,13 @@ everything else is chat.
 | A test double for *this repo* | `internal/testutil/` | Not part of the API |
 | A contract suite a provider must pass | `provider/test/conformance/` | Beside the doubles, importable by an out-of-tree provider |
 | A runnable example | `e2e/examples/<name>/` | The `e2e` module, so a table writer never reaches a caller's binary |
+| A compatible-harness terminal client | `tui/` | Pure-Go client port, renderer, app, Harness adapter, and explicit standard assembly |
+| A Code Mode backend that loads a native runtime | `harness/codemode/<backend>/` as a nested module | The portable Code Mode capability remains in Harness; the optional runtime stays out of its graph |
 | A live test against a real API | `e2e/providers/`, behind `//go:build e2e` | Needs a key; never runs in the default `make test` |
 | A record of why a decision was made | `docs/design/` | Not maintained afterwards; see `docs/README.md` |
 | A description of what exists | `docs/` | Maintained; wrong if the code moves and it doesn't |
 
-## The five modules
+## The seven modules
 
 A nested module exists to keep something out of a dependency graph, and for no
 other reason. Depth means nothing to Go — `provider/local/onnx` is no more
@@ -90,7 +94,9 @@ is what `go get github.com/regularkevvv/agentic` should pull.
 | Module | In `go.work` | Resolves the root as | Exists because |
 |---|:-:|---|---|
 | `.` | ✓ | — | The library |
-| `harness/` | ✓ | **released `v0.5.1`** | Experimental; its dependencies and its API churn should not be the library's |
+| `harness/` | ✓ | **Agentic `v0.6.0`** | Experimental; its dependencies and its API churn should not be the library's |
+| `harness/codemode/gomonty/` | ✓ | **Harness `v0.2.0`, GoMonty `v0.0.15`** | Optional native-backed Code Mode execution must not enter the core Harness graph |
+| `tui/` | ✓ | **Agentic `v0.6.0`, Harness `v0.2.0`** | Bubble Tea and terminal application dependencies must not enter either library graph |
 | `e2e/` | ✓ | this checkout | Live tests and examples need keys, table writers, and fixtures that no caller should inherit |
 | `provider/local/onnx/` | | this checkout | CGO, ONNX Runtime, and a statically linked tokenizer |
 | `e2e/localinference/` | | this checkout | The example that imports it, kept apart for the same reason |
@@ -98,20 +104,23 @@ is what `go get github.com/regularkevvv/agentic` should pull.
 The last two are absent from `go.work` on purpose: including them would make
 `go build ./...` at the repository root fail for anyone who has not installed a
 native ONNX Runtime. They are built, tested, and linted by the `onnx` CI job, so
-they are gated — just not by the commands you run every day. `make lint-all`
-covers all five when you do have the libraries.
+they are gated — just not by the commands you run every day. The GoMonty
+bindings are cgo-free and prepare their native runtime explicitly at execution,
+so that optional module remains in `go.work`. `make lint-all` covers all seven
+when you do have the ONNX libraries.
 
-**`harness/` has no `replace` directive, and that is deliberate.** It requires a
-released Agentic, so running its tests with `GOWORK=off` is a rehearsal of what
-`go get` gives a user — the only check that the published API still works for a
-real consumer before someone else finds the gap. That is the "Harness release
-view" CI job. Locally `go.work` overrides the requirement, so the distinction is
-invisible day to day, and adding a `replace` would silence that job while every
-test kept passing. A test fails if anyone does.
+**`harness/`, `harness/codemode/gomonty/`, and `tui/` have no `replace`
+directives, and that is deliberate.** They are released in dependency order:
+root Agentic, Harness, the optional GoMonty adapter, then TUI. Their
+`GOWORK=off` release checks rehearse what `go get` gives a user. Locally
+`go.work` supplies the modules being changed together, so the distinction is
+invisible day to day. The tag-triggered `release-view.yml` workflow enforces
+this order against published dependencies; it can also be dispatched manually
+for one module. A test fails if a replace directive erases the boundary.
 
-The other three do replace the root, because they are not consumers — they are
-parts of this repository that happen to need their own dependency graph. That is
-also why none of them can be `go install`ed by version.
+The e2e modules replace the libraries they exercise because they are repository
+acceptance code rather than release consumers. The two CGO modules also replace
+the root for the same reason.
 
 ## What is enforced
 
@@ -122,7 +131,8 @@ Not by convention — by tests that fail.
 | Every provider declares its capabilities in code | `architecture_test.go` |
 | The chat and retrieval halves do not reference each other | `architecture_test.go` |
 | `go.work` lists every non-CGO module and no CGO module | `architecture_test.go` |
-| `harness` builds against a released Agentic; the others against this checkout | `architecture_test.go` |
+| Release modules have no replace; repository acceptance/CGO modules resolve this checkout | `architecture_test.go` |
+| TUI and the optional GoMonty adapter contain no replace or cross-import | their module `architecture_test.go` files |
 | `internal/` holds only the four documented packages | `architecture_test.go` |
 | Every top-level directory is one this document names | `architecture_test.go` |
 | No compiled binary is tracked in git | `architecture_test.go` |

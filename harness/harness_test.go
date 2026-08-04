@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
@@ -18,6 +19,7 @@ import (
 	"github.com/regularkevvv/agentic/harness/event/inproc"
 	"github.com/regularkevvv/agentic/harness/runtime/system"
 	storememory "github.com/regularkevvv/agentic/harness/store/memory"
+	providertest "github.com/regularkevvv/agentic/provider/test"
 )
 
 type runnerOnly struct{}
@@ -29,6 +31,27 @@ func (runnerOnly) Run(context.Context, string, ...agentic.RunOption) (*agentic.R
 type facadeDriver struct {
 	mu       sync.Mutex
 	badFirst bool
+}
+
+type streamingModel struct {
+	streamCalls atomic.Int32
+	plainCalls  atomic.Int32
+}
+
+func (*streamingModel) Name() string { return "test:streaming" }
+
+func (m *streamingModel) Request(context.Context, *agentic.ChatRequest) (*agentic.ChatResponse, error) {
+	m.plainCalls.Add(1)
+	return nil, errors.New("plain request used")
+}
+
+func (m *streamingModel) RequestStream(context.Context, *agentic.ChatRequest) (*agentic.StreamResult, error) {
+	m.streamCalls.Add(1)
+	events := make(chan agentic.StreamEvent, 2)
+	events <- agentic.StreamEvent{Type: agentic.StreamEventTextDelta, Delta: "streamed"}
+	events <- agentic.StreamEvent{Type: agentic.StreamEventDone, FinishReason: agentic.FinishReasonStop}
+	close(events)
+	return agentic.NewStreamResult(events), nil
 }
 
 func (d *facadeDriver) Run(ctx context.Context, prompt string, options ...agentic.RunOption) (*agentic.Result[string], error) {
@@ -85,6 +108,87 @@ func TestNewRuntimeRequiresDriverAndExplicitSubstrates(t *testing.T) {
 	driver := &facadeDriver{}
 	if _, err := NewRuntime[string](driver, RuntimeConfig{}); err == nil {
 		t.Fatal("missing store succeeded")
+	}
+}
+
+func TestHarnessUsesStableSessionPromptCacheAcrossRecovery(t *testing.T) {
+	model := providertest.NewTestModel(
+		providertest.ModelResponse{Text: "first"},
+		providertest.ModelResponse{Text: "second"},
+	)
+	runtime, err := NewRuntime[string](agentic.NewAgent("system", model), runtimeConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := runtime.NewSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := session.ID()
+	if _, err := session.Prompt(context.Background(), agentic.NewTextMessage(agentic.RoleUser, "one")); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := runtime.ResumeSession(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resumed.Prompt(context.Background(), agentic.NewTextMessage(agentic.RoleUser, "two")); err != nil {
+		t.Fatal(err)
+	}
+	for index, request := range model.Calls() {
+		if request.PromptCache == nil || request.PromptCache.Key != id || request.PromptCache.Retention != agentic.PromptCacheShort {
+			t.Fatalf("request %d cache = %#v", index, request.PromptCache)
+		}
+	}
+	_ = resumed.Close(context.Background())
+
+	disabledConfig := runtimeConfig(t)
+	disabledConfig.PromptCacheRetention = agentic.PromptCacheNone
+	disabledModel := providertest.NewTestModel(providertest.ModelResponse{Text: "done"})
+	disabled, err := NewRuntime[string](agentic.NewAgent("system", disabledModel), disabledConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabledSession, _ := disabled.NewSession(context.Background())
+	if _, err := disabledSession.Prompt(context.Background(), agentic.NewTextMessage(agentic.RoleUser, "one")); err != nil {
+		t.Fatal(err)
+	}
+	if disabledModel.Calls()[0].PromptCache != nil {
+		t.Fatalf("disabled request cache = %#v", disabledModel.Calls()[0].PromptCache)
+	}
+	_ = disabledSession.Close(context.Background())
+}
+
+func TestHarnessRejectsInvalidPromptCacheRetention(t *testing.T) {
+	config := runtimeConfig(t)
+	config.PromptCacheRetention = "forever"
+	if _, err := NewRuntime[string](&facadeDriver{}, config); err == nil {
+		t.Fatal("invalid prompt-cache retention succeeded")
+	}
+}
+
+func TestHarnessCanSelectStreamingModelExecution(t *testing.T) {
+	model := &streamingModel{}
+	config := runtimeConfig(t)
+	config.ModelStreaming = true
+	runtime, err := NewRuntime[string](agentic.NewAgent("system", model), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := runtime.NewSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close(context.Background()) }()
+	execution, err := session.Prompt(context.Background(), agentic.NewTextMessage(agentic.RoleUser, "stream"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if execution.Result == nil || execution.Result.Output != "streamed" || model.streamCalls.Load() != 1 || model.plainCalls.Load() != 0 {
+		t.Fatalf("execution=%#v stream=%d plain=%d", execution, model.streamCalls.Load(), model.plainCalls.Load())
 	}
 }
 

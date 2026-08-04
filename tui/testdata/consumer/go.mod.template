@@ -1,0 +1,5 @@
+module example.com/agentic-tui-consumer
+
+go 1.25.4
+
+require github.com/regularkevvv/agentic/tui v0.1.0

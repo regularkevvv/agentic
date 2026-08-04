@@ -77,6 +77,68 @@ type deferralPayload struct {
 	Requests []deferredRequest `json:"requests"`
 }
 
+// Approval is the canonical, redacted operator view of one permission request.
+// It intentionally excludes raw tool arguments and opaque deferral bytes.
+type Approval struct {
+	CallID   string
+	ToolName string
+	Request  PermissionRequest
+}
+
+// InspectSuspension validates the root suspension envelope and the complete
+// permission deferral before returning approvals in executable-call order.
+func InspectSuspension(suspension agentic.Suspension) ([]Approval, error) {
+	root, err := harnessruntime.InspectToolSuspension(suspension, harnessruntime.PermissionDeferralKind)
+	if err != nil {
+		return nil, err
+	}
+	frontier, err := harnessruntime.InspectDeferred(suspension)
+	if err != nil {
+		return nil, err
+	}
+	var payload deferralPayload
+	if err := json.Unmarshal(root.Deferral.Payload, &payload); err != nil {
+		return nil, fmt.Errorf("%w: decode permission approvals: %v", harnessruntime.ErrInvalidResumeRequest, err)
+	}
+	required := make(map[string]bool, len(frontier.RequiredResolutionIDs))
+	for _, id := range frontier.RequiredResolutionIDs {
+		required[id] = true
+	}
+	requests := make(map[string]PermissionRequest, len(payload.Requests))
+	for _, value := range payload.Requests {
+		if value.CallID == "" || !required[value.CallID] {
+			return nil, fmt.Errorf("%w: unknown permission approval %q", harnessruntime.ErrInvalidResumeRequest, value.CallID)
+		}
+		if _, exists := requests[value.CallID]; exists {
+			return nil, fmt.Errorf("%w: duplicate permission approval %q", harnessruntime.ErrInvalidResumeRequest, value.CallID)
+		}
+		if value.Request.Capability == "" || value.Request.Action == "" || !value.Request.CanonicalResource.Valid() {
+			return nil, fmt.Errorf("%w: incomplete permission approval %q", harnessruntime.ErrInvalidResumeRequest, value.CallID)
+		}
+		requests[value.CallID] = value.Request
+	}
+	if len(requests) != len(required) {
+		return nil, fmt.Errorf("%w: got %d permission approvals for %d required calls", harnessruntime.ErrInvalidResumeRequest, len(requests), len(required))
+	}
+	byID := make(map[string]agentic.ToolUse, len(frontier.Calls))
+	for _, call := range frontier.Calls {
+		byID[call.ID] = call
+	}
+	approvals := make([]Approval, 0, len(required))
+	for _, id := range frontier.ExecutableCallIDs {
+		request, ok := requests[id]
+		if !ok {
+			continue
+		}
+		call, ok := byID[id]
+		if !ok || call.Name == "" {
+			return nil, fmt.Errorf("%w: permission call %q is absent", harnessruntime.ErrInvalidResumeRequest, id)
+		}
+		approvals = append(approvals, Approval{CallID: id, ToolName: call.Name, Request: request})
+	}
+	return approvals, nil
+}
+
 func (g *gate) EvaluateBatch(
 	ctx context.Context,
 	calls []agentic.ToolUse,

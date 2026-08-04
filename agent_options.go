@@ -21,6 +21,7 @@ type agentConfig struct {
 	maxValidationRetries int
 	usageLimits          *UsageLimits
 	thinking             *ThinkingConfig
+	promptCache          *PromptCacheConfig
 	endStrategy          EndStrategy
 	toolPrepareFunc      toolPrepareAdapter
 	historyProcessor     HistoryProcessor
@@ -90,6 +91,15 @@ func WithThinking(config ThinkingConfig) AgentOption {
 	return func(c *agentConfig) { c.thinking = &config }
 }
 
+// WithPromptCache configures a stable provider prompt-cache identity for every
+// run. Harness normally overrides the key per durable session.
+func WithPromptCache(config PromptCacheConfig) AgentOption {
+	return func(c *agentConfig) {
+		copy := config
+		c.promptCache = &copy
+	}
+}
+
 func WithUsageLimits(limits UsageLimits) AgentOption {
 	return func(c *agentConfig) { c.usageLimits = &limits }
 }
@@ -143,6 +153,7 @@ type runOptions struct {
 	toolResultProcessor   ToolResultProcessor
 	modelStreaming        *bool
 	toolCancellationGrace *time.Duration
+	promptCache           *PromptCacheConfig
 }
 
 func WithMessages(messages ...Message) RunOption {
@@ -215,6 +226,15 @@ func WithRunModelStreaming(enabled bool) RunOption {
 // already-admitted handlers after execution context cancellation.
 func WithRunToolCancellationGrace(grace time.Duration) RunOption {
 	return func(o *runOptions) { o.toolCancellationGrace = &grace }
+}
+
+// WithRunPromptCache sets the stable cache identity for one run. It is a run
+// option so session runtimes can bind their durable ID after agent creation.
+func WithRunPromptCache(config PromptCacheConfig) RunOption {
+	return func(o *runOptions) {
+		copy := config
+		o.promptCache = &copy
+	}
 }
 
 func applyRunOptions(opts []RunOption) *runOptions {

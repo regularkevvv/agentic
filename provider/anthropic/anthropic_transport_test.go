@@ -97,7 +97,7 @@ func TestAnthropicRequestAndStreamWithLocalServer(t *testing.T) {
 	if resp.FinishReason != core.FinishReasonStop || resp.RawFinishReason != "end_turn" {
 		t.Fatalf("unexpected finish reason %q/%q", resp.FinishReason, resp.RawFinishReason)
 	}
-	if resp.Usage.CacheReadTokens != 1 || resp.Usage.CacheCreationTokens != 3 {
+	if resp.Usage.PromptTokens != 8 || resp.Usage.TotalTokens != 10 || resp.Usage.CacheReadTokens != 1 || resp.Usage.CacheCreationTokens != 3 {
 		t.Fatalf("unexpected request usage %#v", resp.Usage)
 	}
 
@@ -131,7 +131,7 @@ func TestAnthropicRequestAndStreamWithLocalServer(t *testing.T) {
 	if events[4].Type != core.StreamEventTextDelta || events[4].Delta != "hello" {
 		t.Fatalf("unexpected text delta %#v", events[4])
 	}
-	if events[5].Type != core.StreamEventDone || events[5].Usage == nil || events[5].Usage.TotalTokens != 12 {
+	if events[5].Type != core.StreamEventDone || events[5].Usage == nil || events[5].Usage.PromptTokens != 10 || events[5].Usage.TotalTokens != 15 {
 		t.Fatalf("unexpected done event %#v", events[5])
 	}
 	if events[5].FinishReason != core.FinishReasonLength {

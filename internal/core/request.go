@@ -72,6 +72,43 @@ type ThinkingConfig struct {
 	BudgetTokens int
 }
 
+// PromptCacheRetention selects the lifetime of provider-managed prompt-cache
+// entries. Providers without an explicit cache-control surface ignore the
+// retention while still honoring a stable cache key when they support one.
+type PromptCacheRetention string
+
+const (
+	PromptCacheNone  PromptCacheRetention = "none"
+	PromptCacheShort PromptCacheRetention = "short"
+	PromptCacheLong  PromptCacheRetention = "long"
+)
+
+// PromptCacheConfig carries provider-neutral cache intent. Key must remain
+// stable for the logical session; providers may clamp it to their wire limit.
+// Short maps to the provider's ordinary ephemeral cache and Long requests the
+// longest supported interactive-session retention.
+type PromptCacheConfig struct {
+	Key       string
+	Retention PromptCacheRetention
+}
+
+// Enabled reports whether this request should participate in prompt caching.
+func (c *PromptCacheConfig) Enabled() bool {
+	return c != nil && c.Key != "" && c.Retention != PromptCacheNone
+}
+
+// TTL returns the portable explicit-breakpoint duration. Empty means caching
+// is disabled. Providers with a different retention vocabulary translate it.
+func (c *PromptCacheConfig) TTL() string {
+	if !c.Enabled() {
+		return ""
+	}
+	if c.Retention == PromptCacheLong {
+		return "1h"
+	}
+	return "5m"
+}
+
 // ChatRequest represents a standardized chat completion request.
 type ChatRequest struct {
 	Model          string
@@ -84,6 +121,7 @@ type ChatRequest struct {
 	Stream         bool
 	ResponseFormat *ResponseFormat
 	Thinking       *ThinkingConfig
+	PromptCache    *PromptCacheConfig
 
 	// StopSequences halts generation when any of these strings is produced.
 	// Supported by every provider in this library. The generated text does
@@ -121,6 +159,16 @@ func (r *ChatRequest) Validate() error {
 	}
 	if r.MaxTokens != nil && *r.MaxTokens < 0 {
 		return errors.New("max tokens must be non-negative")
+	}
+	if r.PromptCache != nil {
+		switch r.PromptCache.Retention {
+		case "", PromptCacheNone, PromptCacheShort, PromptCacheLong:
+		default:
+			return errors.New("prompt cache retention is invalid")
+		}
+		if r.PromptCache.Retention != PromptCacheNone && r.PromptCache.Key == "" {
+			return errors.New("prompt cache key cannot be empty when caching is enabled")
+		}
 	}
 	return nil
 }
@@ -168,6 +216,8 @@ const (
 // Usage represents token usage statistics for an entire agent run.
 type Usage struct {
 	// Core token counts (accumulated across all requests).
+	// PromptTokens is total request input, including cache reads and writes.
+	// Providers whose APIs report those as disjoint fields normalize them here.
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int

@@ -73,6 +73,22 @@ func TestWithRunMaxIterations(t *testing.T) {
 	}
 }
 
+func TestPromptCacheOptionsCopyValues(t *testing.T) {
+	config := PromptCacheConfig{Key: "agent", Retention: PromptCacheLong}
+	agentConfig := defaultAgentConfig()
+	WithPromptCache(config)(&agentConfig)
+	config.Key = "mutated"
+	if agentConfig.promptCache == nil || agentConfig.promptCache.Key != "agent" {
+		t.Fatalf("agent prompt cache = %#v", agentConfig.promptCache)
+	}
+	runConfig := PromptCacheConfig{Key: "run", Retention: PromptCacheShort}
+	options := applyRunOptions([]RunOption{WithRunPromptCache(runConfig)})
+	runConfig.Key = "mutated"
+	if options.promptCache == nil || options.promptCache.Key != "run" {
+		t.Fatalf("run prompt cache = %#v", options.promptCache)
+	}
+}
+
 func TestDefaultAgentConfig(t *testing.T) {
 	cfg := defaultAgentConfig()
 	if cfg.maxIterations != 10 {

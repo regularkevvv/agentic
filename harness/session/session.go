@@ -13,6 +13,7 @@ import (
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
+	"github.com/regularkevvv/agentic/harness/observe"
 	"github.com/regularkevvv/agentic/harness/repair"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 	"github.com/regularkevvv/agentic/harness/store"
@@ -65,6 +66,9 @@ type Session[O any] struct {
 	instructions harnessruntime.ExchangeInstructionProvider
 	scope        harnessruntime.Scope
 	delegation   []string
+	promptCache  agentic.PromptCacheRetention
+	streaming    bool
+	summarize    observe.ToolSummarizer
 	compaction   *contextpolicy.Compaction
 
 	closeMu           sync.Mutex
@@ -217,6 +221,9 @@ func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session
 		instructions: config.Instructions,
 		scope:        scope,
 		delegation:   append([]string(nil), config.DelegationTools...),
+		promptCache:  config.PromptCacheRetention,
+		streaming:    config.ModelStreaming,
+		summarize:    config.ToolSummarizer,
 		childBudget:  make(chan struct{}, 1),
 		state:        Idle,
 		stateChange:  make(chan struct{}),

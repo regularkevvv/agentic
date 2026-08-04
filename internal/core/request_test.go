@@ -63,6 +63,26 @@ func TestChatRequestValidate(t *testing.T) {
 			},
 			wantErr: false,
 		},
+		{
+			name:    "invalid prompt cache retention",
+			req:     ChatRequest{Model: "gpt-4", Messages: []Message{{Role: RoleUser}}, PromptCache: &PromptCacheConfig{Key: "x", Retention: "forever"}},
+			wantErr: true,
+		},
+		{
+			name:    "enabled prompt cache needs key",
+			req:     ChatRequest{Model: "gpt-4", Messages: []Message{{Role: RoleUser}}, PromptCache: &PromptCacheConfig{Retention: PromptCacheShort}},
+			wantErr: true,
+		},
+		{
+			name:    "disabled prompt cache may omit key",
+			req:     ChatRequest{Model: "gpt-4", Messages: []Message{{Role: RoleUser}}, PromptCache: &PromptCacheConfig{Retention: PromptCacheNone}},
+			wantErr: false,
+		},
+		{
+			name:    "empty retention with key remains provider opt out",
+			req:     ChatRequest{Model: "gpt-4", Messages: []Message{{Role: RoleUser}}, PromptCache: &PromptCacheConfig{Key: "x"}},
+			wantErr: false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -72,6 +92,22 @@ func TestChatRequestValidate(t *testing.T) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestPromptCacheConfigSemantics(t *testing.T) {
+	t.Parallel()
+	var absent *PromptCacheConfig
+	if absent.Enabled() || absent.TTL() != "" {
+		t.Fatal("nil cache config enabled")
+	}
+	if (&PromptCacheConfig{Key: "x", Retention: PromptCacheNone}).Enabled() {
+		t.Fatal("none cache enabled")
+	}
+	short := &PromptCacheConfig{Key: "x", Retention: PromptCacheShort}
+	long := &PromptCacheConfig{Key: "x", Retention: PromptCacheLong}
+	if !short.Enabled() || short.TTL() != "5m" || !long.Enabled() || long.TTL() != "1h" {
+		t.Fatalf("short=%v/%q long=%v/%q", short.Enabled(), short.TTL(), long.Enabled(), long.TTL())
 	}
 }
 

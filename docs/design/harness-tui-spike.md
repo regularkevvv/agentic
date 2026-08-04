@@ -104,9 +104,12 @@ last cursor and redraw. It is not a terminal schema and does not embed Bubble
 Tea, ANSI, markdown, or configuration.
 
 The projection must not make tool arguments automatically visible. The default
-tool event contains call identity and phase. A capability may attach an
-explicitly safe, bounded summary through a redactor/presenter port. This keeps
-secrets in a tool input or result out of a default terminal transcript.
+tool event contains call identity and phase. An application may set
+`RuntimeConfig.ToolSummarizer` at the capability boundary to attach an
+explicitly safe, bounded summary. A later `tui.ToolPresenter` sees only that
+projection and selects its category, title, and detail. This keeps secrets in
+a tool input or result out of a default terminal transcript while allowing
+tool-specific presentation without hardcoding it into the renderer.
 
 ### 2. Public operator view of a permission suspension
 
@@ -317,10 +320,13 @@ screen-reader and log-friendly modes are first-class, not an afterthought.
 
 ### Standard application configuration: explicit model profile
 
-Provider, model, context-window size, system prompt, workspace root, session
-directory, and permission policy belong to the application assembly. They are
-not defaults in the reusable `tui` package because choosing a model silently
-chooses cost, capability, credential source, and context geometry.
+Provider, model, context-window size, system prompt, resolved workspace root,
+session directory, and permission policy belong to the application assembly.
+They are not defaults in the reusable `tui` package because choosing a model
+silently chooses cost, capability, credential source, and context geometry.
+The standard executable resolves its workspace from explicit `--workspace`,
+then an optional profile root, then its current working directory; the reusable
+Harness assembly still receives an explicit absolute boundary.
 
 `tui/standard` has a registry of explicit `ProviderFactory` values and a
 configurable named profile:
@@ -332,9 +338,6 @@ model = "claude-sonnet-4-6"
 context_window_tokens = 200000
 system_prompt_file = "~/.config/agentic/work.md"
 permission = "workspace-write" # read-only | workspace-write | custom
-
-[profile.work.workspace]
-root = "/absolute/path/to/repository"
 ```
 
 The example is a template, not a claim that this model is universally
