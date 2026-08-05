@@ -1,0 +1,836 @@
+[
+  {
+    "seq": 1,
+    "kind": "session.created",
+    "entry_id": "e1",
+    "parent_id": "",
+    "payload": {
+      "Options": {
+        "Budget": null,
+        "DrainAll": false
+      },
+      "Scope": {
+        "Agent": "",
+        "Depth": 0,
+        "ParentSessionID": "",
+        "SessionID": "SESSION_ID"
+      }
+    }
+  },
+  {
+    "seq": 2,
+    "kind": "run.opened",
+    "entry_id": "e2",
+    "parent_id": "e1",
+    "payload": {
+      "ID": "run_c1",
+      "Instructions": "",
+      "Limits": null,
+      "Mode": "start",
+      "Recovery": false
+    }
+  },
+  {
+    "seq": 3,
+    "kind": "message",
+    "entry_id": "e3",
+    "parent_id": "e2",
+    "payload": {
+      "Message": {
+        "content": [
+          {
+            "text": "hello",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      },
+      "QueueID": "",
+      "Source": "prompt"
+    }
+  },
+  {
+    "seq": 4,
+    "kind": "agentic.run_started",
+    "entry_id": "e4",
+    "parent_id": "e3",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 2,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {},
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 0,
+      "Type": 10
+    }
+  },
+  {
+    "seq": 5,
+    "kind": "agentic.turn_started",
+    "entry_id": "e5",
+    "parent_id": "e4",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 2,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {},
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 0,
+      "Type": 11
+    }
+  },
+  {
+    "seq": 6,
+    "kind": "queue.accepted",
+    "entry_id": "e6",
+    "parent_id": "e5",
+    "payload": {
+      "Entry": {
+        "accepted": "2026-01-02T03:04:05Z",
+        "id": "queue_c1",
+        "kind": "steer",
+        "message": {
+          "content": [
+            {
+              "text": "steer please",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "ID": "queue_c1",
+      "Reason": ""
+    }
+  },
+  {
+    "seq": 7,
+    "kind": "queue.accepted",
+    "entry_id": "e7",
+    "parent_id": "e6",
+    "payload": {
+      "Entry": {
+        "accepted": "2026-01-02T03:04:05Z",
+        "id": "queue_c2",
+        "kind": "follow_up",
+        "message": {
+          "content": [
+            {
+              "text": "follow please",
+              "type": "text"
+            }
+          ],
+          "role": "user"
+        }
+      },
+      "ID": "queue_c2",
+      "Reason": ""
+    }
+  },
+  {
+    "seq": 8,
+    "kind": "agentic.assistant_committed",
+    "entry_id": "e8",
+    "parent_id": "e7",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 1,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Message": {
+          "content": [
+            {
+              "text": "first",
+              "type": "text"
+            }
+          ],
+          "role": "assistant"
+        }
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 0,
+      "Type": 4
+    }
+  },
+  {
+    "seq": 9,
+    "kind": "agentic.output_validated",
+    "entry_id": "e9",
+    "parent_id": "e8",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 1,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Candidate": {
+          "Source": 1,
+          "ToolCallID": ""
+        }
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 0,
+      "Type": 8
+    }
+  },
+  {
+    "seq": 10,
+    "kind": "agentic.turn_ended",
+    "entry_id": "e10",
+    "parent_id": "e9",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 2,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Candidate": {
+          "Source": 1,
+          "ToolCallID": ""
+        },
+        "RunUsage": {
+          "CacheCreationTokens": 0,
+          "CacheReadTokens": 0,
+          "CompletionTokens": 5,
+          "PromptTokens": 10,
+          "ReasoningTokens": 0,
+          "RequestUsages": [
+            {
+              "CacheCreationTokens": 0,
+              "CacheReadTokens": 0,
+              "CompletionTokens": 5,
+              "PromptTokens": 10,
+              "ReasoningTokens": 0,
+              "TotalTokens": 15
+            }
+          ],
+          "Requests": 1,
+          "ToolCalls": 0,
+          "TotalTokens": 15
+        }
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": {
+        "CacheCreationTokens": 0,
+        "CacheReadTokens": 0,
+        "CompletionTokens": 5,
+        "PromptTokens": 10,
+        "ReasoningTokens": 0,
+        "RequestUsages": [
+          {
+            "CacheCreationTokens": 0,
+            "CacheReadTokens": 0,
+            "CompletionTokens": 5,
+            "PromptTokens": 10,
+            "ReasoningTokens": 0,
+            "TotalTokens": 15
+          }
+        ],
+        "Requests": 1,
+        "ToolCalls": 0,
+        "TotalTokens": 15
+      },
+      "Source": "agentic",
+      "Turn": 0,
+      "Type": 12
+    }
+  },
+  {
+    "seq": 11,
+    "kind": "queue.drained",
+    "entry_id": "e11",
+    "parent_id": "e10",
+    "payload": {
+      "Entry": null,
+      "ID": "queue_c1",
+      "Reason": ""
+    }
+  },
+  {
+    "seq": 12,
+    "kind": "agentic.messages_injected",
+    "entry_id": "e12",
+    "parent_id": "e11",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 1,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Messages": [
+          {
+            "content": [
+              {
+                "text": "steer please",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "QueueIDs": [
+          "queue_c1"
+        ]
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 0,
+      "Type": 9
+    }
+  },
+  {
+    "seq": 13,
+    "kind": "agentic.turn_started",
+    "entry_id": "e13",
+    "parent_id": "e12",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 2,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {},
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 1,
+      "Type": 11
+    }
+  },
+  {
+    "seq": 14,
+    "kind": "agentic.assistant_committed",
+    "entry_id": "e14",
+    "parent_id": "e13",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 1,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Message": {
+          "content": [
+            {
+              "text": "second",
+              "type": "text"
+            }
+          ],
+          "role": "assistant"
+        }
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 1,
+      "Type": 4
+    }
+  },
+  {
+    "seq": 15,
+    "kind": "agentic.output_validated",
+    "entry_id": "e15",
+    "parent_id": "e14",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 1,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Candidate": {
+          "Source": 1,
+          "ToolCallID": ""
+        }
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 1,
+      "Type": 8
+    }
+  },
+  {
+    "seq": 16,
+    "kind": "agentic.turn_ended",
+    "entry_id": "e16",
+    "parent_id": "e15",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 2,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Candidate": {
+          "Source": 1,
+          "ToolCallID": ""
+        },
+        "RunUsage": {
+          "CacheCreationTokens": 0,
+          "CacheReadTokens": 0,
+          "CompletionTokens": 10,
+          "PromptTokens": 20,
+          "ReasoningTokens": 0,
+          "RequestUsages": [
+            {
+              "CacheCreationTokens": 0,
+              "CacheReadTokens": 0,
+              "CompletionTokens": 5,
+              "PromptTokens": 10,
+              "ReasoningTokens": 0,
+              "TotalTokens": 15
+            },
+            {
+              "CacheCreationTokens": 0,
+              "CacheReadTokens": 0,
+              "CompletionTokens": 5,
+              "PromptTokens": 10,
+              "ReasoningTokens": 0,
+              "TotalTokens": 15
+            }
+          ],
+          "Requests": 2,
+          "ToolCalls": 0,
+          "TotalTokens": 30
+        }
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": {
+        "CacheCreationTokens": 0,
+        "CacheReadTokens": 0,
+        "CompletionTokens": 10,
+        "PromptTokens": 20,
+        "ReasoningTokens": 0,
+        "RequestUsages": [
+          {
+            "CacheCreationTokens": 0,
+            "CacheReadTokens": 0,
+            "CompletionTokens": 5,
+            "PromptTokens": 10,
+            "ReasoningTokens": 0,
+            "TotalTokens": 15
+          },
+          {
+            "CacheCreationTokens": 0,
+            "CacheReadTokens": 0,
+            "CompletionTokens": 5,
+            "PromptTokens": 10,
+            "ReasoningTokens": 0,
+            "TotalTokens": 15
+          }
+        ],
+        "Requests": 2,
+        "ToolCalls": 0,
+        "TotalTokens": 30
+      },
+      "Source": "agentic",
+      "Turn": 1,
+      "Type": 12
+    }
+  },
+  {
+    "seq": 17,
+    "kind": "queue.drained",
+    "entry_id": "e17",
+    "parent_id": "e16",
+    "payload": {
+      "Entry": null,
+      "ID": "queue_c2",
+      "Reason": ""
+    }
+  },
+  {
+    "seq": 18,
+    "kind": "agentic.messages_injected",
+    "entry_id": "e18",
+    "parent_id": "e17",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 1,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Messages": [
+          {
+            "content": [
+              {
+                "text": "follow please",
+                "type": "text"
+              }
+            ],
+            "role": "user"
+          }
+        ],
+        "QueueIDs": [
+          "queue_c2"
+        ]
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 1,
+      "Type": 9
+    }
+  },
+  {
+    "seq": 19,
+    "kind": "agentic.turn_started",
+    "entry_id": "e19",
+    "parent_id": "e18",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 2,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {},
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 2,
+      "Type": 11
+    }
+  },
+  {
+    "seq": 20,
+    "kind": "agentic.assistant_committed",
+    "entry_id": "e20",
+    "parent_id": "e19",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 1,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Message": {
+          "content": [
+            {
+              "text": "final",
+              "type": "text"
+            }
+          ],
+          "role": "assistant"
+        }
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 2,
+      "Type": 4
+    }
+  },
+  {
+    "seq": 21,
+    "kind": "agentic.output_validated",
+    "entry_id": "e21",
+    "parent_id": "e20",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 1,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Candidate": {
+          "Source": 1,
+          "ToolCallID": ""
+        }
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 2,
+      "Type": 8
+    }
+  },
+  {
+    "seq": 22,
+    "kind": "agentic.turn_ended",
+    "entry_id": "e22",
+    "parent_id": "e21",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 2,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Candidate": {
+          "Source": 1,
+          "ToolCallID": ""
+        },
+        "RunUsage": {
+          "CacheCreationTokens": 0,
+          "CacheReadTokens": 0,
+          "CompletionTokens": 15,
+          "PromptTokens": 30,
+          "ReasoningTokens": 0,
+          "RequestUsages": [
+            {
+              "CacheCreationTokens": 0,
+              "CacheReadTokens": 0,
+              "CompletionTokens": 5,
+              "PromptTokens": 10,
+              "ReasoningTokens": 0,
+              "TotalTokens": 15
+            },
+            {
+              "CacheCreationTokens": 0,
+              "CacheReadTokens": 0,
+              "CompletionTokens": 5,
+              "PromptTokens": 10,
+              "ReasoningTokens": 0,
+              "TotalTokens": 15
+            },
+            {
+              "CacheCreationTokens": 0,
+              "CacheReadTokens": 0,
+              "CompletionTokens": 5,
+              "PromptTokens": 10,
+              "ReasoningTokens": 0,
+              "TotalTokens": 15
+            }
+          ],
+          "Requests": 3,
+          "ToolCalls": 0,
+          "TotalTokens": 45
+        }
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": {
+        "CacheCreationTokens": 0,
+        "CacheReadTokens": 0,
+        "CompletionTokens": 15,
+        "PromptTokens": 30,
+        "ReasoningTokens": 0,
+        "RequestUsages": [
+          {
+            "CacheCreationTokens": 0,
+            "CacheReadTokens": 0,
+            "CompletionTokens": 5,
+            "PromptTokens": 10,
+            "ReasoningTokens": 0,
+            "TotalTokens": 15
+          },
+          {
+            "CacheCreationTokens": 0,
+            "CacheReadTokens": 0,
+            "CompletionTokens": 5,
+            "PromptTokens": 10,
+            "ReasoningTokens": 0,
+            "TotalTokens": 15
+          },
+          {
+            "CacheCreationTokens": 0,
+            "CacheReadTokens": 0,
+            "CompletionTokens": 5,
+            "PromptTokens": 10,
+            "ReasoningTokens": 0,
+            "TotalTokens": 15
+          }
+        ],
+        "Requests": 3,
+        "ToolCalls": 0,
+        "TotalTokens": 45
+      },
+      "Source": "agentic",
+      "Turn": 2,
+      "Type": 12
+    }
+  },
+  {
+    "seq": 23,
+    "kind": "agentic.run_completed",
+    "entry_id": "e23",
+    "parent_id": "e22",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 2,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "FinishReason": "stop",
+        "Usage": {
+          "CacheCreationTokens": 0,
+          "CacheReadTokens": 0,
+          "CompletionTokens": 15,
+          "PromptTokens": 30,
+          "ReasoningTokens": 0,
+          "RequestUsages": [
+            {
+              "CacheCreationTokens": 0,
+              "CacheReadTokens": 0,
+              "CompletionTokens": 5,
+              "PromptTokens": 10,
+              "ReasoningTokens": 0,
+              "TotalTokens": 15
+            },
+            {
+              "CacheCreationTokens": 0,
+              "CacheReadTokens": 0,
+              "CompletionTokens": 5,
+              "PromptTokens": 10,
+              "ReasoningTokens": 0,
+              "TotalTokens": 15
+            },
+            {
+              "CacheCreationTokens": 0,
+              "CacheReadTokens": 0,
+              "CompletionTokens": 5,
+              "PromptTokens": 10,
+              "ReasoningTokens": 0,
+              "TotalTokens": 15
+            }
+          ],
+          "Requests": 3,
+          "ToolCalls": 0,
+          "TotalTokens": 45
+        }
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 2,
+      "Type": 14
+    }
+  },
+  {
+    "seq": 24,
+    "kind": "agentic.run_ended",
+    "entry_id": "e24",
+    "parent_id": "e23",
+    "payload": {
+      "Agent": "",
+      "Cursor": 0,
+      "Depth": 0,
+      "Dropped": {
+        "Preview": 0
+      },
+      "Name": "",
+      "Nature": 2,
+      "Ordinal": 0,
+      "ParentID": "",
+      "Payload": {
+        "Status": 0
+      },
+      "SessionID": "SESSION_ID",
+      "SessionUsed": null,
+      "Source": "agentic",
+      "Turn": 2,
+      "Type": 17
+    }
+  },
+  {
+    "seq": 25,
+    "kind": "run.closed",
+    "entry_id": "e25",
+    "parent_id": "e24",
+    "payload": {
+      "Error": "",
+      "ID": "run_c1",
+      "Status": 0
+    }
+  }
+]
