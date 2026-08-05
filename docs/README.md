@@ -24,6 +24,9 @@ all. Read them for the reasoning, not for the shape.
 - [design/harness-tui-spike.md](design/harness-tui-spike.md) — a reusable Go
   terminal client for compatible durable harnesses, including the required
   observation and approval seams
+- [design/harness-sessionloop-plan.md](design/harness-sessionloop-plan.md) — the
+  dependency-free asynchronous session protocol shared by Harness, TUI bridges,
+  and external facade consumers, with a behavior-preserving migration plan
 - [design/multi-representation-inference-plan.md](design/multi-representation-inference-plan.md)
   — the encoding plan, with an amendment noting the two things it describes that
   no longer exist
