@@ -52,6 +52,12 @@ func TestMapEventTable(t *testing.T) {
 					t.Fatalf("mapped = %#v", mapped)
 				}
 			}},
+		{"preview-tool-anonymous", sl.Event{Kind: sl.EventPreviewDelta, Nature: sl.EventPreview, Preview: &sl.Preview{Kind: sl.PreviewTool, Text: "progress"}},
+			func(t *testing.T, mapped []uit.Event) {
+				if mapped != nil {
+					t.Fatalf("anonymous tool preview mapped = %#v", mapped)
+				}
+			}},
 		{"preview-unknown", sl.Event{Kind: sl.EventPreviewDelta, Nature: sl.EventPreview, Preview: &sl.Preview{Kind: "mystery"}},
 			func(t *testing.T, mapped []uit.Event) {
 				if mapped != nil {

@@ -18,6 +18,16 @@ func TestTestkitReferenceHostPassesTheConformanceSuite(t *testing.T) {
 	})
 }
 
+// TestTestkitIdempotentHostPassesTheConformanceSuite runs the suite against
+// a testkit host that opts into dispatch.idempotent, so the idempotency case
+// executes against a real key map instead of skipping everywhere.
+func TestTestkitIdempotentHostPassesTheConformanceSuite(t *testing.T) {
+	conformance.Run(t, func(*testing.T) conformance.Env {
+		host := testkit.New(testkit.WithRunFunc(testkit.ScenarioRunFunc()), testkit.WithIdempotentDispatch())
+		return conformance.Env{Host: host, Gate: host}
+	})
+}
+
 // TestConformanceSkipsTimingDependentCasesWithoutAGate documents the Factory
 // contract for hosts that cannot provide deterministic scheduling: with a
 // nil Gate the timing-dependent cases skip instead of flaking, and every

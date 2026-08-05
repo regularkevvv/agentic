@@ -27,6 +27,10 @@ type sessionState struct {
 	usage      sessionloop.Usage
 	run        *activeRun
 	subs       map[*stream]struct{}
+	// keys records idempotency-key -> original receipt when the host opted
+	// into WithIdempotentDispatch. It lives on the durable session state, so
+	// recorded keys survive handle close and reopen.
+	keys map[string]sessionloop.Receipt
 }
 
 // session is one exclusive handle onto a sessionState.
@@ -37,16 +41,17 @@ type session struct {
 
 func (s *session) ID() sessionloop.SessionID { return s.state.id }
 
-func (s *session) Capabilities() sessionloop.Capabilities { return hostCapabilities() }
+func (s *session) Capabilities() sessionloop.Capabilities { return s.state.host.capabilities() }
 
 // Dispatch validates, accepts, and durably records one command. The context
 // governs acceptance only: once the receipt is returned the run belongs to
-// the session (law L4).
+// the session (law L4). Under WithIdempotentDispatch, a repeated key returns
+// the original receipt without re-executing the command.
 func (s *session) Dispatch(ctx context.Context, command sessionloop.Command) (sessionloop.Receipt, error) {
 	if err := ctx.Err(); err != nil {
 		return sessionloop.Receipt{}, err
 	}
-	if err := sessionloop.ValidateCommand(command, hostCapabilities()); err != nil {
+	if err := sessionloop.ValidateCommand(command, s.state.host.capabilities()); err != nil {
 		return sessionloop.Receipt{}, err
 	}
 	if command.Input != nil {
@@ -60,25 +65,42 @@ func (s *session) Dispatch(ctx context.Context, command sessionloop.Command) (se
 	if s.closed {
 		return sessionloop.Receipt{}, fmt.Errorf("testkit: dispatch on a closed handle: %w", sessionloop.ErrSessionClosed)
 	}
+	if command.IdempotencyKey != "" && state.host.idempotent {
+		if receipt, ok := state.keys[command.IdempotencyKey]; ok {
+			return receipt, nil
+		}
+	}
 	command = command.Clone()
 	if command.ID == "" {
 		command.ID = sessionloop.CommandID(state.host.nextID("cmd"))
 	}
+	var receipt sessionloop.Receipt
+	var err error
 	switch command.Kind {
 	case sessionloop.CommandStart:
-		return state.acceptStartLocked(command)
+		receipt, err = state.acceptStartLocked(command)
 	case sessionloop.CommandNextTurn:
-		return state.acceptNextTurnLocked(command)
+		receipt, err = state.acceptNextTurnLocked(command)
 	case sessionloop.CommandSteer, sessionloop.CommandFollowUp:
-		return state.acceptDeliveryLocked(command)
+		receipt, err = state.acceptDeliveryLocked(command)
 	case sessionloop.CommandResolve:
-		return state.acceptResolveLocked(command)
+		receipt, err = state.acceptResolveLocked(command)
 	case sessionloop.CommandInterrupt:
-		return state.acceptInterruptLocked(command)
+		receipt, err = state.acceptInterruptLocked(command)
 	default:
 		// Unreachable: ValidateCommand rejects unknown kinds.
 		return sessionloop.Receipt{}, fmt.Errorf("testkit: unhandled command kind %q: %w", command.Kind, sessionloop.ErrInvalidCommand)
 	}
+	if err != nil {
+		return sessionloop.Receipt{}, err
+	}
+	if command.IdempotencyKey != "" && state.host.idempotent {
+		if state.keys == nil {
+			state.keys = make(map[string]sessionloop.Receipt)
+		}
+		state.keys[command.IdempotencyKey] = receipt
+	}
+	return receipt, nil
 }
 
 func (st *sessionState) acceptStartLocked(command sessionloop.Command) (sessionloop.Receipt, error) {
@@ -251,7 +273,7 @@ func (s *session) Snapshot(ctx context.Context) (sessionloop.Snapshot, error) {
 		Position:     state.currentPositionLocked(),
 		State:        state.state,
 		Usage:        state.usage,
-		Capabilities: hostCapabilities(),
+		Capabilities: state.host.capabilities(),
 	}
 	if len(state.entries) > 0 {
 		snapshot.Entries = make([]sessionloop.Entry, len(state.entries))
@@ -308,9 +330,12 @@ func (s *session) Subscribe(ctx context.Context, options sessionloop.SubscribeOp
 	return subscriber, nil
 }
 
-// Close is idempotent. It interrupts any active run, waits for its singular
-// settlement, releases the handle, and terminates streams with io.EOF. The
-// durable log survives for OpenSession (law L11).
+// Close is idempotent. It interrupts an actively RUNNING run, waits for its
+// singular settlement, releases the handle, and terminates streams with
+// io.EOF. A SUSPENDED run is a durable pause, not activity: Close does NOT
+// settle it — the suspension survives together with the durable log, and
+// OpenSession restores the Suspended state so the same suspension can still
+// be resolved (law L11: closing releases the handle, never the session).
 func (s *session) Close(context.Context) error {
 	state := s.state
 	state.mu.Lock()
@@ -320,7 +345,8 @@ func (s *session) Close(context.Context) error {
 	}
 	s.closed = true
 	run := state.run
-	if run != nil {
+	suspended := run != nil && run.suspension != nil && state.state == sessionloop.StateSuspended
+	if run != nil && !suspended {
 		state.closing = true
 		state.state = sessionloop.StateClosing
 		state.appendLocked(sessionloop.Event{Kind: sessionloop.EventSessionState, RunID: run.id})
@@ -330,7 +356,7 @@ func (s *session) Close(context.Context) error {
 	}
 	state.mu.Unlock()
 
-	if run != nil {
+	if run != nil && !suspended {
 		<-run.done
 	}
 

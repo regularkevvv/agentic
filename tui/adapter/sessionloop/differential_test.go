@@ -43,14 +43,36 @@ package sessionloop
 //	  - events delivered before a lag disconnect are not compared: the two
 //	    pipelines hold different in-flight depths and the app discards
 //	    speculative state and resynchronizes from a snapshot on any error.
+//	Previews (TestDifferentialPreviewParity: Preview-true subscriptions over
+//	a streaming scripted model, compared on the preview tier only)
+//	  - Cursor and Ordinal are excluded: legacy stamps the raw preview
+//	    record's cursor and bus ordinal while the bridge repeats the last
+//	    durable position with a projection-local ordinal.
+//	  - tool previews compare call identity and state only: legacy
+//	    tool.planned previews carry Name and Summary (and a batch Tools
+//	    slice for call starts); the protocol preview transports only the
+//	    tool call ID.
+//	  - legacy tool.update previews (anonymous capability tool updates)
+//	    have no bridge counterpart: the protocol preview carries no call
+//	    identity for them, and the bridge drops identity-less tool previews
+//	    the app reducer could never upsert.
 //	Errors
 //	  - compared by errors.Is class AND err.Error() text; both must match,
 //	    except submit-interrupted, where the spec mandates the bridge return
 //	    bare context.Canceled while legacy surfaces the driver's wrap text
 //	    (the errors.Is identity still must match).
+//	  - resolve bounce: when an accepted resolve fails resume validation and
+//	    the session bounces straight back to suspended, legacy Resolve
+//	    surfaces the concrete validation error object; the protocol's
+//	    zero-position live-only session.state bounce signal deliberately
+//	    carries no error identity, so the bridge returns its own boundary
+//	    error ("resume attempt was rejected and the session remains
+//	    suspended"). Exercised against the scripted host fake
+//	    (TestResolveResumeValidationBounceIsTerminal), not by this script.
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -194,6 +216,65 @@ func scriptToolCall(call agentic.ToolUse) *agentic.ChatResponse {
 	}
 }
 
+// streamingScriptModel replays the scripted response through the streaming
+// transport: text splits into two deltas, tool calls into a call-start plus
+// two argument deltas, so both differential paths observe an identical
+// deterministic preview sequence.
+type streamingScriptModel struct {
+	*scriptModel
+}
+
+func (m *streamingScriptModel) RequestStream(ctx context.Context, request *agentic.ChatRequest) (*agentic.StreamResult, error) {
+	response, err := m.Request(ctx, request)
+	if err != nil {
+		return nil, err
+	}
+	events := make(chan agentic.StreamEvent, 16)
+	go func() {
+		defer close(events)
+		for _, part := range response.Message.Content {
+			switch part.Type {
+			case agentic.ContentText:
+				for _, chunk := range splitHalves(part.Text) {
+					events <- agentic.StreamEvent{Type: agentic.StreamEventTextDelta, Delta: chunk}
+				}
+			case agentic.ContentToolUse:
+				if part.ToolUse == nil {
+					continue
+				}
+				arguments, marshalErr := json.Marshal(part.ToolUse.Input)
+				if marshalErr != nil {
+					events <- agentic.StreamEvent{Type: agentic.StreamEventError, Error: marshalErr}
+					return
+				}
+				events <- agentic.StreamEvent{
+					Type:    agentic.StreamEventToolCallStart,
+					ToolUse: &agentic.ToolUse{ID: part.ToolUse.ID, Name: part.ToolUse.Name},
+				}
+				for _, chunk := range splitHalves(string(arguments)) {
+					events <- agentic.StreamEvent{
+						Type: agentic.StreamEventToolCallDelta, ToolCallID: part.ToolUse.ID, Delta: chunk,
+					}
+				}
+			}
+		}
+		usage := response.Usage
+		events <- agentic.StreamEvent{Type: agentic.StreamEventDone, Usage: &usage, FinishReason: response.FinishReason}
+	}()
+	return agentic.NewStreamResult(events), nil
+}
+
+func splitHalves(value string) []string {
+	half := len(value) / 2
+	var result []string
+	for _, chunk := range []string{value[:half], value[half:]} {
+		if chunk != "" {
+			result = append(result, chunk)
+		}
+	}
+	return result
+}
+
 type lookupInput struct {
 	Query string `json:"query"`
 }
@@ -203,9 +284,14 @@ type dangerInput struct {
 }
 
 // differentialRuntime is the single deterministic assembly both hosts share.
-func differentialRuntime(t *testing.T, gate *runGate) *harnesscore.Harness[string] {
+// With streaming enabled the scripted model serves the streaming transport,
+// so runs publish deterministic preview records.
+func differentialRuntime(t *testing.T, gate *runGate, streaming bool) *harnesscore.Harness[string] {
 	t.Helper()
-	model := &scriptModel{gate: gate}
+	var model agentic.Model = &scriptModel{gate: gate}
+	if streaming {
+		model = &streamingScriptModel{scriptModel: &scriptModel{gate: gate}}
+	}
 	agent := agentic.NewAgent("differential system", model)
 	agentic.AddTool(agent,
 		func(_ context.Context, input lookupInput) (string, error) { return "found: " + input.Query, nil },
@@ -233,8 +319,9 @@ func differentialRuntime(t *testing.T, gate *runGate) *harnesscore.Harness[strin
 	config := harnesscore.RuntimeConfig{
 		Sessions: storememory.New(), Codec: jsoncodec.New(), Events: inproc.NewFactory(),
 		Environments: environments, ResultProcessors: processors,
-		Clock: fixedClock{value: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
-		IDs:   &counterIDs{},
+		Clock:          fixedClock{value: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
+		IDs:            &counterIDs{},
+		ModelStreaming: streaming,
 	}
 	runtime, err := harnesscore.New[string](agent, harnesscore.WithRuntime(config), harnesscore.WithCapabilities(capability)).Build()
 	if err != nil {
@@ -257,9 +344,13 @@ type diffHost struct {
 }
 
 func newLegacyHost(t *testing.T) diffHost {
+	return newLegacyHostStreaming(t, false)
+}
+
+func newLegacyHostStreaming(t *testing.T, streaming bool) diffHost {
 	t.Helper()
 	gate := &runGate{}
-	runtime := differentialRuntime(t, gate)
+	runtime := differentialRuntime(t, gate, streaming)
 	host, err := legacyadapter.New(runtime,
 		legacyadapter.WithProfileLabel("work"), legacyadapter.WithWorkspace("/workspace"),
 		legacyadapter.WithExecutionLabel("local"), legacyadapter.WithToolPresenter(differentialPresenter()))
@@ -270,9 +361,13 @@ func newLegacyHost(t *testing.T) diffHost {
 }
 
 func newBridgeHost(t *testing.T) diffHost {
+	return newBridgeHostStreaming(t, false)
+}
+
+func newBridgeHostStreaming(t *testing.T, streaming bool) diffHost {
 	t.Helper()
 	gate := &runGate{}
-	runtime := differentialRuntime(t, gate)
+	runtime := differentialRuntime(t, gate, streaming)
 	loopHost, err := harnesscore.NewSessionLoopHost(runtime)
 	if err != nil {
 		t.Fatal(err)
@@ -696,6 +791,84 @@ func TestDifferentialLegacyAndSessionLoopBridgeMatch(t *testing.T) {
 	if len(legacy.lagErrors) != 1 || len(bridge.lagErrors) != 1 {
 		t.Errorf("lag errors diverged: legacy %v, bridge %v", legacy.lagErrors, bridge.lagErrors)
 	}
+}
+
+// runPreviewScript drives one streaming host through a plain completion and
+// a tool-calling run under a Preview-true subscription and returns every
+// delivered event through the last durable cursor.
+func runPreviewScript(t *testing.T, target diffHost) []uit.Event {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), differentialWait)
+	defer cancel()
+	created, err := target.host.NewSession(ctx, uit.SessionOptions{})
+	if err != nil {
+		t.Fatalf("%s: NewSession: %v", target.name, err)
+	}
+	defer func() { _ = created.Close(context.Background()) }()
+	live := created.Subscribe(uit.SubscribeOptions{Buffer: 4096, Preview: true})
+	defer live.Close()
+	if err := created.Submit(ctx, uit.Input{Text: "hello"}); err != nil {
+		t.Fatalf("%s: submit hello: %v", target.name, err)
+	}
+	if err := created.Submit(ctx, uit.Input{Text: "use a tool"}); err != nil {
+		t.Fatalf("%s: submit tool: %v", target.name, err)
+	}
+	snapshot, err := created.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("%s: preview snapshot: %v", target.name, err)
+	}
+	return drainEvents(t, target.name+" preview", live, snapshot.Cursor)
+}
+
+// previewTuples normalizes the preview tier of one delivered sequence under
+// the documented exclusions: Cursor/Ordinal are dropped, tool previews keep
+// call identity and state only, and legacy tool.update previews (anonymous
+// capability updates the bridge deliberately drops) are removed.
+func previewTuples(events []uit.Event, legacy bool) []tuple {
+	var result []tuple
+	for _, value := range events {
+		if value.Durable {
+			continue
+		}
+		kind := string(value.Kind)
+		if legacy && kind == "tool.update" {
+			continue
+		}
+		base := tuple{Kind: kind, Text: value.TextDelta}
+		if value.Thinking != nil {
+			base.Text = value.Thinking.Text
+		}
+		if len(value.Tools) > 0 {
+			// Legacy call-start previews batch their tools; the bridge emits
+			// one identified preview per call. Flatten to per-call tuples.
+			for _, tool := range value.Tools {
+				flattened := base
+				flattened.Tool = tool.CallID + "/" + string(tool.State)
+				result = append(result, flattened)
+			}
+			continue
+		}
+		if value.Tool != nil {
+			base.Tool = value.Tool.CallID + "/" + string(value.Tool.State)
+		}
+		result = append(result, base)
+	}
+	return result
+}
+
+// TestDifferentialPreviewParity proves the bridge's preview tier matches the
+// legacy adapter's under a streaming scripted response: the same ordered
+// text deltas and the same identified tool previews (see the preview
+// exclusions documented at the top of this file).
+func TestDifferentialPreviewParity(t *testing.T) {
+	t.Parallel()
+	legacy := runPreviewScript(t, newLegacyHostStreaming(t, true))
+	bridge := runPreviewScript(t, newBridgeHostStreaming(t, true))
+	expected, actual := previewTuples(legacy, true), previewTuples(bridge, false)
+	if len(expected) == 0 {
+		t.Fatal("streaming script produced no preview events")
+	}
+	compareTuples(t, "preview", expected, actual)
 }
 
 func compareTuples(t *testing.T, name string, expected, actual []tuple) {

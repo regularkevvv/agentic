@@ -464,6 +464,9 @@ func TestLoopProjectionPreviews(t *testing.T) {
 		projected[2].Preview.ToolCallID != "call-9" {
 		t.Fatalf("preview payloads = %#v", projected)
 	}
+	if projected[4].Preview.Text != "progress" {
+		t.Fatalf("tool-update preview lost its identity: %#v", projected[4].Preview)
+	}
 
 	// An unknown preview shape is dropped (previews are lossy) and its loss
 	// count carries onto the next projected event.

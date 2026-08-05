@@ -187,6 +187,13 @@ func previewEvent(base uit.Event, preview *sl.Preview, presenter uit.ToolPresent
 		base.Kind = uit.EventThinkingDelta
 		base.Thinking = &uit.Thinking{Text: preview.Text}
 	case sl.PreviewTool:
+		if preview.ToolCallID == "" {
+			// Anonymous tool previews (capability tool updates) carry no call
+			// identity; a Tool row without a CallID can never be matched by
+			// the reducer's upsert and would accumulate as anonymous rows.
+			// Previews are lossy by contract, so identity-less ones drop.
+			return nil
+		}
 		base.Kind = uit.EventToolPlanned
 		tool := presentTool(uit.Tool{CallID: preview.ToolCallID, State: uit.ToolPreview}, presenter)
 		base.Tool = &tool

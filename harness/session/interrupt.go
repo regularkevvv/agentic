@@ -7,7 +7,7 @@ import (
 )
 
 func (s *Session[O]) Interrupt(ctx context.Context) error {
-	if _, err := s.requestInterrupt(ctx); err != nil {
+	if _, err := s.requestInterrupt(ctx, ""); err != nil {
 		return err
 	}
 	return s.WaitForIdle(ctx)
@@ -19,10 +19,20 @@ func (s *Session[O]) Interrupt(ctx context.Context) error {
 // WITHOUT the settlement wait. The legacy Interrupt composes it with
 // WaitForIdle; there is no durable interrupt-request fact, so the returned
 // run ID is in-memory evidence only.
-func (s *Session[O]) requestInterrupt(_ context.Context) (string, error) {
+//
+// A non-empty expectedRunID pins the interrupt to one run identity (law L8):
+// it is revalidated under s.mu before any transition, so an interrupt aimed
+// at a run that settled concurrently fails with errStaleRunTarget instead of
+// canceling its successor. The legacy Interrupt and the view's Close pass
+// "" (session-targeted, no check) — zero behavior change for them.
+func (s *Session[O]) requestInterrupt(_ context.Context, expectedRunID string) (string, error) {
 	s.mu.Lock()
 	if s.state == Faulted {
 		err := &FaultError{SessionID: s.id, Cause: s.fault}
+		s.mu.Unlock()
+		return "", err
+	}
+	if err := s.staleTargetLocked(expectedRunID); err != nil {
 		s.mu.Unlock()
 		return "", err
 	}

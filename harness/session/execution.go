@@ -137,13 +137,14 @@ func (s *Session[O]) prepareStart(
 
 // driveAccepted is the execution half of Prompt. It drives the accepted run
 // exactly once under the run context created at acceptance and settles it
-// through the existing finish path.
+// through the existing finish path. There is deliberately no Closed
+// pre-check: the legacy fused Prompt never had one, and the sessionloop view
+// joins every drive goroutine before closing the root, so a post-Close drive
+// is unreachable except by fabrication (which settles through the finish
+// path like legacy).
 func (s *Session[O]) driveAccepted(accepted *acceptedStart[O]) (*agentic.Execution[O], error) {
 	if err := accepted.consume(); err != nil {
 		return nil, err
-	}
-	if s.State() == Closed {
-		return nil, ErrSessionClosed
 	}
 	runCtx := s.withToolRuntime(accepted.runCtx)
 	inputPrompt := cloneMessages([]agentic.Message{accepted.prompt})[0]

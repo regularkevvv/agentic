@@ -1,6 +1,7 @@
 package conformance
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"testing"
@@ -247,6 +248,56 @@ func caseSuspensionResolve(t *testing.T, env Env, _ sessionloop.Capabilities) {
 	}
 	if settled.Outcome.Kind != sessionloop.RunCompleted {
 		t.Fatalf("outcome after resolution = %q, want completed", settled.Outcome.Kind)
+	}
+}
+
+// caseSuspensionSurvivesCloseAndReopen proves a suspension is a durable
+// pause, not activity Close may destroy (law L11): closing a Suspended
+// session must not settle its run, reopening restores the SAME suspension,
+// and resolving it after reopen completes the run.
+func caseSuspensionSurvivesCloseAndReopen(t *testing.T, env Env, _ sessionloop.Capabilities) {
+	session := newSession(t, env.Host)
+	id := session.ID()
+	stream := subscribe(t, session, sessionloop.SubscribeOptions{})
+
+	receipt := dispatch(t, session, startCommand(scenarioInput("please pause across close", ScenarioSuspend)))
+	suspended, _ := awaitKind(t, stream, sessionloop.EventRunSuspended)
+	if suspended.Suspension == nil || suspended.Suspension.ID == "" {
+		t.Fatalf("run.suspended carries no suspension identity: %#v", suspended)
+	}
+
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatalf("Close of a suspended session failed: %v", err)
+	}
+
+	reopened, err := env.Host.OpenSession(watchdogContext(t), id)
+	if err != nil {
+		t.Fatalf("OpenSession after closing a suspended session failed: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	snapshot := snapshotOf(t, reopened)
+	if snapshot.State != sessionloop.StateSuspended {
+		t.Fatalf("reopened state = %q, want suspended (Close destroyed the durable pause)", snapshot.State)
+	}
+	if snapshot.Suspension == nil || snapshot.Suspension.ID != suspended.Suspension.ID {
+		t.Fatalf("reopened suspension = %#v, want the original %q", snapshot.Suspension, suspended.Suspension.ID)
+	}
+	if snapshot.ActiveRunID != receipt.RunID {
+		t.Fatalf("reopened active run = %q, want the suspended run %q", snapshot.ActiveRunID, receipt.RunID)
+	}
+
+	resolution := approveAll(*snapshot.Suspension)
+	// Subscribe from the beginning: replay carries no settlement for the
+	// suspended run, so the first run.settled observed is the resolution's.
+	reopenedStream := subscribe(t, reopened, sessionloop.SubscribeOptions{Buffer: 256})
+	dispatch(t, reopened, sessionloop.Command{
+		Kind:       sessionloop.CommandResolve,
+		RunID:      snapshot.ActiveRunID,
+		Resolution: &resolution,
+	})
+	settled, _ := awaitSettled(t, reopenedStream, receipt.RunID)
+	if settled.Outcome.Kind != sessionloop.RunCompleted {
+		t.Fatalf("outcome after reopen and resolve = %q, want completed", settled.Outcome.Kind)
 	}
 }
 

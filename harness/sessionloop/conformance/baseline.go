@@ -163,8 +163,13 @@ func caseStreamCloseAndCanceledNext(t *testing.T, env Env, _ sessionloop.Capabil
 
 	second := subscribe(t, session, sessionloop.SubscribeOptions{})
 	result := make(chan error, 1)
+	started := make(chan struct{})
 	waiting := watchdogContext(t)
 	go func() {
+		// Nothing was dispatched on this session, so the first Next has
+		// nothing to read and parks; the barrier orders the consumer's entry
+		// before Close fires, so Close races a genuinely waiting Next.
+		close(started)
 		for {
 			if _, err := second.Next(waiting); err != nil {
 				result <- err
@@ -172,6 +177,7 @@ func caseStreamCloseAndCanceledNext(t *testing.T, env Env, _ sessionloop.Capabil
 			}
 		}
 	}()
+	<-started
 	if err := second.Close(); err != nil {
 		t.Fatalf("closing a stream mid wait failed: %v", err)
 	}
@@ -329,19 +335,44 @@ func caseNoEventsAfterClose(t *testing.T, env Env, _ sessionloop.Capabilities) {
 
 	receipt := dispatch(t, session, startCommand(textInput("final run")))
 	awaitSettled(t, stream, receipt.RunID)
+	// Capture the last authoritative position before Close: no session FACT
+	// (entry, run, queue, usage) may be committed past it once Close begins.
+	captured := snapshotOf(t, session).Position.Sequence
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
 
+	previous := uint64(0)
 	for {
-		_, err := stream.Next(watchdogContext(t))
-		if err == nil {
+		event, err := stream.Next(watchdogContext(t))
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				t.Fatalf("stream after Close ended with %v, want io.EOF", err)
+			}
+			break
+		}
+		if event.Nature != sessionloop.EventAuthoritative {
 			continue
 		}
-		if !errors.Is(err, io.EOF) {
-			t.Fatalf("stream after Close ended with %v, want io.EOF", err)
+		if !event.Position.IsZero() {
+			if event.Position.Sequence < previous {
+				t.Fatalf("post-close drain went backwards: %d after %d", event.Position.Sequence, previous)
+			}
+			previous = event.Position.Sequence
 		}
-		break
+		if event.Position.Sequence <= captured {
+			continue
+		}
+		// The only authoritative events allowed past the captured position
+		// are the close transition's own session.state announcements; any
+		// other kind is a ghost fact committed after Close.
+		if event.Kind != sessionloop.EventSessionState {
+			t.Fatalf("post-close fact %q at position %d (last pre-close position %d): %#v",
+				event.Kind, event.Position.Sequence, captured, event)
+		}
+		if event.State != sessionloop.StateClosing && event.State != sessionloop.StateClosed {
+			t.Fatalf("post-close session.state reports %q, want closing or closed: %#v", event.State, event)
+		}
 	}
 	if _, err := session.Dispatch(watchdogContext(t), startCommand(textInput("after close"))); !errors.Is(err, sessionloop.ErrSessionClosed) {
 		t.Fatalf("Dispatch after Close = %v, want ErrSessionClosed", err)

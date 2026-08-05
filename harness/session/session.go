@@ -341,19 +341,29 @@ func (s *Session[O]) NextTurn(ctx context.Context, message agentic.Message) (Que
 }
 
 func (s *Session[O]) accept(ctx context.Context, kind QueueKind, message agentic.Message) (QueueReceipt, error) {
-	receipt, _, err := s.acceptWithCursor(ctx, kind, message)
+	receipt, _, err := s.acceptWithCursor(ctx, kind, message, "")
 	return receipt, err
 }
 
 // acceptWithCursor is the write-ahead queue acceptance shared by the public
 // queue methods (which drop the cursor) and the sessionloop view (which
-// projects both cursor halves into a durable receipt position).
-func (s *Session[O]) acceptWithCursor(ctx context.Context, kind QueueKind, message agentic.Message) (QueueReceipt, store.Cursor, error) {
+// projects both cursor halves into a durable receipt position). A non-empty
+// targetRunID pins the acceptance to one run identity (law L8): it is
+// revalidated INSIDE the locked window immediately before the durable
+// append, mirroring prepareResume's suspension-ID recheck, so a target run
+// that settles between the caller's pre-check and the append fails with
+// errStaleRunTarget instead of leaking into a successor run. The legacy
+// queue methods pass "" and keep their exact historical behavior.
+func (s *Session[O]) acceptWithCursor(ctx context.Context, kind QueueKind, message agentic.Message, targetRunID string) (QueueReceipt, store.Cursor, error) {
 	if message.Role != agentic.RoleUser {
 		return QueueReceipt{}, store.Cursor{}, ErrInvalidMessage
 	}
 	s.mu.Lock()
 	if err := s.acceptanceErrorLocked(kind); err != nil {
+		s.mu.Unlock()
+		return QueueReceipt{}, store.Cursor{}, err
+	}
+	if err := s.staleTargetLocked(targetRunID); err != nil {
 		s.mu.Unlock()
 		return QueueReceipt{}, store.Cursor{}, err
 	}
@@ -373,6 +383,10 @@ func (s *Session[O]) acceptWithCursor(ctx context.Context, kind QueueKind, messa
 		s.mu.Unlock()
 		return QueueReceipt{}, store.Cursor{}, err
 	}
+	if err := s.staleTargetLocked(targetRunID); err != nil {
+		s.mu.Unlock()
+		return QueueReceipt{}, store.Cursor{}, err
+	}
 	commit, appendErr := s.journal.Append(ctx, s.cursor, pendingEntry)
 	if appendErr != nil {
 		// Acceptance is write-ahead. No in-memory queue mutation occurred, so
@@ -385,6 +399,19 @@ func (s *Session[O]) acceptWithCursor(ctx context.Context, kind QueueKind, messa
 	s.mu.Unlock()
 	s.publishOwn(commit.Entries, agentic.EventAuthoritative)
 	return QueueReceipt{ID: id, Kind: kind, Cursor: commit.Cursor.Seq}, commit.Cursor, nil
+}
+
+// staleTargetLocked enforces law L8 under s.mu: a non-empty target run ID
+// must name the currently active run. An empty target means the operation is
+// session-targeted (next_turn, legacy queue methods) and skips the check.
+func (s *Session[O]) staleTargetLocked(targetRunID string) error {
+	if targetRunID == "" {
+		return nil
+	}
+	if s.run == nil || s.run.id != targetRunID {
+		return fmt.Errorf("run %q is not the active run: %w", targetRunID, errStaleRunTarget)
+	}
+	return nil
 }
 
 // currentCursor snapshots both halves of the durable cursor under s.mu.

@@ -162,6 +162,11 @@ func cases() []conformanceCase {
 			run:      caseSuspensionResolve,
 		},
 		{
+			name:     "a suspension survives close and reopen and still resolves the same run to settlement",
+			requires: []sessionloop.Capability{sessionloop.CapabilitySuspensionResolve},
+			run:      caseSuspensionSurvivesCloseAndReopen,
+		},
+		{
 			name:     "detailed tool content carries tool_call and tool_result blocks with valid JSON data",
 			requires: []sessionloop.Capability{sessionloop.CapabilityDetailedTools},
 			run:      caseDetailedTools,

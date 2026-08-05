@@ -125,16 +125,15 @@ func (s *Session[O]) prepareResume(
 }
 
 // driveResumed is the execution half of Resume. It re-enters the driver
-// exactly once and settles through the existing finish path.
+// exactly once and settles through the existing finish path. Like
+// driveAccepted, it has no Closed pre-check: single-use consumption plus the
+// view's close-time goroutine join make a post-Close drive unreachable.
 func (s *Session[O]) driveResumed(accepted *acceptedResume[O]) (*agentic.Execution[O], error) {
 	if accepted.indeterminate {
 		return s.driveResumedIndeterminate(accepted)
 	}
 	if err := accepted.consume(); err != nil {
 		return nil, err
-	}
-	if s.State() == Closed {
-		return nil, ErrSessionClosed
 	}
 	runCtx := s.withToolRuntime(accepted.runCtx)
 	execution, runErr := s.driver.Resume(runCtx, agentic.ResumeInput{
@@ -151,9 +150,6 @@ func (s *Session[O]) driveResumed(accepted *acceptedResume[O]) (*agentic.Executi
 func (s *Session[O]) driveResumedIndeterminate(accepted *acceptedResume[O]) (*agentic.Execution[O], error) {
 	if err := accepted.consume(); err != nil {
 		return nil, err
-	}
-	if s.State() == Closed {
-		return nil, ErrSessionClosed
 	}
 	runCtx := s.withToolRuntime(accepted.runCtx)
 	execution, runErr := s.driver.Drive(runCtx, agentic.DriveInput{

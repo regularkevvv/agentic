@@ -7,6 +7,10 @@
 // sessionloop.CapabilityIdempotentDispatch, mirroring the honesty rule of the
 // Agentic Harness implementation: idempotency is only advertised once
 // idempotency keys are durably recorded, and an in-memory map is not durable.
+// WithIdempotentDispatch opts in: it advertises the capability and records
+// idempotency keys on the session state itself — the same lifetime as the
+// host's "durable" log — so replays return the original receipt across
+// handle close/reopen without duplicate effects.
 //
 // Sessions are single-flight actors over an append-only in-memory log. Every
 // authoritative fact is assigned a Position before the receipt returns, so

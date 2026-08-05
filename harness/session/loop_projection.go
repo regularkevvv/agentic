@@ -11,7 +11,7 @@ package session
 //
 //	session.created             IGNORED: session assembly options/scope are host-internal configuration.
 //	run.opened                  EventRunStarted (+State running; RunID from the payload).
-//	run.closed                  EventRunSettled (Completed->completed, Interrupted->interrupted, Failed/Stopped/other->failed; Failure = payload.Error as-is, already operator-safe; Output attached only live when the host captured a projected output for that run — never during replay).
+//	run.closed                  EventRunSettled (Completed->completed, Interrupted->interrupted, Failed/Stopped/other->failed; Failure carries finishExecution's persisted error text VERBATIM — host-supplied operator-facing text whose wording is not a contract; Output attached only live when the host captured a projected output for that run — never during replay).
 //	message                     EventEntryCommitted (Source prompt -> origin start; next_turn -> origin next_turn; initial_history -> origin start with empty RunID; recovery_resolution/resume_prompt -> origin start, run attribution from the surrounding batch's run.opened; system-role content is privacy-excluded).
 //	message.system              IGNORED: driver/system instructions are privacy-excluded from the default projection (plan §8.5/§13).
 //	queue.accepted              EventQueueAccepted (QueuedInput{ID, Kind, Position, Content}; the fold records ID->kind for later attribution).
@@ -205,7 +205,13 @@ func (p *loopProjector) applyPreview(record event.Record) []sessionloop.Event {
 
 func (p *loopProjector) previewPayload(record event.Record) (sessionloop.Preview, bool) {
 	if record.Source == "tool" {
-		return sessionloop.Preview{Kind: sessionloop.PreviewTool}, true
+		// Tool-update previews keep their identity: Text carries the
+		// capability-owned update kind label (record.Name, bounded by the
+		// harness before publication). The ToolUpdate payload itself stays
+		// opaque and is never projected, and no durable call identity exists
+		// on tool-update records, so ToolCallID stays empty unless a future
+		// record shape carries one.
+		return sessionloop.Preview{Kind: sessionloop.PreviewTool, Text: record.Name}, true
 	}
 	switch record.Type {
 	case agentic.EventTypeTextPreview:

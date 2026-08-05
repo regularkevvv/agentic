@@ -56,6 +56,15 @@ type LoopView[O any] struct {
 	cancelLifetime context.CancelFunc
 	wg             sync.WaitGroup
 
+	// lifecycleMu orders run-creating dispatch acceptance against Close:
+	// dispatchers hold the read side across acceptance, goroutine
+	// registration, and wg.Add, so Close's exclusive section observes either
+	// a fully registered run (and interrupts it) or none (and the dispatcher
+	// then sees closed). Without it a resolve slipping past the closed check
+	// could wg.Add against a joining wg.Wait or re-activate a session mid
+	// closeRoot.
+	lifecycleMu sync.RWMutex
+
 	closeMu   sync.Mutex
 	closeDone bool
 	closeErr  error
@@ -67,6 +76,7 @@ type LoopView[O any] struct {
 	resolutionCommands map[uint64]sessionloop.CommandID
 	outputs            map[string]json.RawMessage
 	runDone            map[string]chan struct{}
+	streams            map[*loopStream]struct{}
 }
 
 var _ sessionloop.Session = (*LoopView[struct{}])(nil)
@@ -118,6 +128,7 @@ func NewLoopView[O any](inner *Session[O], config LoopConfig[O]) (*LoopView[O], 
 		resolutionCommands: make(map[uint64]sessionloop.CommandID),
 		outputs:            make(map[string]json.RawMessage),
 		runDone:            make(map[string]chan struct{}),
+		streams:            make(map[*loopStream]struct{}),
 	}, nil
 }
 
@@ -156,6 +167,7 @@ func mapLoopError(err error) error {
 		{ErrSessionFaulted, sessionloop.ErrSessionFaulted},
 		{ErrSessionClosed, sessionloop.ErrSessionClosed},
 		{store.ErrSessionOpen, sessionloop.ErrSessionOpen},
+		{errStaleRunTarget, sessionloop.ErrStaleRun},
 		{ErrInvalidMessage, sessionloop.ErrInvalidCommand},
 		{ErrInvalidResumeRequest, sessionloop.ErrInvalidCommand},
 	}
@@ -171,6 +183,8 @@ func (v *LoopView[O]) Dispatch(ctx context.Context, command sessionloop.Command)
 	if err := sessionloop.ValidateCommand(command, v.caps); err != nil {
 		return sessionloop.Receipt{}, err
 	}
+	v.lifecycleMu.RLock()
+	defer v.lifecycleMu.RUnlock()
 	if v.isClosed() {
 		return sessionloop.Receipt{}, loopClosedError()
 	}
@@ -186,7 +200,11 @@ func (v *LoopView[O]) Dispatch(ctx context.Context, command sessionloop.Command)
 	case sessionloop.CommandSteer, sessionloop.CommandFollowUp,
 		sessionloop.CommandResolve, sessionloop.CommandInterrupt:
 		// Targeted commands never cross runs (law L8). next_turn is
-		// session-targeted and start names no run.
+		// session-targeted and start names no run. This is only a fast path:
+		// the target is revalidated inside the acceptance primitives' locked
+		// critical sections (acceptWithCursor, requestInterrupt,
+		// prepareResume's suspension-ID recheck), so a run that settles
+		// after this check cannot leak the command into its successor.
 		if active := v.inner.currentRunID(); active != string(command.RunID) {
 			return sessionloop.Receipt{}, fmt.Errorf(
 				"run %q is not the active run: %w", command.RunID, sessionloop.ErrStaleRun)
@@ -255,7 +273,7 @@ func (v *LoopView[O]) dispatchStart(
 		// consumed unwound — never driven — and settled as interrupted on
 		// this goroutine, so no unowned run survives.
 		_ = accepted.consume()
-		if _, interruptErr := v.inner.requestInterrupt(v.lifetime); interruptErr == nil {
+		if _, interruptErr := v.inner.requestInterrupt(v.lifetime, ""); interruptErr == nil {
 			_ = v.inner.finishInterrupt(&agentic.Execution[O]{Status: agentic.ExecutionInterrupted})
 		}
 		close(done)
@@ -287,7 +305,14 @@ func (v *LoopView[O]) dispatchQueue(
 	if err != nil {
 		return sessionloop.Receipt{}, err
 	}
-	receipt, cursor, err := v.inner.acceptWithCursor(ctx, kind, message)
+	// Steer and follow-up are run-targeted (law L8) and pin their target for
+	// the locked acceptance recheck; next_turn is session-targeted (the L8
+	// exception) and passes no target.
+	targetRunID := ""
+	if kind != QueueNextTurn {
+		targetRunID = string(command.RunID)
+	}
+	receipt, cursor, err := v.inner.acceptWithCursor(ctx, kind, message, targetRunID)
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
@@ -365,7 +390,14 @@ func (v *LoopView[O]) dispatchResolve(
 	v.wg.Add(1)
 	go func() {
 		defer v.wg.Done()
-		execution, _ := v.inner.driveResumed(accepted)
+		execution, driveErr := v.inner.driveResumed(accepted)
+		if driveErr != nil && isResumeValidationError(driveErr) && v.inner.State() == Suspended {
+			// The silent resume-validation bounce: finishExecution moved
+			// Running back to Suspended with no journal write and no event.
+			// Surface the live-only fact so protocol consumers waiting on the
+			// resolve never hang (zero position = not replayable, law L6).
+			v.announceLiveState(accepted.runID, commandID, sessionloop.StateSuspended)
+		}
 		v.captureOutput(accepted.runID, execution, done)
 	}()
 	return sessionloop.Receipt{
@@ -377,12 +409,48 @@ func (v *LoopView[O]) dispatchResolve(
 	}, nil
 }
 
+// announceLiveState injects a zero-position, authoritative session.state
+// event into every live view-owned stream. Per law L6 a zero position is not
+// replayable: this is the lawful seam for live-only facts that have no
+// durable journal record, so the event reaches current subscribers only and
+// never appears in snapshots or replays.
+func (v *LoopView[O]) announceLiveState(runID string, commandID sessionloop.CommandID, state sessionloop.State) {
+	announcement := sessionloop.Event{
+		Nature:    sessionloop.EventAuthoritative,
+		Kind:      sessionloop.EventSessionState,
+		SessionID: v.ID(),
+		RunID:     sessionloop.RunID(runID),
+		CommandID: commandID,
+		State:     state,
+	}
+	v.mu.Lock()
+	targets := make([]*loopStream, 0, len(v.streams))
+	for stream := range v.streams {
+		targets = append(targets, stream)
+	}
+	v.mu.Unlock()
+	// Injection happens outside v.mu: each stream owns its own lock and a
+	// stream Close may concurrently detach from the view.
+	for _, stream := range targets {
+		stream.inject(announcement)
+	}
+}
+
+func (v *LoopView[O]) forgetStream(stream *loopStream) {
+	v.mu.Lock()
+	delete(v.streams, stream)
+	v.mu.Unlock()
+}
+
 func (v *LoopView[O]) dispatchInterrupt(
 	ctx context.Context,
 	command sessionloop.Command,
 	commandID sessionloop.CommandID,
 ) (sessionloop.Receipt, error) {
-	if _, err := v.inner.requestInterrupt(ctx); err != nil {
+	// The expected run ID is revalidated inside requestInterrupt's locked
+	// section (law L8): an interrupt aimed at a settled run must never
+	// cancel its successor.
+	if _, err := v.inner.requestInterrupt(ctx, string(command.RunID)); err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
 	// No durable interrupt-request fact exists today; the durable trace is
@@ -558,20 +626,52 @@ func (v *LoopView[O]) Subscribe(ctx context.Context, options sessionloop.Subscri
 		Buffer:      options.Buffer,
 		Preview:     options.Preview,
 	})
-	return &loopStream{subscription: subscription, projector: projector}, nil
+	stream := &loopStream{
+		subscription: subscription,
+		projector:    projector,
+		wake:         make(chan struct{}, 1),
+	}
+	stream.detach = func() { v.forgetStream(stream) }
+	v.mu.Lock()
+	v.streams[stream] = struct{}{}
+	v.mu.Unlock()
+	return stream, nil
 }
 
 // loopStream projects raw records on demand from Next. It is single-consumer
 // like every sessionloop stream; Close is idempotent and safe to call while
-// a Next waits.
+// a Next waits. Besides the projected source subscription it carries a
+// view-owned injection side-channel for zero-position live-only events
+// (law L6); injected events bypass the projector because they are not
+// durable facts.
 type loopStream struct {
 	subscription *Subscription
 	projector    *loopProjector
+	detach       func()
 
 	mu       sync.Mutex
 	queue    []sessionloop.Event
 	terminal error
 	closed   bool
+	wake     chan struct{}
+}
+
+// inject enqueues one view-owned live event. Lock ordering: inject is always
+// called WITHOUT v.mu held beyond a snapshot of the stream set, and it takes
+// only s.mu, so it can never deadlock against a concurrent Close (which
+// releases s.mu before detaching from the view).
+func (s *loopStream) inject(event sessionloop.Event) {
+	s.mu.Lock()
+	if s.closed || s.terminal != nil {
+		s.mu.Unlock()
+		return
+	}
+	s.queue = append(s.queue, event.Clone())
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
 }
 
 func (s *loopStream) Next(ctx context.Context) (sessionloop.Event, error) {
@@ -596,6 +696,8 @@ func (s *loopStream) Next(ctx context.Context) (sessionloop.Event, error) {
 		select {
 		case <-ctx.Done():
 			return sessionloop.Event{}, ctx.Err()
+		case <-s.wake:
+			// An injected live event (or Close) is waiting; re-check the queue.
 		case record, ok := <-s.subscription.Events:
 			if !ok {
 				s.settle()
@@ -634,7 +736,14 @@ func (s *loopStream) Close() error {
 	s.mu.Lock()
 	s.closed = true
 	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
 	s.subscription.Close()
+	if s.detach != nil {
+		s.detach()
+	}
 	return nil
 }
 
@@ -648,14 +757,22 @@ func (v *LoopView[O]) Close(ctx context.Context) error {
 	if v.closeDone {
 		return v.closeErr
 	}
+	// The exclusive side of lifecycleMu excludes run-creating dispatches for
+	// the whole close sequence, so no run can be accepted between the state
+	// switch below and closeRoot.
+	v.lifecycleMu.Lock()
+	defer v.lifecycleMu.Unlock()
 	v.mu.Lock()
 	v.closed = true
 	v.mu.Unlock()
 	switch v.inner.State() {
-	case Running, Closing, Interrupting, Suspended:
-		// requestInterrupt handles the Suspended branch by spawning the
-		// finish itself; ErrNotRunning means the run settled concurrently.
-		if _, err := v.inner.requestInterrupt(ctx); err != nil && !errors.Is(err, ErrNotRunning) &&
+	case Running, Closing, Interrupting:
+		// Suspended is deliberately NOT in this switch: a suspension is a
+		// durable pause and closing is not deletion (law L11), so a
+		// suspended session closes directly through closeRoot and the
+		// suspension survives close/reopen instead of being destroyed by an
+		// interrupt. ErrNotRunning means the run settled concurrently.
+		if _, err := v.inner.requestInterrupt(ctx, ""); err != nil && !errors.Is(err, ErrNotRunning) &&
 			!errors.Is(err, ErrSessionClosed) && !errors.Is(err, ErrSessionFaulted) {
 			return mapLoopError(err)
 		}

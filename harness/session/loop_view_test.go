@@ -821,6 +821,169 @@ func TestLoopViewSuspendedErrorMapping(t *testing.T) {
 	}
 }
 
+// TestLoopViewClosePreservesDurableSuspension proves Close treats a
+// suspension as a durable pause (law L11): closing a Suspended session must
+// not interrupt it, the suspension survives close/reopen, and the reopened
+// session resolves it to completion.
+func TestLoopViewClosePreservesDurableSuspension(t *testing.T) {
+	repository := storememory.New()
+	model := &scriptedModel{steps: []modelStep{
+		{message: agentic.NewToolUseMessage(agentic.ToolUse{ID: "gate-d", Name: "danger", Input: map[string]any{"value": "x"}})},
+	}}
+	agent := agentic.NewAgent("", model)
+	agentic.AddTool(agent,
+		func(context.Context, loopToolInput) (string, error) { return "ok", nil },
+		agentic.AutoToolName("danger"), agentic.AutoToolDescription("gated"))
+	config := sessionConfig[string](t, agent, repository, artifactmemory.New(), spill.Config{})
+	config.ToolGate = suspendingGate{}
+	session, err := New(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view, err := NewLoopView(session, LoopConfig[string]{CloseRoot: session.Close})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt := loopDispatch(t, view, sessionloopStartCommand("pause durably"))
+	awaitState(t, session, Suspended)
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Suspension == nil {
+		t.Fatalf("suspended snapshot carries no suspension: %#v", snapshot)
+	}
+	suspensionID := snapshot.Suspension.ID
+
+	if err := view.Close(context.Background()); err != nil {
+		t.Fatalf("Close of a suspended session = %v", err)
+	}
+	if session.State() != Closed {
+		t.Fatalf("state after close = %s", session.State())
+	}
+
+	// Reopen: the suspension survived; Close settled nothing.
+	recoveredModel := &scriptedModel{steps: []modelStep{textStep("resumed after reopen")}}
+	recoveredAgent := agentic.NewAgent("", recoveredModel)
+	agentic.AddTool(recoveredAgent,
+		func(context.Context, loopToolInput) (string, error) { return "ok", nil },
+		agentic.AutoToolName("danger"), agentic.AutoToolDescription("gated"))
+	recoveredConfig := sessionConfig[string](t, recoveredAgent, repository, artifactmemory.New(), spill.Config{})
+	recoveredConfig.ID = config.ID
+	recoveredConfig.ToolGate = suspendingGate{}
+	recovered, err := Recover(context.Background(), recoveredConfig)
+	if err != nil {
+		t.Fatalf("Recover of the suspended session = %v", err)
+	}
+	if recovered.State() != Suspended {
+		t.Fatalf("reopened state = %s, want suspended (close destroyed the durable pause)", recovered.State())
+	}
+	reopened, err := recovered.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reopened.Suspension == nil || reopened.Suspension.ID != suspensionID ||
+		reopened.RunID != string(receipt.RunID) {
+		t.Fatalf("reopened suspension = %#v, want the original %q on run %q",
+			reopened.Suspension, suspensionID, receipt.RunID)
+	}
+	entries := loadJournalEntries(t, recovered)
+	if countEntries(entries, kindRunClosed) != 0 {
+		t.Fatalf("Close settled the suspended run: %v", journalKinds(entries))
+	}
+
+	execution, err := recovered.Resume(context.Background(), ResumeRequest{
+		SuspensionID: suspensionID,
+		Resolutions:  []ToolResolution{{CallID: "gate-d", Action: ResolutionApprove}},
+	})
+	if err != nil || execution.Status != agentic.ExecutionCompleted {
+		t.Fatalf("resolve after reopen execution=%#v err=%v", execution, err)
+	}
+	if err := recovered.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// resumeBounceDriver fails every Resume with a validation-class error before
+// any RunStarted event, reproducing the silent resume-validation bounce
+// (finishExecution moves Running back to Suspended with no journal write).
+type resumeBounceDriver struct {
+	agentic.Driver[string]
+}
+
+func (d *resumeBounceDriver) Resume(context.Context, agentic.ResumeInput, ...agentic.RunOption) (*agentic.Execution[string], error) {
+	return nil, fmt.Errorf("scripted resume validation failure: %w", agentic.ErrDriveInput)
+}
+
+// TestLoopViewResolveBounceEmitsZeroPositionSessionState proves the bounce
+// is visible to protocol consumers: every live view-owned stream receives an
+// authoritative session.state suspended event with a ZERO position (law L6:
+// zero position = not replayable, the lawful seam for live-only facts), and
+// the durable suspension is untouched.
+func TestLoopViewResolveBounceEmitsZeroPositionSessionState(t *testing.T) {
+	model := &scriptedModel{steps: []modelStep{
+		{message: agentic.NewToolUseMessage(agentic.ToolUse{ID: "gate-b", Name: "danger", Input: map[string]any{"value": "y"}})},
+		textStep("never reached"),
+	}}
+	agent := agentic.NewAgent("", model)
+	agentic.AddTool(agent,
+		func(context.Context, loopToolInput) (string, error) { return "ok", nil },
+		agentic.AutoToolName("danger"), agentic.AutoToolDescription("gated"))
+	view, session := newLoopViewForTest(t, &resumeBounceDriver{Driver: agent}, storememory.New(),
+		func(config *Config[string], _ *LoopConfig[string]) {
+			config.ToolGate = suspendingGate{}
+		})
+	stream := loopSubscribe(t, view, sessionloop.SubscribeOptions{Buffer: 128})
+	receipt := loopDispatch(t, view, sessionloopStartCommand("suspend then bounce"))
+	suspended, _ := awaitLoopKind(t, stream, sessionloop.EventRunSuspended)
+
+	resolve := sessionloop.Command{
+		ID:    "cmd-bounce",
+		Kind:  sessionloop.CommandResolve,
+		RunID: receipt.RunID,
+		Resolution: &sessionloop.Resolution{
+			SuspensionID: suspended.Suspension.ID,
+			Decisions:    []sessionloop.ResolutionDecision{{ID: "gate-b", Action: sessionloop.ResolutionApprove}},
+		},
+	}
+	loopDispatch(t, view, resolve)
+
+	bounced, _ := awaitLoopKind(t, stream, sessionloop.EventSessionState)
+	if !bounced.Position.IsZero() {
+		t.Fatalf("bounce announcement position = %#v, want zero (live-only, not replayable)", bounced.Position)
+	}
+	if bounced.Nature != sessionloop.EventAuthoritative || bounced.State != sessionloop.StateSuspended ||
+		bounced.RunID != receipt.RunID || bounced.CommandID != "cmd-bounce" ||
+		bounced.SessionID != view.ID() {
+		t.Fatalf("bounce announcement = %#v", bounced)
+	}
+
+	// The durable suspension is untouched by the bounced resolve.
+	if session.State() != Suspended {
+		t.Fatalf("state after bounce = %s, want suspended", session.State())
+	}
+	snapshot, err := view.Snapshot(loopTestContext(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != sessionloop.StateSuspended || snapshot.Suspension == nil ||
+		snapshot.Suspension.ID != suspended.Suspension.ID {
+		t.Fatalf("snapshot after bounce = %#v", snapshot)
+	}
+
+	// The zero-position event is live-only: a fresh replay never carries it.
+	replay := loopSubscribe(t, view, sessionloop.SubscribeOptions{Buffer: 128})
+	for {
+		event := loopNextEvent(t, replay)
+		if event.Kind == sessionloop.EventSessionState {
+			t.Fatalf("live-only bounce announcement leaked into replay: %#v", event)
+		}
+		if event.Position.Sequence >= snapshot.Position.Sequence {
+			break
+		}
+	}
+}
+
 func TestDefaultSuspensionProjectorUnknownKind(t *testing.T) {
 	projected, err := defaultSuspensionProjector(agentic.Suspension{
 		ID:      "susp-x",

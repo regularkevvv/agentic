@@ -9,7 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
+	"time"
 
 	"github.com/regularkevvv/agentic/harness/session"
 	sl "github.com/regularkevvv/agentic/harness/sessionloop"
@@ -21,6 +21,15 @@ import (
 // It only bounds an internal subscriber; the snapshot fallback recovers from
 // any lag disconnect.
 const waitBuffer = 1024
+
+// errResumeRejected reports the silent resume-validation bounce: the resolve
+// was accepted, but resume validation moved the session straight back to
+// suspended before any run event, announced by the host as a zero-position
+// live-only session.state event. The legacy adapter surfaced the concrete
+// validation error object at this boundary; the protocol deliberately
+// carries no error identity for the bounce, so the bridge reports the
+// boundary itself (documented differential exclusion).
+var errResumeRejected = errors.New("resume attempt was rejected and the session remains suspended")
 
 type config struct {
 	profileLabel  string
@@ -177,7 +186,7 @@ func (s *bridgeSession) Submit(ctx context.Context, input uit.Input) error {
 		_ = stream.Close()
 		return mapError(err)
 	}
-	return s.awaitRun(ctx, stream, pre.Position, receipt.RunID, false)
+	return s.awaitRun(ctx, stream, pre.Position, receipt.RunID, false, "")
 }
 
 func (s *bridgeSession) Steer(ctx context.Context, input uit.Input) error {
@@ -286,7 +295,7 @@ func (s *bridgeSession) Resolve(ctx context.Context, resolution uit.Resolution) 
 		_ = stream.Close()
 		return mapError(err)
 	}
-	return s.awaitRun(ctx, stream, snapshot.Position, receipt.RunID, false)
+	return s.awaitRun(ctx, stream, snapshot.Position, receipt.RunID, false, receipt.CommandID)
 }
 
 // Interrupt dispatches an interrupt for the active run and blocks until that
@@ -312,7 +321,7 @@ func (s *bridgeSession) Interrupt(ctx context.Context) error {
 		}
 		return mapError(err)
 	}
-	return s.awaitRun(ctx, stream, snapshot.Position, receipt.RunID, true)
+	return s.awaitRun(ctx, stream, snapshot.Position, receipt.RunID, true, "")
 }
 
 func (s *bridgeSession) Close(ctx context.Context) error {
@@ -320,16 +329,20 @@ func (s *bridgeSession) Close(ctx context.Context) error {
 }
 
 // awaitRun blocks until the target run reaches its boundary: a durable
-// suspension (unless settleOnly) or its settlement. The stream is the
-// primary wait; any stream failure falls back to an authoritative snapshot
-// and, when the boundary already passed, a replay from the pre-dispatch
-// position. It never sleeps.
+// suspension (unless settleOnly), a terminal session fault, or its
+// settlement. A non-empty resolveCommand marks the wait as a Resolve wait:
+// the host's zero-position live-only session.state bounce (law L6) carrying
+// that command's identity is then terminal too, because a bounced resolve
+// produces no run event and no settlement. The stream is the primary wait;
+// any stream failure falls back to an authoritative snapshot and, when the
+// boundary already passed, a replay from the pre-dispatch position.
 func (s *bridgeSession) awaitRun(
 	ctx context.Context,
 	stream sl.Stream,
 	from sl.Position,
 	runID sl.RunID,
 	settleOnly bool,
+	resolveCommand sl.CommandID,
 ) error {
 	current := stream
 	defer func() { _ = current.Close() }()
@@ -352,6 +365,22 @@ func (s *bridgeSession) awaitRun(
 						return nil
 					}
 					return outcomeError(*event.Outcome)
+				}
+			case sl.EventSessionState:
+				if event.State == sl.StateFaulted {
+					// A mid-run session fault never settles the run; the
+					// fault observation is terminal for every wait, with the
+					// legacy identity the app's failure banner expects.
+					return session.ErrSessionFaulted
+				}
+				if resolveCommand != "" && event.CommandID == resolveCommand &&
+					event.RunID == runID && event.State == sl.StateSuspended &&
+					event.Position.Sequence == 0 {
+					// The silent resume-validation bounce: the session moved
+					// straight back to suspended with no durable record, so
+					// no run event and no settlement will ever arrive for
+					// this resolve.
+					return errResumeRejected
 				}
 			}
 			continue
@@ -387,10 +416,13 @@ func (s *bridgeSession) awaitRun(
 
 // confirmSuspended reconciles the announced suspension against authoritative
 // snapshots until the durable suspended state (or a racing settlement) is
-// observable. It is a snapshot poll paced by the concurrent finalize, never
-// a sleep: the suspended transition is already committed or in flight when
-// the suspension event has been delivered.
+// observable. The suspended transition is already committed or in flight
+// when the suspension event has been delivered, so the first poll usually
+// resolves; retries back off exponentially (1ms doubling to a 20ms cap)
+// instead of busy-spinning against the snapshot API.
 func (s *bridgeSession) confirmSuspended(ctx context.Context, from sl.Position, runID sl.RunID, settleOnly bool) error {
+	const maxPollDelay = 20 * time.Millisecond
+	delay := time.Millisecond
 	for {
 		snapshot, err := s.session.Snapshot(ctx)
 		if err != nil {
@@ -405,10 +437,19 @@ func (s *bridgeSession) confirmSuspended(ctx context.Context, from sl.Position, 
 		case sl.StateFaulted:
 			return session.ErrSessionFaulted
 		}
-		if err := ctx.Err(); err != nil {
-			return err
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
 		}
-		runtime.Gosched()
+		if delay < maxPollDelay {
+			delay *= 2
+			if delay > maxPollDelay {
+				delay = maxPollDelay
+			}
+		}
 	}
 }
 

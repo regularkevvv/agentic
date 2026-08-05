@@ -28,9 +28,18 @@ const (
 	EventRunStarted      EventKind = "run.started"
 	EventRunSuspended    EventKind = "run.suspended"
 	EventRunSettled      EventKind = "run.settled"
-	EventSessionState    EventKind = "session.state"
-	EventUsage           EventKind = "usage"
-	EventPreviewDelta    EventKind = "preview.delta"
+
+	// EventSessionState reports an authoritative session-state observation.
+	// Hosts may emit it with a ZERO position as a live-only signal for state
+	// changes that produce no durable record — for example a resolve whose
+	// validation bounced the session straight back to suspended before any
+	// run event. Per law L6 a zero position is not replayable: such events
+	// reach live subscribers only and never appear in snapshots or replays,
+	// so consumers reconcile them against the next Snapshot, not the log.
+	EventSessionState EventKind = "session.state"
+
+	EventUsage        EventKind = "usage"
+	EventPreviewDelta EventKind = "preview.delta"
 )
 
 // Event is the envelope carrying common identity and exactly one relevant
@@ -216,10 +225,12 @@ const (
 	RunFailed      RunOutcomeKind = "failed"
 )
 
-// RunOutcome is the singular settled outcome of one run. Failure is a
-// sanitized description; Output is optional structured output present only
-// when the host advertises CapabilityStructuredOutput and an
-// application-owned projector produced it.
+// RunOutcome is the singular settled outcome of one run. Failure is
+// operator-facing text supplied by the host: its wording is not part of the
+// contract (error strings never are — only Kind and the error sentinels
+// carry identity), and hosts decide how much error detail they surface.
+// Output is optional structured output present only when the host advertises
+// CapabilityStructuredOutput and an application-owned projector produced it.
 type RunOutcome struct {
 	RunID   RunID
 	Kind    RunOutcomeKind

@@ -454,24 +454,67 @@ func TestMapSessionLoopHelpersInHost(t *testing.T) {
 	}
 }
 
-func TestDriveResumedCannotOutliveClose(t *testing.T) {
+// TestLoopStreamInjectAfterTerminal proves the injection side-channel never
+// resurrects a closed or terminally failed stream: injected live-only events
+// are dropped once the stream is closed or lagged.
+func TestLoopStreamInjectAfterTerminal(t *testing.T) {
+	view, _ := newLoopViewForTest(t, &countingDriver{}, storememory.New(), nil)
+	closed := loopSubscribe(t, view, sessionloop.SubscribeOptions{})
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closed.(*loopStream).inject(sessionloop.Event{Kind: sessionloop.EventSessionState})
+	if _, err := closed.Next(loopTestContext(t)); !errors.Is(err, io.EOF) {
+		t.Fatalf("Next after close+inject = %v, want io.EOF", err)
+	}
+
+	lagging := loopSubscribe(t, view, sessionloop.SubscribeOptions{Buffer: 1})
+	loopDispatch(t, view, sessionloopStartCommand("one"))
+	if err := view.inner.WaitForIdle(loopTestContext(t)); err != nil {
+		t.Fatal(err)
+	}
+	loopDispatch(t, view, sessionloopStartCommand("two"))
+	if err := view.inner.WaitForIdle(loopTestContext(t)); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if _, err := lagging.Next(loopTestContext(t)); err != nil {
+			if !errors.Is(err, sessionloop.ErrLagged) {
+				t.Fatalf("terminal err = %v, want ErrLagged", err)
+			}
+			break
+		}
+	}
+	lagging.(*loopStream).inject(sessionloop.Event{Kind: sessionloop.EventSessionState})
+	if _, err := lagging.Next(loopTestContext(t)); !errors.Is(err, sessionloop.ErrLagged) {
+		t.Fatalf("Next after lag+inject = %v, want the terminal ErrLagged", err)
+	}
+}
+
+// TestAcceptWithCursorStaleTargetFastFail covers the first locked stale
+// check: a target naming a foreign run fails before ID generation.
+func TestAcceptWithCursorStaleTargetFastFail(t *testing.T) {
 	driver := &countingDriver{}
 	config := sessionConfig(t, driver, storememory.New(), artifactmemory.New(), spill.Config{})
 	session, err := New(context.Background(), config)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := session.Close(context.Background()); err != nil {
+	defer func() { _ = session.Close(context.Background()) }()
+	accepted, err := session.prepareStart(context.Background(),
+		agentic.NewTextMessage(agentic.RoleUser, "hold the run"), context.Background())
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.driveResumed(&acceptedResume[string]{}); !errors.Is(err, ErrSessionClosed) {
-		t.Fatalf("driveResumed after Close = %v", err)
+	if _, _, err := session.acceptWithCursor(context.Background(), QueueSteer,
+		agentic.NewTextMessage(agentic.RoleUser, "steer"), "run-other"); !errors.Is(err, errStaleRunTarget) {
+		t.Fatalf("stale-target acceptance = %v, want errStaleRunTarget", err)
 	}
-	if _, err := session.driveResumedIndeterminate(&acceptedResume[string]{indeterminate: true}); !errors.Is(err, ErrSessionClosed) {
-		t.Fatalf("driveResumedIndeterminate after Close = %v", err)
+	if _, err := session.requestInterrupt(context.Background(), accepted.runID); err != nil {
+		t.Fatal(err)
 	}
-	if driver.Count() != 0 {
-		t.Fatalf("driver ran %d times after close", driver.Count())
+	if err := session.finishInterrupt(&agentic.Execution[string]{Status: agentic.ExecutionInterrupted}); err != nil {
+		t.Fatal(err)
 	}
 }
 

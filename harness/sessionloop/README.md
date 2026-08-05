@@ -60,6 +60,18 @@ caller                         host session
 | L11 | Closing releases the handle, never the durable session |
 | L12 | Content authority and privacy remain application-owned |
 
+### Zero-position events are live-only
+
+Replay positions are opaque and a zero position is not replayable (law L6).
+Hosts use that seam deliberately: an authoritative event carrying a ZERO
+position is a live-only signal for a state change that produced no durable
+record, and it reaches only currently attached subscribers — it never appears
+in snapshots or replays. The canonical example is a `session.state` event
+announcing that a resolve bounced straight back to `suspended` because resume
+validation failed before any run event; without the signal a consumer waiting
+on the resolve would hang forever. Consumers reconcile zero-position events
+against the next `Snapshot`, never against the durable log.
+
 ## Capabilities
 
 Baseline behavior — new/open, start, snapshots, authoritative entries,
@@ -83,10 +95,33 @@ Optional behavior is advertised explicitly and never emulated:
 Unknown capability strings survive round trips, so vendors can extend the set
 without breaking consumers.
 
+## Three ways to drive a session
+
+The protocol is one of three distinct consumption modes; naming them avoids
+confusing their contracts:
+
+- **Session facade mode (this module).** A consumer owns the top-level
+  conversation through `sessionloop.Host`/`Session`: it dispatches commands,
+  observes ordered events, and reconciles with snapshots. Downstream systems
+  (for example Chacla's facade sessions) compose this protocol with their own
+  principal binding; the protocol itself carries no memory or instruction
+  concepts.
+- **Principal attachment mode.** A separate, downstream-owned contract where
+  an external principal attaches to an existing conversation it does not own.
+  This module does not define or replace it; a facade-mode consumer must
+  prevent double recording between the two modes.
+- **The legacy blocking API.** Agentic Harness's original
+  `Prompt`/`Resume`/`Interrupt` surface: synchronous calls that return the
+  settled execution. It remains fully supported and unchanged; the Agentic
+  sessionloop host is a view over the same durable sessions, so legacy calls
+  and protocol commands see one shared truth.
+
 ## A runnable fake-host example
 
 The `testkit` host is a complete in-memory implementation advertising every
-capability except `dispatch.idempotent`:
+capability except `dispatch.idempotent` (opt in with
+`testkit.WithIdempotentDispatch()`, which backs the capability with a key map
+recorded on the durable session state):
 
 ```go
 package main

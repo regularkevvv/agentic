@@ -347,6 +347,148 @@ func TestInterruptWhileSuspendedSettlesTheRunAsInterrupted(t *testing.T) {
 	}
 }
 
+func TestCloseKeepsASuspendedRunAndReopenRestoresTheSameSuspension(t *testing.T) {
+	t.Parallel()
+	host := testkit.New(testkit.WithRunFunc(testkit.ScenarioRunFunc()))
+	session := openSession(t, host)
+	id := session.ID()
+	ctx := testContext(t)
+	stream, err := session.Subscribe(ctx, sessionloop.SubscribeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	input := textInput("pause across close")
+	input.Meta = map[string]string{"conformance.scenario": "suspend"}
+	receipt, err := session.Dispatch(ctx, sessionloop.Command{Kind: sessionloop.CommandStart, Input: input})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event, nextErr := stream.Next(ctx)
+		if nextErr != nil {
+			t.Fatal(nextErr)
+		}
+		if event.Kind == sessionloop.EventRunSuspended {
+			break
+		}
+	}
+	before, err := session.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	suspensionID := before.Suspension.ID
+
+	// Close must NOT settle the suspended run (law L11: a suspension is a
+	// durable pause; closing releases the handle, never the session).
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		event, nextErr := stream.Next(ctx)
+		if nextErr != nil {
+			if !errors.Is(nextErr, io.EOF) {
+				t.Fatalf("stream after close ended with %v, want io.EOF", nextErr)
+			}
+			break
+		}
+		if event.Kind == sessionloop.EventRunSettled {
+			t.Fatalf("closing a suspended session settled its run: %#v", event)
+		}
+	}
+
+	reopened, err := host.OpenSession(ctx, id)
+	if err != nil {
+		t.Fatalf("reopen of a suspended session failed: %v", err)
+	}
+	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	snapshot, err := reopened.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != sessionloop.StateSuspended || snapshot.ActiveRunID != receipt.RunID ||
+		snapshot.Suspension == nil || snapshot.Suspension.ID != suspensionID {
+		t.Fatalf("reopened snapshot = state %q run %q suspension %#v, want the surviving suspension %q",
+			snapshot.State, snapshot.ActiveRunID, snapshot.Suspension, suspensionID)
+	}
+
+	replay, err := reopened.Subscribe(ctx, sessionloop.SubscribeOptions{Buffer: 256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = replay.Close() }()
+	if _, err := reopened.Dispatch(ctx, sessionloop.Command{
+		Kind:  sessionloop.CommandResolve,
+		RunID: receipt.RunID,
+		Resolution: &sessionloop.Resolution{
+			SuspensionID: suspensionID,
+			Decisions:    []sessionloop.ResolutionDecision{{ID: "decision-1", Action: sessionloop.ResolutionApprove}},
+		},
+	}); err != nil {
+		t.Fatalf("resolve after reopen failed: %v", err)
+	}
+	settled, _ := awaitSettled(t, replay, receipt.RunID)
+	if settled.Outcome.Kind != sessionloop.RunCompleted {
+		t.Fatalf("outcome after reopen and resolve = %q, want completed", settled.Outcome.Kind)
+	}
+}
+
+func TestIdempotencyKeysReturnTheOriginalReceiptAndSurviveReopen(t *testing.T) {
+	t.Parallel()
+	host := testkit.New(testkit.WithIdempotentDispatch())
+	session := openSession(t, host)
+	id := session.ID()
+	ctx := testContext(t)
+	stream, err := session.Subscribe(ctx, sessionloop.SubscribeOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stream.Close() }()
+
+	command := sessionloop.Command{Kind: sessionloop.CommandStart, Input: textInput("exactly once"), IdempotencyKey: "key-1"}
+	first, err := session.Dispatch(ctx, command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := session.Dispatch(ctx, command)
+	if err != nil {
+		t.Fatalf("idempotent replay failed: %v", err)
+	}
+	if first != second {
+		t.Fatalf("idempotent receipts diverge:\nfirst  %#v\nsecond %#v", first, second)
+	}
+	_, seen := awaitSettled(t, stream, first.RunID)
+	starts := 0
+	for _, event := range seen {
+		if event.Kind == sessionloop.EventRunStarted {
+			starts++
+		}
+	}
+	if starts != 1 {
+		t.Fatalf("idempotent start produced %d run.started events, want exactly one", starts)
+	}
+
+	// Keys share the durable log's lifetime: a reopened handle still replays.
+	if err := session.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := host.OpenSession(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reopened.Close(context.Background()) })
+	replayed, err := reopened.Dispatch(ctx, command)
+	if err != nil {
+		t.Fatalf("idempotent replay after reopen failed: %v", err)
+	}
+	if replayed != first {
+		t.Fatalf("replay after reopen diverged:\nfirst    %#v\nreplayed %#v", first, replayed)
+	}
+	if snapshot, err := reopened.Snapshot(ctx); err != nil || snapshot.ActiveRunID != "" {
+		t.Fatalf("replay after reopen started a duplicate run: %#v err=%v", snapshot, err)
+	}
+}
+
 func TestRunFuncErrorSettlesTheRunAsFailed(t *testing.T) {
 	t.Parallel()
 	host := testkit.New(testkit.WithRunFunc(func(*testkit.RunContext) error {

@@ -479,6 +479,137 @@ func TestSubmitEntryPathErrors(t *testing.T) {
 	}
 }
 
+func TestAwaitRunSessionFaultEventIsTerminal(t *testing.T) {
+	t.Parallel()
+	// A mid-run session fault produces a session.state event and never a
+	// settlement; the wait must end promptly with the legacy fault identity.
+	faulted := &fakeSession{
+		subscribes: []subscribeStep{{stream: newFakeStream(
+			streamStep{event: sl.Event{Kind: sl.EventRunStarted, RunID: "run-1"}},
+			streamStep{event: sl.Event{Kind: sl.EventSessionState, State: sl.StateFaulted, Position: sl.Position{Sequence: 9}}},
+		)}},
+		dispatches: []dispatchStep{{receipt: sl.Receipt{RunID: "run-1"}}},
+	}
+	if err := (&bridgeSession{session: faulted}).Submit(testContext(t), uit.Input{Text: "x"}); err != session.ErrSessionFaulted {
+		t.Fatalf("fault event err = %v, want the bare legacy sentinel", err)
+	}
+
+	// The interrupt wait observes the same terminal fault.
+	interrupted := &fakeSession{
+		snapshots: []snapshotStep{{snapshot: runningSnapshot("run-1")}},
+		subscribes: []subscribeStep{{stream: newFakeStream(
+			streamStep{event: sl.Event{Kind: sl.EventSessionState, State: sl.StateFaulted, Position: sl.Position{Sequence: 3}}},
+		)}},
+		dispatches: []dispatchStep{{receipt: sl.Receipt{RunID: "run-1"}}},
+	}
+	if err := (&bridgeSession{session: interrupted}).Interrupt(testContext(t)); err != session.ErrSessionFaulted {
+		t.Fatalf("interrupt fault event err = %v", err)
+	}
+
+	// Non-faulted session-state observations (recovery announcements) never
+	// end the wait; only the run boundary does.
+	recovered := &fakeSession{
+		subscribes: []subscribeStep{{stream: newFakeStream(
+			streamStep{event: sl.Event{Kind: sl.EventSessionState, State: sl.StateRunning, Position: sl.Position{Sequence: 2}}},
+			streamStep{event: settledEvent("run-1", sl.RunCompleted, "")},
+		)}},
+		dispatches: []dispatchStep{{receipt: sl.Receipt{RunID: "run-1"}}},
+	}
+	if err := (&bridgeSession{session: recovered}).Submit(testContext(t), uit.Input{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// bounceEvent is the host's zero-position live-only announcement that a
+// resolve bounced straight back to suspended (resume validation failed
+// before any run event).
+func bounceEvent(runID sl.RunID, commandID sl.CommandID) sl.Event {
+	return sl.Event{
+		Nature: sl.EventAuthoritative, Kind: sl.EventSessionState,
+		RunID: runID, CommandID: commandID, State: sl.StateSuspended,
+	}
+}
+
+func TestResolveResumeValidationBounceIsTerminal(t *testing.T) {
+	t.Parallel()
+	suspendedSnapshot := sl.Snapshot{
+		State: sl.StateSuspended, ActiveRunID: "run-1", Position: sl.Position{Sequence: 5},
+		Suspension: &sl.Suspension{ID: "susp-1", Kind: "harness.permission.v1", Decisions: []sl.SuspensionDecision{
+			{ID: "call-a", Name: "danger"},
+		}},
+	}
+	resolution := uit.Resolution{
+		SuspensionID: "susp-1",
+		Decisions:    []uit.Decision{{CallID: "call-a", Action: uit.DecisionApprove}},
+	}
+	build := func(stream *fakeStream) *fakeSession {
+		return &fakeSession{
+			snapshots:  []snapshotStep{{snapshot: suspendedSnapshot}},
+			subscribes: []subscribeStep{{stream: stream}},
+			dispatches: []dispatchStep{{receipt: sl.Receipt{RunID: "run-1", CommandID: "cmd-resolve"}}},
+		}
+	}
+
+	// The bounce carrying the resolve's command and run identity is terminal:
+	// no run event or settlement will ever arrive for this resolve.
+	bounced := build(newFakeStream(streamStep{event: bounceEvent("run-1", "cmd-resolve")}))
+	err := (&bridgeSession{session: bounced}).Resolve(testContext(t), resolution)
+	if err == nil || err.Error() != "resume attempt was rejected and the session remains suspended" {
+		t.Fatalf("bounce err = %v", err)
+	}
+
+	// A bounce for a different command is not this resolve's boundary.
+	foreign := build(newFakeStream(
+		streamStep{event: bounceEvent("run-1", "cmd-other")},
+		streamStep{event: settledEvent("run-1", sl.RunCompleted, "")},
+	))
+	if err := (&bridgeSession{session: foreign}).Resolve(testContext(t), resolution); err != nil {
+		t.Fatal(err)
+	}
+
+	// Submit's wait semantics stay unchanged: a bounce announcement never
+	// terminates a start wait, only the run boundary does.
+	submitted := &fakeSession{
+		subscribes: []subscribeStep{{stream: newFakeStream(
+			streamStep{event: bounceEvent("run-1", "cmd-x")},
+			streamStep{event: settledEvent("run-1", sl.RunCompleted, "")},
+		)}},
+		dispatches: []dispatchStep{{receipt: sl.Receipt{RunID: "run-1", CommandID: "cmd-x"}}},
+	}
+	if err := (&bridgeSession{session: submitted}).Submit(testContext(t), uit.Input{Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConfirmSuspendedBacksOffBetweenPolls(t *testing.T) {
+	t.Parallel()
+	// Six not-yet-suspended polls force the full backoff ramp
+	// (1+2+4+8+16+20 = 51ms) before the durable state lands.
+	inner := &fakeSession{snapshots: []snapshotStep{
+		{snapshot: runningSnapshot("run-1")},
+		{snapshot: runningSnapshot("run-1")},
+		{snapshot: runningSnapshot("run-1")},
+		{snapshot: runningSnapshot("run-1")},
+		{snapshot: runningSnapshot("run-1")},
+		{snapshot: runningSnapshot("run-1")},
+		{snapshot: sl.Snapshot{State: sl.StateSuspended, ActiveRunID: "run-1"}},
+	}}
+	start := time.Now()
+	if err := (&bridgeSession{session: inner}).confirmSuspended(testContext(t), sl.Position{}, "run-1", false); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed < 40*time.Millisecond {
+		t.Fatalf("confirmSuspended returned after %v; backoff never slept", elapsed)
+	}
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	spinning := &bridgeSession{session: &fakeSession{snapshots: []snapshotStep{{snapshot: runningSnapshot("run-1")}}}}
+	if err := spinning.confirmSuspended(cancelled, sl.Position{}, "run-1", false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled confirm err = %v", err)
+	}
+}
+
 func TestAwaitRunStreamFailureFallbacks(t *testing.T) {
 	t.Parallel()
 	lag := fmt.Errorf("%w: too slow", sl.ErrLagged)

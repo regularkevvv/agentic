@@ -243,9 +243,13 @@ func TestDispatchCancelAfterAcceptanceSettlesInterrupted(t *testing.T) {
 	}
 }
 
-// TestDriveAcceptedCannotOutliveClose proves an accepted-but-undriven run
-// cannot drive after the session closed.
-func TestDriveAcceptedCannotOutliveClose(t *testing.T) {
+// TestDriveAcceptedAfterCloseSettlesThroughFinishPath documents why the
+// drive halves carry no Closed pre-check: through the view the scenario is
+// unreachable (Close joins every drive goroutine before releasing the root),
+// so a post-Close drive exists only by fabrication. Like the legacy fused
+// Prompt, the fabricated drive settles through finishExecution, which
+// reports the absent run instead of a state pre-check.
+func TestDriveAcceptedAfterCloseSettlesThroughFinishPath(t *testing.T) {
 	driver := &countingDriver{}
 	config := sessionConfig(t, driver, storememory.New(), artifactmemory.New(), spill.Config{})
 	session, err := New(context.Background(), config)
@@ -257,7 +261,7 @@ func TestDriveAcceptedCannotOutliveClose(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.requestInterrupt(context.Background()); err != nil {
+	if _, err := session.requestInterrupt(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := session.finishInterrupt(&agentic.Execution[string]{Status: agentic.ExecutionInterrupted}); err != nil {
@@ -266,11 +270,15 @@ func TestDriveAcceptedCannotOutliveClose(t *testing.T) {
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.driveAccepted(accepted); !errors.Is(err, ErrSessionClosed) {
-		t.Fatalf("driveAccepted after Close = %v, want ErrSessionClosed", err)
+	if _, err := session.driveAccepted(accepted); err == nil ||
+		!strings.Contains(err.Error(), "without an active session run") {
+		t.Fatalf("fabricated post-close drive err = %v, want the finish path's absent-run report", err)
 	}
-	if driver.Count() != 0 {
-		t.Fatalf("driver ran %d times after close", driver.Count())
+	if _, err := session.driveAccepted(accepted); err == nil || !strings.Contains(err.Error(), "already driven") {
+		t.Fatalf("second fabricated drive err = %v, want single-use consumption", err)
+	}
+	if driver.Count() != 1 {
+		t.Fatalf("driver ran %d times, want exactly the one fabricated drive", driver.Count())
 	}
 }
 
@@ -283,7 +291,7 @@ func TestRequestInterruptStateMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.requestInterrupt(context.Background()); !errors.Is(err, ErrNotRunning) {
+	if _, err := session.requestInterrupt(context.Background(), ""); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("idle requestInterrupt = %v, want ErrNotRunning", err)
 	}
 	accepted, err := session.prepareStart(context.Background(),
@@ -291,12 +299,20 @@ func TestRequestInterruptStateMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	runID, err := session.requestInterrupt(context.Background())
+	// A stale expected run never transitions the session (law L8).
+	if _, err := session.requestInterrupt(context.Background(), "run-other"); !errors.Is(err, errStaleRunTarget) {
+		t.Fatalf("stale requestInterrupt = %v, want errStaleRunTarget", err)
+	}
+	if state := session.State(); state != Running {
+		t.Fatalf("state after stale requestInterrupt = %s, want running", state)
+	}
+	// The matching expected run interrupts exactly like the legacy no-check call.
+	runID, err := session.requestInterrupt(context.Background(), accepted.runID)
 	if err != nil || runID != accepted.runID {
 		t.Fatalf("running requestInterrupt = (%q, %v), want (%q, nil)", runID, err, accepted.runID)
 	}
 	// Interrupting joins without error.
-	if joined, err := session.requestInterrupt(context.Background()); err != nil || joined != accepted.runID {
+	if joined, err := session.requestInterrupt(context.Background(), ""); err != nil || joined != accepted.runID {
 		t.Fatalf("interrupting requestInterrupt = (%q, %v)", joined, err)
 	}
 	if err := session.finishInterrupt(&agentic.Execution[string]{Status: agentic.ExecutionInterrupted}); err != nil {
@@ -305,7 +321,7 @@ func TestRequestInterruptStateMatrix(t *testing.T) {
 	if err := session.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.requestInterrupt(context.Background()); !errors.Is(err, ErrSessionClosed) {
+	if _, err := session.requestInterrupt(context.Background(), ""); !errors.Is(err, ErrSessionClosed) {
 		t.Fatalf("closed requestInterrupt = %v, want ErrSessionClosed", err)
 	}
 }

@@ -7,8 +7,11 @@ package session
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
@@ -371,12 +374,169 @@ func TestLoopRaceStreamLagWhileFactsContinue(t *testing.T) {
 	_ = recovered.Close()
 }
 
+// gatedQueueIDs parks the first "queue" ID generation until released. It
+// pins a steer dispatch inside acceptWithCursor exactly between the
+// Dispatch-level stale pre-check (which already passed) and the locked
+// durable append, so the run boundary can be crossed while the command is in
+// flight. Every other prefix passes straight through.
+type gatedQueueIDs struct {
+	parked  chan struct{}
+	release chan struct{}
+	once    sync.Once
+	counter atomic.Uint64
+}
+
+func (g *gatedQueueIDs) New(prefix string) (string, error) {
+	if prefix == "queue" {
+		g.once.Do(func() { close(g.parked) })
+		<-g.release
+	}
+	return fmt.Sprintf("%s-%d", prefix, g.counter.Add(1)), nil
+}
+
+// TestLoopRaceStaleSteerRevalidatedInsideLockedAcceptance reproduces the L8
+// check-then-act defect deterministically: a steer targeted at run A parks
+// inside acceptWithCursor after the Dispatch-level pre-check, run A settles
+// and run B starts while it is parked, and on release the locked recheck
+// must reject the command with ErrStaleRun. Run B's journal and transcript
+// must carry no trace of the stale steer.
+func TestLoopRaceStaleSteerRevalidatedInsideLockedAcceptance(t *testing.T) {
+	enteredA := make(chan struct{})
+	releaseA := make(chan struct{})
+	enteredB := make(chan struct{})
+	releaseB := make(chan struct{})
+	model := &scriptedModel{steps: []modelStep{
+		{message: agentic.NewTextMessage(agentic.RoleAssistant, "answer a"), entered: enteredA, release: releaseA},
+		{message: agentic.NewTextMessage(agentic.RoleAssistant, "answer b"), entered: enteredB, release: releaseB},
+	}}
+	ids := &gatedQueueIDs{parked: make(chan struct{}), release: make(chan struct{})}
+	view, session := newLoopViewForTest(t, agentic.NewAgent("", model), storememory.New(),
+		func(config *Config[string], _ *LoopConfig[string]) {
+			config.IDs = ids
+		})
+	stream := loopSubscribe(t, view, sessionloop.SubscribeOptions{Buffer: 256})
+
+	first := loopDispatch(t, view, sessionloopStartCommand("run a"))
+	awaitSignal(t, enteredA, "run A model entered")
+
+	steerErr := make(chan error, 1)
+	go func() {
+		_, err := view.Dispatch(loopTestContext(t), sessionloop.Command{
+			ID:    "cmd-stale-steer",
+			Kind:  sessionloop.CommandSteer,
+			RunID: first.RunID,
+			Input: sessionloopTextInput("stale steer"),
+		})
+		steerErr <- err
+	}()
+	awaitSignal(t, ids.parked, "steer parked inside acceptWithCursor")
+
+	// Cross the run boundary while the steer is parked: settle A, start B.
+	close(releaseA)
+	if err := session.WaitForIdle(loopTestContext(t)); err != nil {
+		t.Fatal(err)
+	}
+	second := loopDispatch(t, view, sessionloopStartCommand("run b"))
+	awaitSignal(t, enteredB, "run B model entered")
+
+	close(ids.release)
+	if err := <-steerErr; !errors.Is(err, sessionloop.ErrStaleRun) {
+		t.Fatalf("parked stale steer err = %v, want ErrStaleRun", err)
+	}
+
+	close(releaseB)
+	settled, seen := awaitLoopSettled(t, stream, second.RunID)
+	if settled.Outcome.Kind != sessionloop.RunCompleted {
+		t.Fatalf("run B outcome = %#v", settled.Outcome)
+	}
+	for _, event := range seen {
+		if event.Kind == sessionloop.EventQueueAccepted {
+			t.Fatalf("the stale steer was durably accepted: %#v", event)
+		}
+		if event.Kind == sessionloop.EventEntryCommitted && event.Entry.Origin == sessionloop.OriginSteer {
+			t.Fatalf("the stale steer leaked into run B's transcript: %#v", event.Entry)
+		}
+	}
+	entries := loadJournalEntries(t, session)
+	if countEntries(entries, kindQueueAccepted) != 0 {
+		t.Fatalf("stale steer reached the journal: %v", journalKinds(entries))
+	}
+	snapshot, err := view.Snapshot(loopTestContext(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range snapshot.Entries {
+		if entry.Origin == sessionloop.OriginSteer {
+			t.Fatalf("stale steer visible in the snapshot: %#v", entry)
+		}
+	}
+}
+
+// TestLoopRaceStaleInterruptCannotCancelSuccessorRun is the interrupt
+// variant: an interrupt aimed at run A is parked at a barrier after its
+// dispatch-level pre-check would have passed, run A settles and run B
+// starts, and the released requestInterrupt must fail stale without
+// touching run B.
+func TestLoopRaceStaleInterruptCannotCancelSuccessorRun(t *testing.T) {
+	enteredA := make(chan struct{})
+	releaseA := make(chan struct{})
+	enteredB := make(chan struct{})
+	releaseB := make(chan struct{})
+	model := &scriptedModel{steps: []modelStep{
+		{message: agentic.NewTextMessage(agentic.RoleAssistant, "answer a"), entered: enteredA, release: releaseA},
+		{message: agentic.NewTextMessage(agentic.RoleAssistant, "answer b"), entered: enteredB, release: releaseB},
+	}}
+	view, session := newLoopViewForTest(t, agentic.NewAgent("", model), storememory.New(), nil)
+	stream := loopSubscribe(t, view, sessionloop.SubscribeOptions{Buffer: 256})
+
+	first := loopDispatch(t, view, sessionloopStartCommand("run a"))
+	awaitSignal(t, enteredA, "run A model entered")
+
+	barrier := make(chan struct{})
+	interruptErr := make(chan error, 1)
+	go func() {
+		<-barrier
+		_, err := session.requestInterrupt(context.Background(), string(first.RunID))
+		interruptErr <- err
+	}()
+
+	close(releaseA)
+	if err := session.WaitForIdle(loopTestContext(t)); err != nil {
+		t.Fatal(err)
+	}
+	second := loopDispatch(t, view, sessionloopStartCommand("run b"))
+	awaitSignal(t, enteredB, "run B model entered")
+
+	close(barrier)
+	err := <-interruptErr
+	if !errors.Is(err, errStaleRunTarget) {
+		t.Fatalf("stale requestInterrupt = %v, want errStaleRunTarget", err)
+	}
+	if mapped := mapLoopError(err); !errors.Is(mapped, sessionloop.ErrStaleRun) {
+		t.Fatalf("mapLoopError(%v) = %v, want ErrStaleRun identity", err, mapped)
+	}
+	if state := session.State(); state != Running {
+		t.Fatalf("run B was disturbed by the stale interrupt: state = %s", state)
+	}
+
+	close(releaseB)
+	settled, _ := awaitLoopSettled(t, stream, second.RunID)
+	if settled.Outcome.Kind != sessionloop.RunCompleted {
+		t.Fatalf("run B outcome = %#v, want completed (not cancelled by the stale interrupt)", settled.Outcome)
+	}
+}
+
 func TestLoopRaceCloseWhileNextBlocked(t *testing.T) {
 	view, _ := newLoopViewForTest(t, &countingDriver{}, storememory.New(), nil)
 	stream := loopSubscribe(t, view, sessionloop.SubscribeOptions{})
 	result := make(chan error, 1)
+	started := make(chan struct{})
 	waiting := loopTestContext(t)
 	go func() {
+		// No dispatch ever happens on this view, so the first Next has
+		// nothing to read and parks; the barrier orders its entry before
+		// Close fires, proving Close races a genuinely waiting Next.
+		close(started)
 		for {
 			if _, err := stream.Next(waiting); err != nil {
 				result <- err
@@ -384,6 +544,7 @@ func TestLoopRaceCloseWhileNextBlocked(t *testing.T) {
 			}
 		}
 	}()
+	awaitSignal(t, started, "consumer entered Next before Close")
 	if err := view.Close(context.Background()); err != nil {
 		t.Fatalf("Close = %v", err)
 	}
@@ -479,10 +640,38 @@ func TestLoopRaceReopenAfterFault(t *testing.T) {
 	if err := recovered.WaitForIdle(loopTestContext(t)); err != nil {
 		t.Fatalf("recovered WaitForIdle = %v", err)
 	}
-	if err := recovered.Close(context.Background()); err != nil {
+	// The recovered session settled back to idle: the torn run is durably
+	// closed as interrupted and the recovery continuation completed.
+	if state := recovered.State(); state != Idle {
+		t.Fatalf("recovered state = %s, want idle", state)
+	}
+	entries := loadJournalEntries(t, recovered)
+	if countEntries(entries, kindRunClosed) != 2 {
+		t.Fatalf("recovered journal run.closed count = %d in %v",
+			countEntries(entries, kindRunClosed), journalKinds(entries))
+	}
+	torn, err := decodePayload[runClosedPayload](recoveredConfig.Codec, entries[firstEntryIndex(entries, kindRunClosed)])
+	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(boom.Error(), "append failure") {
-		t.Fatal("unreachable")
+	if torn.Status != agentic.ExecutionInterrupted ||
+		!strings.Contains(torn.Error, "process stopped before run termination") {
+		t.Fatalf("torn run.closed payload = %#v", torn)
+	}
+	lastClosed := -1
+	for index, entry := range entries {
+		if entry.Kind == kindRunClosed {
+			lastClosed = index
+		}
+	}
+	continuation, err := decodePayload[runClosedPayload](recoveredConfig.Codec, entries[lastClosed])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if continuation.Status != agentic.ExecutionCompleted {
+		t.Fatalf("continuation run.closed payload = %#v", continuation)
+	}
+	if err := recovered.Close(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -221,6 +221,20 @@ func TestSessionLoopHostConformance(t *testing.T) {
 	})
 }
 
+// TestSessionLoopHostConformanceOnJSONL runs the same suite against a
+// JSONL-store-backed Harness, proving durable behaviors — including a
+// suspension surviving close and reopen — hold on a real persistent store,
+// not only in memory.
+func TestSessionLoopHostConformanceOnJSONL(t *testing.T) {
+	conformance.Run(t, func(t *testing.T) conformance.Env {
+		repository, err := storejsonl.New(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return newSessionLoopEnv(t, repository)
+	})
+}
+
 func TestSessionLoopHostAdvertisedCapabilitiesActivateOptionalCases(t *testing.T) {
 	env := newSessionLoopEnv(t, storememory.New())
 	session, err := env.Host.NewSession(sessionLoopTestContext(t), sessionloop.SessionOptions{})
