@@ -11,6 +11,8 @@ the document does not, the document is wrong and should be fixed.
 - [Agentic Harness TUI](../tui/README.md) — embedding the provider-neutral
   terminal client, running the offline example, configuring the standard
   launcher, accessibility modes, and interaction keys
+- [Agentic Sessionloop](../harness/sessionloop/README.md) — the
+  provider-neutral asynchronous session protocol and conformance suite
 
 **`docs/design/` records why.** These are written before or during the work and
 then left alone. They are not maintained and are not a description of the
