@@ -1,0 +1,26 @@
+[
+  {
+    "name": "session.created",
+    "nature": "lifecycle",
+    "type": 0,
+    "cursor": 1
+  },
+  {
+    "name": "run.opened",
+    "nature": "authoritative",
+    "type": 0,
+    "cursor": 2
+  },
+  {
+    "name": "message",
+    "nature": "authoritative",
+    "type": 0,
+    "cursor": 3
+  },
+  {
+    "name": "run.closed",
+    "nature": "lifecycle",
+    "type": 0,
+    "cursor": 4
+  }
+]

@@ -44,6 +44,7 @@ var modules = map[string]moduleRule{
 	".":                        {inWorkspace: true},
 	"harness":                  {inWorkspace: true, replacesRoot: false},
 	"harness/codemode/gomonty": {inWorkspace: true, replacesRoot: false},
+	"harness/sessionloop":      {inWorkspace: true, replacesRoot: false},
 	"tui":                      {inWorkspace: true, replacesRoot: false},
 	"e2e":                      {inWorkspace: true, replacesRoot: true},
 	"provider/local/onnx":      {inWorkspace: false, replacesRoot: true},
@@ -263,6 +264,89 @@ func TestNestedModulesResolveTheRootAsDocumented(t *testing.T) {
 				"An ordered GOWORK=off release check must exercise published dependencies; "+
 				"a replace directive makes it test this checkout instead. See ARCHITECTURE.md.", module)
 		}
+	}
+}
+
+// TestSessionloopModuleHasNoProjectDependencies keeps the session protocol
+// module at zero dependencies, which is the property the module exists for.
+//
+// harness/sessionloop is the provider-neutral protocol that Harness, the TUI
+// bridge, and external facades all import; the moment its go.mod gains a
+// require or a replace, every one of those consumers inherits that graph and
+// the neutral boundary is gone. Plan section 5.3 makes this explicit: adding a
+// requirement to harness/sessionloop/go.mod demands an explicit architectural
+// revision — edit ARCHITECTURE.md, the plan, and this test together, or not at
+// all.
+func TestSessionloopModuleHasNoProjectDependencies(t *testing.T) {
+	requireRepositoryCheckout(t)
+	t.Parallel()
+	root := repoRoot(t)
+
+	contents, err := os.ReadFile(filepath.Join(root, "harness", "sessionloop", "go.mod"))
+	if err != nil {
+		t.Fatalf("read harness/sessionloop/go.mod: %v", err)
+	}
+	for _, line := range strings.Split(string(contents), "\n") {
+		line = strings.TrimSpace(line)
+		if comment := strings.Index(line, "//"); comment >= 0 {
+			line = strings.TrimSpace(line[:comment])
+		}
+		if strings.HasPrefix(line, "require") || strings.HasPrefix(line, "replace") ||
+			strings.Contains(line, " require ") || strings.Contains(line, " replace ") {
+			t.Errorf("harness/sessionloop/go.mod contains %q.\n"+
+				"The session protocol module has zero require and replace directives by design: "+
+				"it is what keeps the protocol importable without Agentic, Harness, the TUI, or a "+
+				"provider SDK entering a consumer's module graph. Plan section 5.3 requires an "+
+				"explicit architectural revision before any dependency is added — update "+
+				"ARCHITECTURE.md and this test in the same change, or remove the directive.", line)
+		}
+	}
+}
+
+// TestReleaseOrderDocumentsSessionloopFirst freezes the documented tag order.
+//
+// harness/go.mod requires a published sessionloop tag and carries no replace,
+// so releasing Harness before sessionloop deadlocks the GOWORK=off release
+// check (plan section 14). Remote tags are not hermetically testable; the
+// documented order in ARCHITECTURE.md is what release engineering follows,
+// so this test keeps that sentence from silently regressing.
+func TestReleaseOrderDocumentsSessionloopFirst(t *testing.T) {
+	requireRepositoryCheckout(t)
+	t.Parallel()
+	root := repoRoot(t)
+
+	contents, err := os.ReadFile(filepath.Join(root, "ARCHITECTURE.md"))
+	if err != nil {
+		t.Fatalf("read ARCHITECTURE.md: %v", err)
+	}
+	// Markdown wraps sentences across lines, and the wrap point is not part
+	// of what this test protects.
+	text := strings.Join(strings.Fields(string(contents)), " ")
+
+	marker := "released in dependency order:"
+	start := strings.Index(text, marker)
+	if start < 0 {
+		t.Fatalf("ARCHITECTURE.md no longer contains %q; the release-order sentence is the "+
+			"only place the tag order is written down, so it must exist and this test must "+
+			"point at it", marker)
+	}
+	sentence := text[start:]
+	if end := strings.Index(sentence, "."); end >= 0 {
+		sentence = sentence[:end]
+	}
+	sessionloop := strings.Index(sentence, "sessionloop")
+	harnessAt := strings.Index(sentence, "Harness")
+	switch {
+	case sessionloop < 0:
+		t.Errorf("ARCHITECTURE.md's release-order sentence does not mention sessionloop. "+
+			"Harness requires a published sessionloop tag, so sessionloop must be tagged "+
+			"before Harness and the documented order must say so. Sentence: %q", sentence)
+	case harnessAt < 0:
+		t.Errorf("ARCHITECTURE.md's release-order sentence does not mention Harness: %q", sentence)
+	case sessionloop > harnessAt:
+		t.Errorf("ARCHITECTURE.md's release-order sentence lists Harness before sessionloop. "+
+			"harness/go.mod requires a published sessionloop tag with no replace directive, so "+
+			"tagging Harness first deadlocks its GOWORK=off release check. Sentence: %q", sentence)
 	}
 }
 

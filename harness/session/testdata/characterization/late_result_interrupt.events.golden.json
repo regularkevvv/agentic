@@ -1,0 +1,74 @@
+[
+  {
+    "name": "session.created",
+    "nature": "lifecycle",
+    "type": 0,
+    "cursor": 1
+  },
+  {
+    "name": "run.opened",
+    "nature": "authoritative",
+    "type": 0,
+    "cursor": 2
+  },
+  {
+    "name": "message",
+    "nature": "authoritative",
+    "type": 0,
+    "cursor": 3
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 10,
+    "cursor": 4
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 11,
+    "cursor": 5
+  },
+  {
+    "name": "",
+    "nature": "authoritative",
+    "type": 4,
+    "cursor": 6
+  },
+  {
+    "name": "",
+    "nature": "authoritative",
+    "type": 8,
+    "cursor": 7
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 12,
+    "cursor": 8
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 16,
+    "cursor": 9
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 17,
+    "cursor": 10
+  },
+  {
+    "name": "interrupt.marker",
+    "nature": "lifecycle",
+    "type": 0,
+    "cursor": 11
+  },
+  {
+    "name": "run.closed",
+    "nature": "lifecycle",
+    "type": 0,
+    "cursor": 12
+  }
+]
