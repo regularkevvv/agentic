@@ -5,7 +5,7 @@ All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the major version is 0, breaking changes may appear in minor releases.
 
-## [Unreleased]
+## [0.6.0] — 2026-08-08
 
 Adds multi-representation inference: a batch-first `RepresentationEncoder`
 beside the existing dense-only `Embedder`, so a model that produces dense,
