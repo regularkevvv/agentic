@@ -164,7 +164,7 @@ func AssembleDefault(config DefaultConfig) (DefaultAssembly, error) {
 	}, nil
 }
 
-// Default constructs the experimental v0.1 local harness. Local shell commands
+// Default constructs the experimental local harness. Local shell commands
 // run as the host user; this assembly is governance policy, not an OS sandbox.
 func Default[O any](runner agentic.Runner[O], config DefaultConfig) (*Harness[O], error) {
 	if _, err := agentic.RequireDriver(runner); err != nil {
