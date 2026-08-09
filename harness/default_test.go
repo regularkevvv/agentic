@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
+
 	artifactcapability "github.com/regularkevvv/agentic/harness/capability/artifacts"
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
 )

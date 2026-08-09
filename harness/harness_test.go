@@ -10,6 +10,8 @@ import (
 
 	agentic "github.com/regularkevvv/agentic"
 
+	providertest "github.com/regularkevvv/agentic/provider/test"
+
 	artifactmemory "github.com/regularkevvv/agentic/harness/artifact/memory"
 	"github.com/regularkevvv/agentic/harness/artifact/spill"
 	"github.com/regularkevvv/agentic/harness/codec"
@@ -19,7 +21,6 @@ import (
 	"github.com/regularkevvv/agentic/harness/event/inproc"
 	"github.com/regularkevvv/agentic/harness/runtime/system"
 	storememory "github.com/regularkevvv/agentic/harness/store/memory"
-	providertest "github.com/regularkevvv/agentic/provider/test"
 )
 
 type runnerOnly struct{}
