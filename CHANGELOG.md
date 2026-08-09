@@ -21,6 +21,13 @@ This is additive. Existing `Embedder` users compile and behave as before.
 
 ### Added
 
+- **`harness/sessionloop`** — new zero-dependency nested module defining the
+  provider-neutral asynchronous session protocol (commands/receipts, two-tier
+  event stream, snapshots, conformance suite and testkit).
+- **Harness sessionloop host** — `harness.NewSessionLoopHost` exposes durable
+  sessions through the protocol without changing the blocking API.
+- **TUI sessionloop bridge** — `tui/adapter/sessionloop` adapts any conforming
+  host to the existing terminal port.
 - **Harness exchange instructions** — one capability may register an
   `ExchangeInstructionProvider` that resolves trusted, non-user instructions
   once before an application exchange. The value is appended as a system

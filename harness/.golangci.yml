@@ -1,0 +1,76 @@
+# The harness module's lint config. It mirrors the repository root
+# .golangci.yml (golangci-lint resolves config by walking up from the module
+# directory, so before this file existed the harness inherited the root one)
+# with a single addition: the QF1001 exclusion for the frozen characterization
+# suite below. The exclusion lives here rather than in the root config because
+# the frozen files it covers are harness-local, and so is the freeze rule that
+# makes it necessary. Keep the shared sections in sync with the root config.
+version: "2"
+
+run:
+  timeout: 5m
+
+# Both default to 3, which silently truncates a report: a clean-looking run of
+# "4 issues" hid sixteen more while this file was being written. A lint result
+# that is not the whole result is worse than no lint result.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - misspell
+  settings:
+    staticcheck:
+      # The default set plus ST1000, matching the root config. A package
+      # comment that names a package that no longer exists is how a rename
+      # half-lands: the code moves, the sentence describing it does not, and
+      # nothing fails. This catches it.
+      checks:
+        - all
+        - ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+    misspell:
+      locale: US
+      # "cancelled" is a finish_reason value some provider APIs actually
+      # return, and the harness carries it through observe/session/store as a
+      # wire-format string. Correcting the spelling would change that constant
+      # and silently break finish-reason mapping, so it is exempt here (as in
+      # the root config) rather than suppressed line by line.
+      ignore-rules:
+        - cancelled
+        - organise
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - errcheck
+      # The harness/session characterization suite is frozen: the sessionloop
+      # migration ground rules require it to pass byte-identical and unedited,
+      # so behavior-preserving refactors it would otherwise get (like the two
+      # QF1001 De Morgan rewrites staticcheck suggests) may not be applied
+      # there. Scoped to QF1001 in those files only; everything else in the
+      # suite is still linted.
+      - path: session/characterization[^/]*\.go
+        linters:
+          - staticcheck
+        text: "QF1001"
+    paths:
+      - vendor
+
+formatters:
+  enable:
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/regularkevvv/agentic

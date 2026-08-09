@@ -5,15 +5,59 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	agentic "github.com/regularkevvv/agentic"
 
 	"github.com/regularkevvv/agentic/harness/repair"
+	"github.com/regularkevvv/agentic/harness/store"
 )
 
 // Resume resolves one durable suspension. The complete request is validated
 // and persisted before the Driver can re-enter any handler.
 func (s *Session[O]) Resume(ctx context.Context, request ResumeRequest) (*agentic.Execution[O], error) {
+	accepted, err := s.prepareResume(ctx, request, ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.driveResumed(accepted)
+}
+
+// acceptedResume is the single-use product of prepareResume: one durably
+// accepted, not-yet-driven resolution. indeterminate selects the recovery
+// continuation drive instead of Driver.Resume.
+type acceptedResume[O any] struct {
+	runID         string
+	runCtx        context.Context
+	history       []agentic.Message
+	suspension    *agentic.Suspension
+	decisions     []agentic.ToolResumeDecision
+	prompt        *agentic.Message
+	commit        store.Commit
+	limits        *agentic.UsageLimits
+	indeterminate bool
+	consumed      atomic.Bool
+}
+
+func (a *acceptedResume[O]) consume() error {
+	if !a.consumed.CompareAndSwap(false, true) {
+		return errors.New("accepted resume was already driven")
+	}
+	return nil
+}
+
+// prepareResume is the durable acceptance half of Resume: it validates the
+// request, persists resolution.accepted, transitions to Running, and
+// publishes the committed acceptance. acceptCtx governs the acceptance
+// journal append; runParent is the parent of the run context created inside
+// the same locked acceptance window (the legacy Resume passes its caller
+// context as both). It dispatches to prepareResumeIndeterminate through the
+// same suspension-kind branch Resume has always used.
+func (s *Session[O]) prepareResume(
+	acceptCtx context.Context,
+	request ResumeRequest,
+	runParent context.Context,
+) (*acceptedResume[O], error) {
 	s.mu.Lock()
 	if err := s.resumeErrorLocked(request); err != nil {
 		s.mu.Unlock()
@@ -22,7 +66,7 @@ func (s *Session[O]) Resume(ctx context.Context, request ResumeRequest) (*agenti
 	suspension := cloneSuspension(s.suspension)
 	if suspension.Kind == "harness.recovery.indeterminate" {
 		s.mu.Unlock()
-		return s.resumeIndeterminate(ctx, suspension, request)
+		return s.prepareResumeIndeterminate(acceptCtx, suspension, request, runParent)
 	}
 	history := append(cloneMessages(s.run.history), cloneMessages(s.run.expected)...)
 	limits := cloneLimitsPointer(s.run.limits)
@@ -47,12 +91,13 @@ func (s *Session[O]) Resume(ctx context.Context, request ResumeRequest) (*agenti
 		s.mu.Unlock()
 		return nil, fmt.Errorf("%w: suspension changed", ErrInvalidResumeRequest)
 	}
-	commit, appendErr := s.journal.Append(ctx, s.cursor, entry)
+	commit, appendErr := s.journal.Append(acceptCtx, s.cursor, entry)
 	if appendErr != nil {
 		s.mu.Unlock()
 		return nil, appendErr
 	}
-	runCtx, cancel := context.WithCancel(ctx)
+	runID := s.run.id
+	runCtx, cancel := context.WithCancel(runParent)
 	s.runCancel = cancel
 	s.run.resumeInProgress = true
 	s.run.resumeEventSeen = false
@@ -62,18 +107,55 @@ func (s *Session[O]) Resume(ctx context.Context, request ResumeRequest) (*agenti
 	s.mu.Unlock()
 	s.publishOwn(commit.Entries, agentic.EventAuthoritative)
 
-	runCtx = s.withToolRuntime(runCtx)
 	var prompt *agentic.Message
 	if request.Prompt != nil {
 		copy := cloneMessages([]agentic.Message{*request.Prompt})[0]
 		prompt = &copy
 	}
+	return &acceptedResume[O]{
+		runID:      runID,
+		runCtx:     runCtx,
+		history:    history,
+		suspension: suspension,
+		decisions:  decisions,
+		prompt:     prompt,
+		commit:     commit,
+		limits:     limits,
+	}, nil
+}
+
+// driveResumed is the execution half of Resume. It re-enters the driver
+// exactly once and settles through the existing finish path. Like
+// driveAccepted, it has no Closed pre-check: single-use consumption plus the
+// view's close-time goroutine join make a post-Close drive unreachable.
+func (s *Session[O]) driveResumed(accepted *acceptedResume[O]) (*agentic.Execution[O], error) {
+	if accepted.indeterminate {
+		return s.driveResumedIndeterminate(accepted)
+	}
+	if err := accepted.consume(); err != nil {
+		return nil, err
+	}
+	runCtx := s.withToolRuntime(accepted.runCtx)
 	execution, runErr := s.driver.Resume(runCtx, agentic.ResumeInput{
-		History:    history,
-		Suspension: *suspension,
-		Decisions:  decisions,
-		Prompt:     prompt,
-	}, s.runOptions(limits)...)
+		History:    accepted.history,
+		Suspension: *accepted.suspension,
+		Decisions:  accepted.decisions,
+		Prompt:     accepted.prompt,
+	}, s.runOptions(accepted.limits)...)
+	return s.finishExecution(execution, runErr)
+}
+
+// driveResumedIndeterminate continues the recovery-opened run through
+// Driver.Drive in DriveContinue mode and settles through the finish path.
+func (s *Session[O]) driveResumedIndeterminate(accepted *acceptedResume[O]) (*agentic.Execution[O], error) {
+	if err := accepted.consume(); err != nil {
+		return nil, err
+	}
+	runCtx := s.withToolRuntime(accepted.runCtx)
+	execution, runErr := s.driver.Drive(runCtx, agentic.DriveInput{
+		Mode:    agentic.DriveContinue,
+		History: accepted.history,
+	}, s.runOptions(accepted.limits)...)
 	return s.finishExecution(execution, runErr)
 }
 
@@ -99,11 +181,32 @@ func (s *Session[O]) resumeErrorLocked(request ResumeRequest) error {
 	return nil
 }
 
+// resumeIndeterminate preserves the legacy fused acceptance+drive
+// composition of the indeterminate-recovery branch: acceptance and the run
+// context both derive from the caller context, exactly as before the split.
 func (s *Session[O]) resumeIndeterminate(
 	ctx context.Context,
 	suspension *agentic.Suspension,
 	request ResumeRequest,
 ) (*agentic.Execution[O], error) {
+	accepted, err := s.prepareResumeIndeterminate(ctx, suspension, request, ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.driveResumedIndeterminate(accepted)
+}
+
+// prepareResumeIndeterminate is the durable acceptance half of the
+// indeterminate-recovery resume: it validates the operator resolutions,
+// closes the old run, opens the continuation run in one batch, and publishes
+// the committed acceptance. The returned acceptedResume drives through
+// Driver.Drive in DriveContinue mode.
+func (s *Session[O]) prepareResumeIndeterminate(
+	acceptCtx context.Context,
+	suspension *agentic.Suspension,
+	request ResumeRequest,
+	runParent context.Context,
+) (*acceptedResume[O], error) {
 	var payload recoverySuspensionPayload
 	if err := json.Unmarshal(suspension.Payload, &payload); err != nil || payload.Version != 1 {
 		if err == nil {
@@ -236,7 +339,7 @@ func (s *Session[O]) resumeIndeterminate(
 		s.mu.Unlock()
 		return nil, encodeErr
 	}
-	commit, appendErr := s.journal.Append(ctx, s.cursor, pendingEntries...)
+	commit, appendErr := s.journal.Append(acceptCtx, s.cursor, pendingEntries...)
 	if appendErr != nil {
 		s.mu.Unlock()
 		return nil, appendErr
@@ -246,7 +349,7 @@ func (s *Session[O]) resumeIndeterminate(
 		s.messages = append(s.messages, cloneMessages([]agentic.Message{*request.Prompt})[0])
 	}
 	history := providerHistory(s.messages, s.contextMarkers)
-	runCtx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(runParent)
 	s.runCancel = cancel
 	s.run = &activeRun{
 		id:                 runID,
@@ -261,13 +364,14 @@ func (s *Session[O]) resumeIndeterminate(
 	s.transitionLocked(Running)
 	s.mu.Unlock()
 	s.publishOwnByKind(commit.Entries)
-
-	runCtx = s.withToolRuntime(runCtx)
-	execution, runErr := s.driver.Drive(runCtx, agentic.DriveInput{
-		Mode:    agentic.DriveContinue,
-		History: history,
-	}, s.runOptions(limits)...)
-	return s.finishExecution(execution, runErr)
+	return &acceptedResume[O]{
+		runID:         runID,
+		runCtx:        runCtx,
+		history:       history,
+		commit:        commit,
+		limits:        limits,
+		indeterminate: true,
+	}, nil
 }
 
 func cloneResumeRequest(request ResumeRequest) ResumeRequest {

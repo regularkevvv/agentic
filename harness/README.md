@@ -92,6 +92,10 @@ across suspension/resume, and resolves a fresh value for the next prompt. A
 resolution error aborts before the model runs or the exchange is journaled. It
 is not a user-message injection mechanism.
 
+The provider-neutral asynchronous session protocol that
+`harness.NewSessionLoopHost` implements lives in the zero-dependency nested
+module [`sessionloop/`](sessionloop/README.md).
+
 The same core accepts other conforming adapters without modification. Reusable
 conformance suites live in `store/storetest`, `event/eventtest`, `env/envtest`,
 and `artifact/artifacttest`. The `env/local` adapter constrains its filesystem

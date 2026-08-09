@@ -1,0 +1,152 @@
+[
+  {
+    "name": "session.created",
+    "nature": "lifecycle",
+    "type": 0,
+    "cursor": 1
+  },
+  {
+    "name": "run.opened",
+    "nature": "authoritative",
+    "type": 0,
+    "cursor": 2
+  },
+  {
+    "name": "message",
+    "nature": "authoritative",
+    "type": 0,
+    "cursor": 3
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 10,
+    "cursor": 4
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 11,
+    "cursor": 5
+  },
+  {
+    "name": "queue.accepted",
+    "nature": "authoritative",
+    "type": 0,
+    "cursor": 6
+  },
+  {
+    "name": "queue.accepted",
+    "nature": "authoritative",
+    "type": 0,
+    "cursor": 7
+  },
+  {
+    "name": "",
+    "nature": "authoritative",
+    "type": 4,
+    "cursor": 8
+  },
+  {
+    "name": "",
+    "nature": "authoritative",
+    "type": 8,
+    "cursor": 9
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 12,
+    "cursor": 10
+  },
+  {
+    "name": "queue.drained",
+    "nature": "authoritative",
+    "type": 0,
+    "cursor": 11
+  },
+  {
+    "name": "",
+    "nature": "authoritative",
+    "type": 9,
+    "cursor": 12
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 11,
+    "cursor": 13
+  },
+  {
+    "name": "",
+    "nature": "authoritative",
+    "type": 4,
+    "cursor": 14
+  },
+  {
+    "name": "",
+    "nature": "authoritative",
+    "type": 8,
+    "cursor": 15
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 12,
+    "cursor": 16
+  },
+  {
+    "name": "queue.drained",
+    "nature": "authoritative",
+    "type": 0,
+    "cursor": 17
+  },
+  {
+    "name": "",
+    "nature": "authoritative",
+    "type": 9,
+    "cursor": 18
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 11,
+    "cursor": 19
+  },
+  {
+    "name": "",
+    "nature": "authoritative",
+    "type": 4,
+    "cursor": 20
+  },
+  {
+    "name": "",
+    "nature": "authoritative",
+    "type": 8,
+    "cursor": 21
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 12,
+    "cursor": 22
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 14,
+    "cursor": 23
+  },
+  {
+    "name": "",
+    "nature": "lifecycle",
+    "type": 17,
+    "cursor": 24
+  },
+  {
+    "name": "run.closed",
+    "nature": "lifecycle",
+    "type": 0,
+    "cursor": 25
+  }
+]

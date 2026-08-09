@@ -112,6 +112,42 @@ jobs:
           install-mode: goinstall
           working-directory: harness/codemode/gomonty
 
+  sessionloop-module:
+    name: Sessionloop module
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: harness/sessionloop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: harness/sessionloop/go.mod
+      - name: Race test
+        run: go test -race -count=1 -timeout 60s ./...
+      - name: Vet and pure-Go build
+        run: go vet ./... && CGO_ENABLED=0 go build ./...
+      - name: Enforce coverage threshold
+        run: make coverage-check
+      - name: Module isolation
+        run: GOWORK=off go test -race -count=1 ./... && GOWORK=off go mod tidy -diff && test "$(GOWORK=off go list -m all | wc -l)" -eq 1
+
+  sessionloop-lint:
+    name: Sessionloop lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: harness/sessionloop/go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+          working-directory: harness/sessionloop
+
   tui-module:
     name: TUI module
     runs-on: ubuntu-latest
@@ -293,8 +329,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Test all five non-CGO modules
-        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./harness/codemode/gomonty/... ./tui/... ./e2e/...
+      - name: Test all six non-CGO modules
+        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./tui/... ./e2e/...
 
   coverage:
     name: Coverage
