@@ -11,7 +11,7 @@ module github.com/regularkevvv/agentic/e2e/localinference
 go 1.25.4
 
 require (
-	github.com/regularkevvv/agentic v0.5.1
+	github.com/regularkevvv/agentic v0.6.0
 	github.com/regularkevvv/agentic/provider/local/onnx v0.0.0
 )
 

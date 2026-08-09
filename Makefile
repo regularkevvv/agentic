@@ -31,8 +31,11 @@ coverage-check: coverage
 		printf("coverage %.1f%% meets required %.1f%%\n", pct + 0, threshold + 0); \
 	}'
 
-# Each released production module owns an independent 97% gate. E2E and test
-# hosts prove integration behavior and are intentionally not coverage padding.
+# Each released pure-Go production module owns an independent 97% gate. E2E and
+# test hosts prove integration behavior and are intentionally not coverage
+# padding. The native ONNX module gates its CGO build and recorded real-model
+# compatibility separately because its inference paths require an external
+# runtime, tokenizer, and exported graph.
 coverage-all: coverage-check
 	$(MAKE) -C harness coverage-check
 	$(MAKE) -C harness/codemode/gomonty coverage-check

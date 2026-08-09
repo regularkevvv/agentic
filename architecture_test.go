@@ -32,8 +32,8 @@ type moduleRule struct {
 	// at the repository root fail for anyone who has not installed those.
 	inWorkspace bool
 	// replacesRoot is whether its go.mod redirects the root module to this
-	// checkout. Release-consumer modules do not; repository acceptance and CGO
-	// modules do — see the test below.
+	// checkout. Release-consumer modules do not; repository acceptance modules
+	// do — see the test below.
 	replacesRoot bool
 }
 
@@ -47,7 +47,7 @@ var modules = map[string]moduleRule{
 	"harness/sessionloop":      {inWorkspace: true, replacesRoot: false},
 	"tui":                      {inWorkspace: true, replacesRoot: false},
 	"e2e":                      {inWorkspace: true, replacesRoot: true},
-	"provider/local/onnx":      {inWorkspace: false, replacesRoot: true},
+	"provider/local/onnx":      {inWorkspace: false, replacesRoot: false},
 	"e2e/localinference":       {inWorkspace: false, replacesRoot: true},
 }
 
@@ -225,10 +225,11 @@ func TestWorkspaceListsEveryNonCGOModule(t *testing.T) {
 // TestNestedModulesResolveTheRootAsDocumented protects a distinction that is
 // one line from being erased and leaves no trace when it is.
 //
-// Harness, the optional GoMonty adapter, and TUI deliberately have no
-// `replace`: their ordered release checks rehearse what users obtain through
-// `go get`. go.work still supplies local modules during a coordinated change.
-// Adding a replace would make that consumer distinction disappear silently.
+// Harness, the optional GoMonty adapter, TUI, and the native ONNX provider
+// deliberately have no `replace`: their ordered release checks rehearse what
+// users obtain through `go get`. go.work still supplies the non-CGO modules
+// during a coordinated change. Adding a replace would make that consumer
+// distinction disappear silently.
 //
 // The others replace the root because they are not consumers, they are parts of
 // this repository that happen to need their own dependency graph.

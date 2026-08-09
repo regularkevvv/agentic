@@ -9,6 +9,12 @@ deliberately absent from `go.work` — working on it means `cd provider/local/on
 That is what keeps CGO out of the default contributor loop and out of every
 application that imports Agentic.
 
+Install this module independently with:
+
+```sh
+go get github.com/regularkevvv/agentic/provider/local/onnx@v0.1.0
+```
+
 ## Two things must be on disk before anything compiles
 
 Both are discovered at link time otherwise, as `library 'tokenizers' not found`
