@@ -1,0 +1,5 @@
+module example.com/agentic-onnx-consumer
+
+go 1.25.4
+
+require github.com/regularkevvv/agentic/provider/local/onnx v0.1.0

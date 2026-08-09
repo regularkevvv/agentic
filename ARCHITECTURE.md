@@ -101,7 +101,7 @@ is what `go get github.com/regularkevvv/agentic` should pull.
 | `harness/codemode/gomonty/` | ✓ | **Harness `v0.2.0`, GoMonty `v0.0.15`** | Optional native-backed Code Mode execution must not enter the core Harness graph |
 | `tui/` | ✓ | **Agentic `v0.6.0`, Harness `v0.2.0`** | Bubble Tea and terminal application dependencies must not enter either library graph |
 | `e2e/` | ✓ | this checkout | Live tests and examples need keys, table writers, and fixtures that no caller should inherit |
-| `provider/local/onnx/` | | this checkout | CGO, ONNX Runtime, and a statically linked tokenizer |
+| `provider/local/onnx/` | | **Agentic `v0.6.0`** | CGO, ONNX Runtime, and a statically linked tokenizer |
 | `e2e/localinference/` | | this checkout | The example that imports it, kept apart for the same reason |
 
 The last two are absent from `go.work` on purpose: including them would make
@@ -112,19 +112,21 @@ bindings are cgo-free and prepare their native runtime explicitly at execution,
 so that optional module remains in `go.work`. `make lint-all` covers all eight
 when you do have the ONNX libraries.
 
-**`harness/`, `harness/sessionloop/`, `harness/codemode/gomonty/`, and `tui/`
-have no `replace` directives, and that is deliberate.** They are released in
-dependency order: root Agentic, sessionloop, Harness, the optional GoMonty
-adapter, then TUI. Their
+**`harness/`, `harness/sessionloop/`, `harness/codemode/gomonty/`, `tui/`, and
+`provider/local/onnx/` have no `replace` directives, and that is deliberate.**
+They are released in dependency order: sessionloop, root Agentic, the native
+ONNX provider, Harness, the optional GoMonty adapter, then TUI. Their
 `GOWORK=off` release checks rehearse what `go get` gives a user. Locally
 `go.work` supplies the modules being changed together, so the distinction is
-invisible day to day. The tag-triggered `release-view.yml` workflow enforces
-this order against published dependencies; it can also be dispatched manually
-for one module. A test fails if a replace directive erases the boundary.
+invisible day to day for the non-CGO modules. The tag-triggered
+`release-view.yml` workflow enforces this order against published dependencies;
+it can also be dispatched manually for one module. A test fails if a replace
+directive erases the boundary.
 
 The e2e modules replace the libraries they exercise because they are repository
-acceptance code rather than release consumers. The two CGO modules also replace
-the root for the same reason.
+acceptance code rather than release consumers. Native requirements decide
+whether a module belongs in `go.work`; they do not decide whether it consumes a
+published release.
 
 ## What is enforced
 
@@ -135,7 +137,7 @@ Not by convention — by tests that fail.
 | Every provider declares its capabilities in code | `architecture_test.go` |
 | The chat and retrieval halves do not reference each other | `architecture_test.go` |
 | `go.work` lists every non-CGO module and no CGO module | `architecture_test.go` |
-| Release modules have no replace; repository acceptance/CGO modules resolve this checkout | `architecture_test.go` |
+| Release modules have no replace; repository acceptance modules resolve this checkout | `architecture_test.go` |
 | TUI and the optional GoMonty adapter contain no replace or cross-import | their module `architecture_test.go` files |
 | `harness/sessionloop` has zero require/replace directives | `architecture_test.go` |
 | `internal/` holds only the four documented packages | `architecture_test.go` |
