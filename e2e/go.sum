@@ -146,6 +146,8 @@ github.com/pelletier/go-toml/v2 v2.4.3/go.mod h1:2gIqNv+qfxSVS7cM2xJQKtLSTLUE9V8
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/prometheus/client_model v0.0.0-20190812154241-14fe0d1b01d4/go.mod h1:xMI15A0UPsDsEKsMN9yxemIoYk6Tm2C1GtYGdfGttqA=
+github.com/regularkevvv/agentic/harness/sessionloop v0.1.0 h1:WKnh3hvEptQtsEt87uQP8tRCNUd+xgiRzfT3Gepd09k=
+github.com/regularkevvv/agentic/harness/sessionloop v0.1.0/go.mod h1:9oDyF04FCeioXZeAnunw0B7pvP0ZDDbcucXh1u9x9Z4=
 github.com/regularkevvv/gomonty v0.0.15 h1:nLv2NO+OF+CLtkAV0GOilvuHjXR/3jT0yeHX2irD2a4=
 github.com/regularkevvv/gomonty v0.0.15/go.mod h1:nFTJ2ld6rysvNoXLvqyOsJTi3FOXPJWvVxNQoy8LbX4=
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=

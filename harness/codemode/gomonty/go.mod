@@ -3,7 +3,7 @@ module github.com/regularkevvv/agentic/harness/codemode/gomonty
 go 1.25.4
 
 require (
-	github.com/regularkevvv/agentic/harness v0.2.0
+	github.com/regularkevvv/agentic/harness v0.3.0
 	github.com/regularkevvv/gomonty v0.0.15
 )
 

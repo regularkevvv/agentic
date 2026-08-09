@@ -98,8 +98,8 @@ is what `go get github.com/regularkevvv/agentic` should pull.
 | `.` | ✓ | — | The library |
 | `harness/` | ✓ | **Agentic `v0.6.0`** | Experimental; its dependencies and its API churn should not be the library's |
 | `harness/sessionloop/` | ✓ | — (depends on nothing) | The provider-neutral session protocol must stay importable without Agentic, Harness, TUI, or provider SDKs in the consumer's module graph |
-| `harness/codemode/gomonty/` | ✓ | **Harness `v0.2.0`, GoMonty `v0.0.15`** | Optional native-backed Code Mode execution must not enter the core Harness graph |
-| `tui/` | ✓ | **Agentic `v0.6.0`, Harness `v0.2.0`** | Bubble Tea and terminal application dependencies must not enter either library graph |
+| `harness/codemode/gomonty/` | ✓ | **Harness `v0.3.0`, GoMonty `v0.0.15`** | Optional native-backed Code Mode execution must not enter the core Harness graph |
+| `tui/` | ✓ | **Agentic `v0.6.0`, Harness `v0.3.0`** | Bubble Tea and terminal application dependencies must not enter either library graph |
 | `e2e/` | ✓ | this checkout | Live tests and examples need keys, table writers, and fixtures that no caller should inherit |
 | `provider/local/onnx/` | | **Agentic `v0.6.0`** | CGO, ONNX Runtime, and a statically linked tokenizer |
 | `e2e/localinference/` | | this checkout | The example that imports it, kept apart for the same reason |

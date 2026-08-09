@@ -4,7 +4,7 @@ go 1.25.4
 
 require (
 	github.com/regularkevvv/agentic v0.6.0
-	github.com/regularkevvv/agentic/harness v0.2.0
+	github.com/regularkevvv/agentic/harness v0.3.0
 	github.com/regularkevvv/agentic/harness/codemode/gomonty v0.1.0
 	github.com/regularkevvv/agentic/tui v0.1.0
 	github.com/regularkevvv/gomonty v0.0.15
@@ -60,6 +60,7 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
+	github.com/regularkevvv/agentic/harness/sessionloop v0.1.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/swaggest/jsonschema-go v0.3.79 // indirect
 	github.com/swaggest/refl v1.4.0 // indirect

@@ -12,7 +12,7 @@ go 1.25.4
 
 require (
 	github.com/regularkevvv/agentic v0.6.0
-	github.com/regularkevvv/agentic/provider/local/onnx v0.0.0
+	github.com/regularkevvv/agentic/provider/local/onnx v0.1.0
 )
 
 require (
