@@ -15,12 +15,3 @@ use (
 	./tui
 	./e2e
 )
-
-// harness/go.mod requires harness/sessionloop v0.1.0, a version that is not
-// tagged yet (the tag lands when Wave B ships). The use directive above covers
-// package resolution, but any full-module-graph load (forced by pre-1.17
-// dependencies elsewhere in the workspace, e.g. gopkg.in/yaml.v2's go 1.15)
-// still tries to fetch the tagged go.mod and fails with "unknown revision".
-// This version-pinned replace keeps the whole workspace buildable until the
-// tag exists, at which point it can be deleted.
-replace github.com/regularkevvv/agentic/harness/sessionloop v0.1.0 => ./harness/sessionloop
