@@ -92,6 +92,7 @@ import (
 	"github.com/regularkevvv/agentic/harness/permission"
 	"github.com/regularkevvv/agentic/harness/session"
 	storememory "github.com/regularkevvv/agentic/harness/store/memory"
+
 	uit "github.com/regularkevvv/agentic/tui"
 	legacyadapter "github.com/regularkevvv/agentic/tui/adapter/harness"
 )

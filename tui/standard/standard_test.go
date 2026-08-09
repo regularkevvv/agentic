@@ -12,6 +12,7 @@ import (
 	agentic "github.com/regularkevvv/agentic"
 	"github.com/regularkevvv/agentic/harness/permission"
 	providertest "github.com/regularkevvv/agentic/provider/test"
+
 	uit "github.com/regularkevvv/agentic/tui"
 	appconfig "github.com/regularkevvv/agentic/tui/config"
 )

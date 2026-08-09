@@ -8,7 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.5
 	github.com/pelletier/go-toml/v2 v2.4.3
 	github.com/regularkevvv/agentic v0.6.0
-	github.com/regularkevvv/agentic/harness v0.2.0
+	github.com/regularkevvv/agentic/harness v0.3.0
 	github.com/regularkevvv/agentic/harness/sessionloop v0.1.0
 )
 

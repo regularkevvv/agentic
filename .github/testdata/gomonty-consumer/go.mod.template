@@ -1,0 +1,5 @@
+module example.com/agentic-gomonty-consumer
+
+go 1.25.4
+
+require github.com/regularkevvv/agentic/harness/codemode/gomonty v0.1.0
