@@ -1,0 +1,5 @@
+module example.com/agentic-sessionloop-consumer
+
+go 1.25.4
+
+require github.com/regularkevvv/agentic/harness/sessionloop v0.1.0

@@ -21,7 +21,7 @@ Agentic will add a batch-first `RepresentationEncoder` abstraction alongside the
 - one learned sparse vector;
 - one token-level multi-vector representation, for models such as BGE-M3's ColBERT output.
 
-Agentic will normalize inference. It will not own a search index, BM25, candidate retrieval, score fusion, or final ranking. Those responsibilities belong to the consuming retrieval framework, such as Chacla.
+Agentic will normalize inference. It will not own a search index, BM25, candidate retrieval, score fusion, or final ranking. Those responsibilities belong to the consuming retrieval system.
 
 The first fully supported multi-output path will be DeepInfra's native BGE-M3 API. Hugging Face dedicated endpoints and SageMaker will share a documented, provider-neutral JSON endpoint contract. Pinecone's standalone Inference API can be added as a learned-sparse provider. Watsonx is useful only as an optional dense provider unless its public service exposes sparse output in the future.
 
@@ -514,7 +514,7 @@ Create a reusable conformance suite accepted by `provider/test` implementations 
 - usage aggregation under chunking;
 - compatibility projection to dense `Embedder`.
 
-Add a deterministic `TestRepresentationEncoder` whose outputs are simple, inspectable functions of input text. It must support configurable capabilities and injected failures, making it useful to Chacla and other consumers.
+Add a deterministic `TestRepresentationEncoder` whose outputs are simple, inspectable functions of input text. It must support configurable capabilities and injected failures, making it useful to downstream consumers.
 
 ### Provider unit and transport tests
 
@@ -747,7 +747,7 @@ The work is complete only when all of the following are true:
 - Paid tests skip cleanly without credentials and use a bounded corpus when enabled.
 - Root, nested modules, `GOWORK=off`, race, vet, tidy, facade, and fresh-consumer gates are green.
 - Documentation clearly assigns storage, BM25, fusion, and final ranking to the consumer.
-- Chacla can implement its companion retrieval plan using only Agentic's public API.
+- A consuming retrieval system can implement its retrieval plan using only Agentic's public API.
 
 ## Primary references to revalidate during implementation
 

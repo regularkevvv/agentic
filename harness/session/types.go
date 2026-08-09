@@ -124,6 +124,12 @@ const (
 	ResolutionExternalResult = harnessruntime.ResolutionExternalResult
 )
 
+// errStaleRunTarget reports a run-targeted acceptance whose target is no
+// longer the active run (law L8). It is internal: the sessionloop view maps
+// it onto sessionloop.ErrStaleRun, and the legacy public API never names a
+// target run, so legacy callers can never observe it.
+var errStaleRunTarget = errors.New("targeted run is no longer active")
+
 var (
 	ErrSessionBusy              = errors.New("session is not idle")
 	ErrRunClosing               = errors.New("run is closing")

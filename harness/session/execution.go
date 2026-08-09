@@ -4,15 +4,53 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync/atomic"
 
 	agentic "github.com/regularkevvv/agentic"
 
 	"github.com/regularkevvv/agentic/harness/codec"
 	"github.com/regularkevvv/agentic/harness/event"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
+	"github.com/regularkevvv/agentic/harness/store"
 )
 
 func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agentic.Execution[O], error) {
+	accepted, err := s.prepareStart(ctx, prompt, ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.driveAccepted(accepted)
+}
+
+// acceptedStart is the single-use product of prepareStart: one durably
+// accepted, not-yet-driven run. It is consumed by exactly one driveAccepted
+// call; a second consumption attempt fails without touching the session.
+type acceptedStart[O any] struct {
+	runID    string
+	runCtx   context.Context
+	history  []agentic.Message
+	prompt   agentic.Message
+	commit   store.Commit
+	limits   *agentic.UsageLimits
+	consumed atomic.Bool
+}
+
+func (a *acceptedStart[O]) consume() error {
+	if !a.consumed.CompareAndSwap(false, true) {
+		return errors.New("accepted start was already driven")
+	}
+	return nil
+}
+
+// prepareStart is the durable acceptance half of Prompt. acceptCtx governs
+// instruction resolution and the acceptance journal append; runParent is the
+// parent of the run context created inside the same locked acceptance window
+// (the legacy Prompt passes its caller context as both).
+func (s *Session[O]) prepareStart(
+	acceptCtx context.Context,
+	prompt agentic.Message,
+	runParent context.Context,
+) (*acceptedStart[O], error) {
 	if prompt.Role != agentic.RoleUser {
 		return nil, ErrInvalidMessage
 	}
@@ -26,7 +64,7 @@ func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agent
 	if err != nil {
 		return nil, err
 	}
-	instructions, err := s.resolveExchangeInstructions(ctx, runID)
+	instructions, err := s.resolveExchangeInstructions(acceptCtx, runID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve exchange instructions: %w", err)
 	}
@@ -61,7 +99,7 @@ func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agent
 		s.mu.Unlock()
 		return nil, encodeErr
 	}
-	commit, appendErr := s.journal.Append(ctx, s.cursor, pendingEntries...)
+	commit, appendErr := s.journal.Append(acceptCtx, s.cursor, pendingEntries...)
 	if appendErr != nil {
 		s.mu.Unlock()
 		return nil, appendErr
@@ -73,7 +111,7 @@ func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agent
 	history := providerHistory(s.messages, s.contextMarkers)
 	s.messages = append(s.messages, promptCopy)
 	s.cursor = commit.Cursor
-	runCtx, cancel := context.WithCancel(ctx)
+	runCtx, cancel := context.WithCancel(runParent)
 	s.runCancel = cancel
 	s.run = &activeRun{
 		id:                 runID,
@@ -87,14 +125,34 @@ func (s *Session[O]) Prompt(ctx context.Context, prompt agentic.Message) (*agent
 	s.transitionLocked(Running)
 	s.mu.Unlock()
 	s.publishOwn(commit.Entries, agentic.EventAuthoritative)
+	return &acceptedStart[O]{
+		runID:   runID,
+		runCtx:  runCtx,
+		history: history,
+		prompt:  promptCopy,
+		commit:  commit,
+		limits:  limits,
+	}, nil
+}
 
-	runCtx = s.withToolRuntime(runCtx)
-	inputPrompt := cloneMessages([]agentic.Message{promptCopy})[0]
+// driveAccepted is the execution half of Prompt. It drives the accepted run
+// exactly once under the run context created at acceptance and settles it
+// through the existing finish path. There is deliberately no Closed
+// pre-check: the legacy fused Prompt never had one, and the sessionloop view
+// joins every drive goroutine before closing the root, so a post-Close drive
+// is unreachable except by fabrication (which settles through the finish
+// path like legacy).
+func (s *Session[O]) driveAccepted(accepted *acceptedStart[O]) (*agentic.Execution[O], error) {
+	if err := accepted.consume(); err != nil {
+		return nil, err
+	}
+	runCtx := s.withToolRuntime(accepted.runCtx)
+	inputPrompt := cloneMessages([]agentic.Message{accepted.prompt})[0]
 	execution, runErr := s.driver.Drive(runCtx, agentic.DriveInput{
 		Mode:    agentic.DriveStart,
-		History: history,
+		History: accepted.history,
 		Prompt:  &inputPrompt,
-	}, s.runOptions(limits)...)
+	}, s.runOptions(accepted.limits)...)
 	return s.finishExecution(execution, runErr)
 }
 

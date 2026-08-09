@@ -1,0 +1,63 @@
+[
+  {
+    "seq": 1,
+    "kind": "session.created",
+    "entry_id": "e1",
+    "parent_id": "",
+    "payload": {
+      "Options": {
+        "Budget": null,
+        "DrainAll": false
+      },
+      "Scope": {
+        "Agent": "",
+        "Depth": 0,
+        "ParentSessionID": "",
+        "SessionID": "SESSION_ID"
+      }
+    }
+  },
+  {
+    "seq": 2,
+    "kind": "run.opened",
+    "entry_id": "e2",
+    "parent_id": "e1",
+    "payload": {
+      "ID": "run_c1",
+      "Instructions": "",
+      "Limits": null,
+      "Mode": "start",
+      "Recovery": false
+    }
+  },
+  {
+    "seq": 3,
+    "kind": "message",
+    "entry_id": "e3",
+    "parent_id": "e2",
+    "payload": {
+      "Message": {
+        "content": [
+          {
+            "text": "hello characterization",
+            "type": "text"
+          }
+        ],
+        "role": "user"
+      },
+      "QueueID": "",
+      "Source": "prompt"
+    }
+  },
+  {
+    "seq": 4,
+    "kind": "run.closed",
+    "entry_id": "e4",
+    "parent_id": "e3",
+    "payload": {
+      "Error": "",
+      "ID": "run_c1",
+      "Status": 0
+    }
+  }
+]
