@@ -355,6 +355,16 @@ func (s *Session[O]) accept(ctx context.Context, kind QueueKind, message agentic
 // errStaleRunTarget instead of leaking into a successor run. The legacy
 // queue methods pass "" and keep their exact historical behavior.
 func (s *Session[O]) acceptWithCursor(ctx context.Context, kind QueueKind, message agentic.Message, targetRunID string) (QueueReceipt, store.Cursor, error) {
+	return s.acceptWithCursorCommand(ctx, kind, message, targetRunID, nil)
+}
+
+func (s *Session[O]) acceptWithCursorCommand(
+	ctx context.Context,
+	kind QueueKind,
+	message agentic.Message,
+	targetRunID string,
+	command *loopCommandAcceptedPayload,
+) (QueueReceipt, store.Cursor, error) {
 	if message.Role != agentic.RoleUser {
 		return QueueReceipt{}, store.Cursor{}, ErrInvalidMessage
 	}
@@ -377,6 +387,16 @@ func (s *Session[O]) acceptWithCursor(ctx context.Context, kind QueueKind, messa
 	if err != nil {
 		return QueueReceipt{}, store.Cursor{}, err
 	}
+	pendingEntries := []store.PendingEntry{pendingEntry}
+	if command != nil {
+		accepted := *command
+		accepted.QueueID = id
+		commandEntry, encodeErr := pending(s.codec, kindCommandAccepted, accepted)
+		if encodeErr != nil {
+			return QueueReceipt{}, store.Cursor{}, encodeErr
+		}
+		pendingEntries = append(pendingEntries, commandEntry)
+	}
 
 	s.mu.Lock()
 	if err := s.acceptanceErrorLocked(kind); err != nil {
@@ -387,7 +407,7 @@ func (s *Session[O]) acceptWithCursor(ctx context.Context, kind QueueKind, messa
 		s.mu.Unlock()
 		return QueueReceipt{}, store.Cursor{}, err
 	}
-	commit, appendErr := s.journal.Append(ctx, s.cursor, pendingEntry)
+	commit, appendErr := s.journal.Append(ctx, s.cursor, pendingEntries...)
 	if appendErr != nil {
 		// Acceptance is write-ahead. No in-memory queue mutation occurred, so
 		// this isolated failure does not fault the session.

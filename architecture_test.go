@@ -45,6 +45,7 @@ var modules = map[string]moduleRule{
 	"harness":                  {inWorkspace: true, replacesRoot: false},
 	"harness/codemode/gomonty": {inWorkspace: true, replacesRoot: false},
 	"harness/sessionloop":      {inWorkspace: true, replacesRoot: false},
+	"harness/store/postgres":   {inWorkspace: true, replacesRoot: false},
 	"tui":                      {inWorkspace: true, replacesRoot: false},
 	"e2e":                      {inWorkspace: true, replacesRoot: true},
 	"provider/local/onnx":      {inWorkspace: false, replacesRoot: false},

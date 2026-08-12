@@ -155,6 +155,19 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 	}); err != nil {
 		return nil, fmt.Errorf("session recovered lifecycle: %w", err)
 	}
+	if session.run != nil && folded.pendingInterruptRunID == session.run.id {
+		session.mu.Lock()
+		session.run.interrupted = true
+		session.transitionLocked(Interrupting)
+		session.mu.Unlock()
+		if err := session.finishInterrupt(&agentic.Execution[O]{Status: agentic.ExecutionInterrupted}); err != nil {
+			return nil, err
+		}
+		cleanupJournal = false
+		cleanupBus = false
+		cleanupEnvironment = false
+		return session, nil
+	}
 	if session.state == Faulted {
 		session.state = Running
 	}
@@ -191,20 +204,21 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 }
 
 type foldedState struct {
-	state          State
-	cursor         store.Cursor
-	messages       []agentic.Message
-	contextMarkers []contextMarker
-	queue          []QueueEntry
-	usage          agentic.Usage
-	budget         *agentic.UsageLimits
-	scope          *harnessruntime.Scope
-	drainAll       bool
-	suspension     *agentic.Suspension
-	compaction     *contextpolicy.Compaction
-	run            *activeRun
-	system         *agentic.Message
-	unapplied      []QueueEntry
+	state                 State
+	cursor                store.Cursor
+	messages              []agentic.Message
+	contextMarkers        []contextMarker
+	queue                 []QueueEntry
+	usage                 agentic.Usage
+	budget                *agentic.UsageLimits
+	scope                 *harnessruntime.Scope
+	drainAll              bool
+	suspension            *agentic.Suspension
+	compaction            *contextpolicy.Compaction
+	run                   *activeRun
+	system                *agentic.Message
+	unapplied             []QueueEntry
+	pendingInterruptRunID string
 }
 
 func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event.Record, error) {
@@ -286,6 +300,9 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 			state.state = Running
 			state.suspension = nil
 		case kindRunClosed:
+			if state.run != nil && state.pendingInterruptRunID == state.run.id {
+				state.pendingInterruptRunID = ""
+			}
 			state.run = nil
 			state.state = Idle
 			state.suspension = nil
@@ -356,6 +373,14 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 			}
 			delete(queue, payload.ID)
 			delete(drained, payload.ID)
+		case kindCommandAccepted:
+			payload, err := decodePayload[loopCommandAcceptedPayload](payloadCodec, entry)
+			if err != nil {
+				return foldedState{}, nil, err
+			}
+			if payload.Kind == "interrupt" {
+				state.pendingInterruptRunID = payload.RunID
+			}
 		case kindUsageCommitted:
 			payload, err := decodePayload[usagePayload](payloadCodec, entry)
 			if err != nil {

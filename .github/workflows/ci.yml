@@ -78,6 +78,56 @@ jobs:
           install-mode: goinstall
           working-directory: harness
 
+  harness-postgres:
+    name: Harness PostgreSQL journal
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: agentic
+          POSTGRES_PASSWORD: agentic
+          POSTGRES_DB: agentic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentic -d agentic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AGENTIC_POSTGRES_TEST_URL: postgres://agentic:agentic@127.0.0.1:5432/agentic?sslmode=disable
+    defaults:
+      run:
+        working-directory: harness/store/postgres
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: harness/store/postgres/go.mod
+      - name: Race test
+        run: go test -race -count=1 -timeout 60s ./...
+      - name: Vet and pure-Go build
+        run: go vet ./... && CGO_ENABLED=0 go build ./...
+      - name: Enforce coverage threshold
+        run: make coverage-check
+
+  harness-postgres-lint:
+    name: Harness PostgreSQL journal lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: harness/store/postgres/go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+          working-directory: harness/store/postgres
+
   gomonty-module:
     name: Optional GoMonty adapter
     runs-on: ubuntu-latest
@@ -324,18 +374,50 @@ jobs:
     name: Workspace integration
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: agentic
+          POSTGRES_PASSWORD: agentic
+          POSTGRES_DB: agentic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentic -d agentic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AGENTIC_POSTGRES_TEST_URL: postgres://agentic:agentic@127.0.0.1:5432/agentic?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Test all six non-CGO modules
-        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./tui/... ./e2e/...
+      - name: Test all seven non-CGO modules
+        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./harness/store/postgres/... ./tui/... ./e2e/...
 
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: agentic
+          POSTGRES_PASSWORD: agentic
+          POSTGRES_DB: agentic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agentic -d agentic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AGENTIC_POSTGRES_TEST_URL: postgres://agentic:agentic@127.0.0.1:5432/agentic?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5

@@ -51,6 +51,15 @@ func (s *Session[O]) prepareStart(
 	prompt agentic.Message,
 	runParent context.Context,
 ) (*acceptedStart[O], error) {
+	return s.prepareStartWithCommand(acceptCtx, prompt, runParent, nil)
+}
+
+func (s *Session[O]) prepareStartWithCommand(
+	acceptCtx context.Context,
+	prompt agentic.Message,
+	runParent context.Context,
+	command *loopCommandAcceptedPayload,
+) (*acceptedStart[O], error) {
 	if prompt.Role != agentic.RoleUser {
 		return nil, ErrInvalidMessage
 	}
@@ -84,7 +93,7 @@ func (s *Session[O]) prepareStart(
 		limits = &remaining
 	}
 	next := s.queueByKindsLocked(QueueNextTurn)
-	batch := newEntryBatch(s.codec, 2+2*len(next))
+	batch := newEntryBatch(s.codec, 3+2*len(next))
 	batch.Add(kindRunOpened, runOpenedPayload{
 		ID: runID, Mode: "start", Limits: cloneLimitsPointer(limits), Instructions: instructions,
 	})
@@ -94,6 +103,11 @@ func (s *Session[O]) prepareStart(
 	}
 	promptCopy := cloneMessages([]agentic.Message{prompt})[0]
 	batch.Add(kindMessage, messagePayload{Message: promptCopy, Source: "prompt"})
+	if command != nil {
+		accepted := *command
+		accepted.RunID = runID
+		batch.Add(kindCommandAccepted, accepted)
+	}
 	pendingEntries, encodeErr := batch.Result()
 	if encodeErr != nil {
 		s.mu.Unlock()

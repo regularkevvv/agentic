@@ -1,0 +1,8 @@
+module example.com/agentic-postgres-consumer
+
+go 1.25.4
+
+require (
+	github.com/regularkevvv/agentic/harness v0.3.0
+	github.com/regularkevvv/agentic/harness/store/postgres v0.1.0
+)

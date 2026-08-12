@@ -134,7 +134,7 @@ func loopCommittedEntries(events []sessionloop.Event) []sessionloop.Entry {
 func TestLoopViewStartLifecycle(t *testing.T) {
 	view, _ := newLoopViewForTest(t, &countingDriver{}, storememory.New(), nil)
 	if !view.Capabilities().Supports(sessionloop.CapabilityDurableAcceptance) ||
-		view.Capabilities().Supports(sessionloop.CapabilityIdempotentDispatch) ||
+		!view.Capabilities().Supports(sessionloop.CapabilityIdempotentDispatch) ||
 		view.Capabilities().Supports(sessionloop.CapabilityStructuredOutput) {
 		t.Fatalf("capabilities = %v", view.Capabilities())
 	}
@@ -448,8 +448,18 @@ func TestLoopViewDispatchValidationAndUnsupportedInput(t *testing.T) {
 	}
 	withKey := sessionloopStartCommand("keyed")
 	withKey.IdempotencyKey = "key-1"
-	if _, err := view.Dispatch(loopTestContext(t), withKey); !errors.Is(err, sessionloop.ErrUnsupported) {
-		t.Fatalf("idempotency key err = %v, want ErrUnsupported", err)
+	first := loopDispatch(t, view, withKey)
+	second := loopDispatch(t, view, withKey)
+	if first != second {
+		t.Fatalf("idempotent receipts differ: first=%#v second=%#v", first, second)
+	}
+	conflict := sessionloopStartCommand("different")
+	conflict.IdempotencyKey = withKey.IdempotencyKey
+	if _, err := view.Dispatch(loopTestContext(t), conflict); !errors.Is(err, sessionloop.ErrCommandConflict) {
+		t.Fatalf("conflicting idempotency key err = %v, want ErrCommandConflict", err)
+	}
+	if err := view.inner.WaitForIdle(loopTestContext(t)); err != nil {
+		t.Fatal(err)
 	}
 	dataStart := sessionloop.Command{Kind: sessionloop.CommandStart, Input: &sessionloop.Input{
 		Blocks: []sessionloop.InputBlock{{Kind: sessionloop.InputBlockData, Data: json.RawMessage(`{"a":1}`)}},

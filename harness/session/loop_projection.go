@@ -44,6 +44,7 @@ package session
 //	subagent.usage              EventUsage (parent session usage projected to sessionloop.Usage).
 //	branch.moved                IGNORED: reserved kind with no writer; preserved in the log only.
 //	runtime.operation           IGNORED: opaque capability operation facts are host-internal.
+//	sessionloop.command.accepted IGNORED: protocol receipt and idempotency metadata, folded by LoopView rather than transcript projection.
 //
 // Preview records (Nature == EventPreview) project to EventPreviewDelta.
 // Their Ordinal is a stream-local monotonic arrival counter (never the
