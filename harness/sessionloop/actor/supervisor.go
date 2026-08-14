@@ -11,12 +11,12 @@ import (
 )
 
 type Config struct {
-	Owner     string
-	Commands  CommandStore
-	Leases    LeaseStore
-	Doorbell  Doorbell
+	Owner         string
+	Commands      CommandStore
+	Leases        LeaseStore
+	Doorbell      Doorbell
 	SessionOpener SessionOpener
-	EventSink  EventSink
+	EventSink     EventSink
 	// OnError observes an activation failure after durable work has already
 	// been accepted. Lease contention and normal cancellation are omitted.
 	OnError      func(ActorID, error)

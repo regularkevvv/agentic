@@ -144,9 +144,9 @@ func TestSupervisorReportsActivationFailure(t *testing.T) {
 	failures := make(chan error, 1)
 	supervisor, err := actor.New(actor.Config{
 		Owner: "pod-a", Commands: store, Leases: store, Doorbell: notifier,
-		SessionOpener:    actor.SessionOpenerFunc(func(context.Context, actor.ActorID) (sessionloop.Session, error) { return nil, boom }),
-		OnError:      func(_ actor.ActorID, err error) { failures <- err },
-		ScanInterval: time.Millisecond,
+		SessionOpener: actor.SessionOpenerFunc(func(context.Context, actor.ActorID) (sessionloop.Session, error) { return nil, boom }),
+		OnError:       func(_ actor.ActorID, err error) { failures <- err },
+		ScanInterval:  time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -242,7 +242,9 @@ func TestRunActorRingesRecoveredSnapshotBeforeDraining(t *testing.T) {
 
 type snapshotEventSink struct{ snapshots chan sessionloop.Snapshot }
 
-func (o *snapshotEventSink) Observe(context.Context, actor.Lease, sessionloop.Event) error { return nil }
+func (o *snapshotEventSink) Observe(context.Context, actor.Lease, sessionloop.Event) error {
+	return nil
+}
 
 func (o *snapshotEventSink) ObserveSnapshot(_ context.Context, _ actor.Lease, snapshot sessionloop.Snapshot) error {
 	o.snapshots <- snapshot.Clone()

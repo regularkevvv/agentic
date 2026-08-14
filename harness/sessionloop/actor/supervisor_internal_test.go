@@ -393,8 +393,8 @@ func TestRunAndRunActorFailureSurfaces(t *testing.T) {
 		commands := &commandStoreStub{readyErr: want}
 		supervisor, err := New(Config{
 			Owner: "pod", Commands: commands, Leases: &leaseStoreStub{}, Doorbell: &notifierStub{sub: &subscriptionStub{}},
-			SessionOpener:    SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return &sessionStub{}, nil }),
-			ScanInterval: time.Millisecond,
+			SessionOpener: SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return &sessionStub{}, nil }),
+			ScanInterval:  time.Millisecond,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -501,7 +501,7 @@ func TestRunActorLoopFailureSurfaces(t *testing.T) {
 			supervisor, err := New(Config{
 				Owner: "pod", Commands: commands, Leases: &leaseStoreStub{}, Doorbell: &notifierStub{},
 				SessionOpener: SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return test.session, nil }),
-				EventSink:  test.observer,
+				EventSink:     test.observer,
 			})
 			if err != nil {
 				t.Fatal(err)
