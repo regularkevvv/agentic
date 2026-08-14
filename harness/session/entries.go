@@ -43,6 +43,7 @@ const (
 	kindChildUsage         = "subagent.usage"
 	kindBranchMoved        = "branch.moved"
 	kindRuntimeOperation   = "runtime.operation"
+	kindCommandAccepted    = "sessionloop.command.accepted"
 )
 
 func pending(payloadCodec codec.Codec, kind string, value any) (store.PendingEntry, error) {

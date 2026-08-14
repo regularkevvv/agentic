@@ -25,9 +25,9 @@ require (
 	github.com/swaggest/jsonschema-go v0.3.79 // indirect
 	github.com/swaggest/refl v1.4.0 // indirect
 	github.com/yalue/onnxruntime_go v1.31.0 // indirect
-	golang.org/x/crypto v0.46.0 // indirect
-	golang.org/x/sys v0.39.0 // indirect
-	golang.org/x/text v0.32.0 // indirect
+	golang.org/x/crypto v0.50.0 // indirect
+	golang.org/x/sys v0.46.0 // indirect
+	golang.org/x/text v0.36.0 // indirect
 )
 
 // Both resolve to the checkout, for the reason e2e/go.mod gives: this module

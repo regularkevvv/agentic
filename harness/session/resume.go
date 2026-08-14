@@ -58,6 +58,15 @@ func (s *Session[O]) prepareResume(
 	request ResumeRequest,
 	runParent context.Context,
 ) (*acceptedResume[O], error) {
+	return s.prepareResumeWithCommand(acceptCtx, request, runParent, nil)
+}
+
+func (s *Session[O]) prepareResumeWithCommand(
+	acceptCtx context.Context,
+	request ResumeRequest,
+	runParent context.Context,
+	command *loopCommandAcceptedPayload,
+) (*acceptedResume[O], error) {
 	s.mu.Lock()
 	if err := s.resumeErrorLocked(request); err != nil {
 		s.mu.Unlock()
@@ -66,7 +75,7 @@ func (s *Session[O]) prepareResume(
 	suspension := cloneSuspension(s.suspension)
 	if suspension.Kind == "harness.recovery.indeterminate" {
 		s.mu.Unlock()
-		return s.prepareResumeIndeterminate(acceptCtx, suspension, request, runParent)
+		return s.prepareResumeIndeterminateWithCommand(acceptCtx, suspension, request, runParent, command)
 	}
 	history := append(cloneMessages(s.run.history), cloneMessages(s.run.expected)...)
 	limits := cloneLimitsPointer(s.run.limits)
@@ -81,6 +90,16 @@ func (s *Session[O]) prepareResume(
 	if err != nil {
 		return nil, err
 	}
+	pendingEntries := []store.PendingEntry{entry}
+	if command != nil {
+		accepted := *command
+		accepted.RunID = s.currentRunID()
+		commandEntry, encodeErr := pending(s.codec, kindCommandAccepted, accepted)
+		if encodeErr != nil {
+			return nil, encodeErr
+		}
+		pendingEntries = append(pendingEntries, commandEntry)
+	}
 
 	s.mu.Lock()
 	if err := s.resumeErrorLocked(request); err != nil {
@@ -91,7 +110,7 @@ func (s *Session[O]) prepareResume(
 		s.mu.Unlock()
 		return nil, fmt.Errorf("%w: suspension changed", ErrInvalidResumeRequest)
 	}
-	commit, appendErr := s.journal.Append(acceptCtx, s.cursor, entry)
+	commit, appendErr := s.journal.Append(acceptCtx, s.cursor, pendingEntries...)
 	if appendErr != nil {
 		s.mu.Unlock()
 		return nil, appendErr
@@ -206,6 +225,16 @@ func (s *Session[O]) prepareResumeIndeterminate(
 	suspension *agentic.Suspension,
 	request ResumeRequest,
 	runParent context.Context,
+) (*acceptedResume[O], error) {
+	return s.prepareResumeIndeterminateWithCommand(acceptCtx, suspension, request, runParent, nil)
+}
+
+func (s *Session[O]) prepareResumeIndeterminateWithCommand(
+	acceptCtx context.Context,
+	suspension *agentic.Suspension,
+	request ResumeRequest,
+	runParent context.Context,
+	command *loopCommandAcceptedPayload,
 ) (*acceptedResume[O], error) {
 	var payload recoverySuspensionPayload
 	if err := json.Unmarshal(suspension.Payload, &payload); err != nil || payload.Version != 1 {
@@ -334,6 +363,11 @@ func (s *Session[O]) prepareResumeIndeterminate(
 		Limits:       cloneLimitsPointer(limits),
 		Instructions: instructions,
 	})
+	if command != nil {
+		accepted := *command
+		accepted.RunID = runID
+		batch.Add(kindCommandAccepted, accepted)
+	}
 	pendingEntries, encodeErr := batch.Result()
 	if encodeErr != nil {
 		s.mu.Unlock()

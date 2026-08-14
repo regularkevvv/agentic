@@ -175,6 +175,19 @@ type resolutionAcceptedPayload struct {
 	Request      harnessruntime.ResumeRequest
 }
 
+// loopCommandAcceptedPayload is the durable protocol-side acceptance record.
+// It deliberately stores only correlation and receipt identity: model-visible
+// input remains in the ordinary run/message/queue facts written in the same
+// atomic journal append.
+type loopCommandAcceptedPayload struct {
+	CommandID      string
+	Kind           string
+	IdempotencyKey string
+	Digest         string
+	RunID          string
+	QueueID        string
+}
+
 type childUsagePayload struct {
 	Charge  harnessruntime.UsageCharge
 	Session agentic.Usage

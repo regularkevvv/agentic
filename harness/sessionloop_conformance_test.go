@@ -286,14 +286,70 @@ func TestSessionLoopHostAdvertisedCapabilitiesActivateOptionalCases(t *testing.T
 		sessionloop.CapabilitySuspensionResolve,
 		sessionloop.CapabilityDetailedTools,
 		sessionloop.CapabilityStructuredOutput,
+		sessionloop.CapabilityIdempotentDispatch,
 	}
 	for _, capability := range required {
 		if !capabilities.Supports(capability) {
 			t.Fatalf("capability %q not advertised: %v", capability, capabilities)
 		}
 	}
-	if capabilities.Supports(sessionloop.CapabilityIdempotentDispatch) {
-		t.Fatal("dispatch.idempotent must never be advertised without durable idempotency")
+}
+
+func TestSessionLoopHostIdempotencySurvivesJSONLReopen(t *testing.T) {
+	repository, err := storejsonl.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	env := newSessionLoopEnv(t, repository)
+	opened, err := env.Host.NewSession(sessionLoopTestContext(t), sessionloop.SessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := sessionloop.Command{
+		ID:             "cmd-original",
+		Kind:           sessionloop.CommandStart,
+		Input:          &sessionloop.Input{Blocks: []sessionloop.InputBlock{{Kind: sessionloop.InputBlockText, Text: "durable keyed command"}}},
+		IdempotencyKey: "request-42",
+	}
+	receipt, err := opened.Dispatch(sessionLoopTestContext(t), command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream, err := opened.Subscribe(sessionLoopTestContext(t), sessionloop.SubscribeOptions{After: receipt.Position})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = sessionLoopAwaitSettled(t, stream, receipt.RunID)
+	_ = stream.Close()
+	id := opened.ID()
+	if err := opened.Close(sessionLoopTestContext(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := env.Host.OpenSession(sessionLoopTestContext(t), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close(context.Background()) }()
+	before, err := reopened.Snapshot(sessionLoopTestContext(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	retry := command
+	retry.ID = "cmd-retry-must-not-win"
+	retried, err := reopened.Dispatch(sessionLoopTestContext(t), retry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retried != receipt {
+		t.Fatalf("reopened idempotent receipt = %#v, want %#v", retried, receipt)
+	}
+	after, err := reopened.Snapshot(sessionLoopTestContext(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Position != before.Position || !reflect.DeepEqual(after.Entries, before.Entries) {
+		t.Fatalf("retry mutated session: before=%#v after=%#v", before, after)
 	}
 }
 

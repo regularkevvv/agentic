@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,6 +78,18 @@ type LoopView[O any] struct {
 	outputs            map[string]json.RawMessage
 	runDone            map[string]chan struct{}
 	streams            map[*loopStream]struct{}
+	idempotency        map[string]durableCommandAcceptance
+	// idempotencyClaims closes the check-then-act window between reading
+	// v.idempotency and durably recording an acceptance, per key. Serializing
+	// only same-key dispatches keeps unrelated dispatches concurrent: a
+	// dispatch parked inside a locked acceptance must never block another
+	// dispatch (see TestLoopRaceStaleSteerRevalidatedInsideLockedAcceptance).
+	idempotencyClaims map[string]chan struct{}
+}
+
+type durableCommandAcceptance struct {
+	digest  string
+	receipt sessionloop.Receipt
 }
 
 var _ sessionloop.Session = (*LoopView[struct{}])(nil)
@@ -106,16 +119,15 @@ func NewLoopView[O any](inner *Session[O], config LoopConfig[O]) (*LoopView[O], 
 			sessionloop.CapabilityInterrupt,
 			sessionloop.CapabilitySuspensionResolve,
 			sessionloop.CapabilityDetailedTools,
+			sessionloop.CapabilityIdempotentDispatch,
 		}
 		if config.OutputProjector != nil {
 			standard = append(standard, sessionloop.CapabilityStructuredOutput)
 		}
-		// dispatch.idempotent is NEVER advertised: idempotency keys are not
-		// durably recorded, and an in-memory map is not durable proof.
 		caps = sessionloop.NewCapabilities(standard...)
 	}
 	lifetime, cancel := context.WithCancel(context.Background())
-	return &LoopView[O]{
+	view := &LoopView[O]{
 		inner:              inner,
 		closeRoot:          config.CloseRoot,
 		output:             config.OutputProjector,
@@ -129,7 +141,16 @@ func NewLoopView[O any](inner *Session[O], config LoopConfig[O]) (*LoopView[O], 
 		outputs:            make(map[string]json.RawMessage),
 		runDone:            make(map[string]chan struct{}),
 		streams:            make(map[*loopStream]struct{}),
-	}, nil
+		idempotency:        make(map[string]durableCommandAcceptance),
+		idempotencyClaims:  make(map[string]chan struct{}),
+	}
+	if caps.Supports(sessionloop.CapabilityIdempotentDispatch) {
+		if err := view.restoreCommandAcceptances(context.Background()); err != nil {
+			cancel()
+			return nil, err
+		}
+	}
+	return view, nil
 }
 
 func (v *LoopView[O]) ID() sessionloop.SessionID { return sessionloop.SessionID(v.inner.ID()) }
@@ -196,6 +217,21 @@ func (v *LoopView[O]) Dispatch(ctx context.Context, command sessionloop.Command)
 		}
 		commandID = sessionloop.CommandID(generated)
 	}
+	digest, err := loopCommandDigest(command)
+	if err != nil {
+		return sessionloop.Receipt{}, err
+	}
+	if command.IdempotencyKey != "" {
+		receipt, owned, claim, claimErr := v.claimIdempotencyKey(ctx, command.IdempotencyKey, digest)
+		if claimErr != nil {
+			return sessionloop.Receipt{}, claimErr
+		}
+		if !owned {
+			return receipt, nil
+		}
+		defer v.releaseIdempotencyClaim(command.IdempotencyKey, claim)
+	}
+	marker := v.commandAcceptance(command, commandID, digest)
 	switch command.Kind {
 	case sessionloop.CommandSteer, sessionloop.CommandFollowUp,
 		sessionloop.CommandResolve, sessionloop.CommandInterrupt:
@@ -212,18 +248,164 @@ func (v *LoopView[O]) Dispatch(ctx context.Context, command sessionloop.Command)
 	}
 	switch command.Kind {
 	case sessionloop.CommandStart:
-		return v.dispatchStart(ctx, command, commandID)
+		return v.dispatchStart(ctx, command, commandID, marker)
 	case sessionloop.CommandSteer:
-		return v.dispatchQueue(ctx, command, commandID, QueueSteer)
+		return v.dispatchQueue(ctx, command, commandID, QueueSteer, marker)
 	case sessionloop.CommandFollowUp:
-		return v.dispatchQueue(ctx, command, commandID, QueueFollowUp)
+		return v.dispatchQueue(ctx, command, commandID, QueueFollowUp, marker)
 	case sessionloop.CommandNextTurn:
-		return v.dispatchQueue(ctx, command, commandID, QueueNextTurn)
+		return v.dispatchQueue(ctx, command, commandID, QueueNextTurn, marker)
 	case sessionloop.CommandResolve:
-		return v.dispatchResolve(ctx, command, commandID)
+		return v.dispatchResolve(ctx, command, commandID, marker)
 	default:
-		return v.dispatchInterrupt(ctx, command, commandID)
+		return v.dispatchInterrupt(ctx, command, commandID, marker)
 	}
+}
+
+func loopCommandDigest(command sessionloop.Command) (string, error) {
+	canonical := command.Clone()
+	canonical.ID = ""
+	canonical.IdempotencyKey = ""
+	payload, err := json.Marshal(canonical)
+	if err != nil {
+		return "", fmt.Errorf("encode command digest: %w", err)
+	}
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("sha256:%x", sum[:]), nil
+}
+
+func (v *LoopView[O]) commandAcceptance(
+	command sessionloop.Command,
+	commandID sessionloop.CommandID,
+	digest string,
+) *loopCommandAcceptedPayload {
+	if command.IdempotencyKey == "" {
+		return nil
+	}
+	return &loopCommandAcceptedPayload{
+		CommandID:      string(commandID),
+		Kind:           string(command.Kind),
+		IdempotencyKey: command.IdempotencyKey,
+		Digest:         digest,
+	}
+}
+
+// claimIdempotencyKey resolves a keyed dispatch against durable acceptance
+// state. It replays the receipt when the key is already accepted with the
+// same digest, returns ErrCommandConflict on a digest mismatch, and otherwise
+// grants ownership of the key's acceptance window. While another dispatch
+// owns that window the caller waits for it to finish and re-resolves, so a
+// key is durably accepted at most once even under concurrent retries — and
+// only same-key dispatches ever wait on each other.
+func (v *LoopView[O]) claimIdempotencyKey(
+	ctx context.Context, key, digest string,
+) (sessionloop.Receipt, bool, chan struct{}, error) {
+	for {
+		v.mu.Lock()
+		if accepted, exists := v.idempotency[key]; exists {
+			v.mu.Unlock()
+			if accepted.digest != digest {
+				return sessionloop.Receipt{}, false, nil, fmt.Errorf(
+					"idempotency key %q was accepted for a different command: %w",
+					key, sessionloop.ErrCommandConflict)
+			}
+			return accepted.receipt, false, nil, nil
+		}
+		pending, inflight := v.idempotencyClaims[key]
+		if !inflight {
+			claim := make(chan struct{})
+			v.idempotencyClaims[key] = claim
+			v.mu.Unlock()
+			return sessionloop.Receipt{}, true, claim, nil
+		}
+		v.mu.Unlock()
+		select {
+		case <-pending:
+		case <-ctx.Done():
+			return sessionloop.Receipt{}, false, nil, ctx.Err()
+		}
+	}
+}
+
+// releaseIdempotencyClaim runs after the owning dispatch finished. On success
+// rememberCommandAcceptance has already recorded the receipt, so woken
+// waiters replay it; after a failed acceptance the key is simply free again
+// and the next dispatch retries acceptance itself.
+func (v *LoopView[O]) releaseIdempotencyClaim(key string, claim chan struct{}) {
+	v.mu.Lock()
+	delete(v.idempotencyClaims, key)
+	v.mu.Unlock()
+	close(claim)
+}
+
+func (v *LoopView[O]) rememberCommandAcceptance(
+	marker *loopCommandAcceptedPayload,
+	receipt sessionloop.Receipt,
+) {
+	if marker == nil {
+		return
+	}
+	v.mu.Lock()
+	v.idempotency[marker.IdempotencyKey] = durableCommandAcceptance{
+		digest:  marker.Digest,
+		receipt: receipt,
+	}
+	v.mu.Unlock()
+}
+
+func (v *LoopView[O]) restoreCommandAcceptances(ctx context.Context) error {
+	loaded, err := v.inner.journalRef().Load(ctx)
+	if err != nil {
+		return mapLoopError(err)
+	}
+	var lastResolutionSequence uint64
+	for _, entry := range loaded.Entries {
+		if entry.Kind == kindResolutionAccepted {
+			lastResolutionSequence = entry.Seq
+			continue
+		}
+		if entry.Kind != kindCommandAccepted {
+			continue
+		}
+		accepted, decodeErr := decodePayload[loopCommandAcceptedPayload](v.inner.codecRef(), entry)
+		if decodeErr != nil {
+			return decodeErr
+		}
+		if accepted.CommandID == "" || accepted.IdempotencyKey == "" || accepted.Digest == "" {
+			return fmt.Errorf("invalid durable command acceptance at sequence %d", entry.Seq)
+		}
+		receipt := sessionloop.Receipt{
+			CommandID: sessionloop.CommandID(accepted.CommandID),
+			SessionID: v.ID(),
+			RunID:     sessionloop.RunID(accepted.RunID),
+			QueueID:   sessionloop.QueueID(accepted.QueueID),
+			Position:  loopPosition(entry.Cursor()),
+			Guarantee: sessionloop.AcceptanceDurable,
+		}
+		if previous, exists := v.idempotency[accepted.IdempotencyKey]; exists {
+			if previous.digest != accepted.Digest || previous.receipt != receipt {
+				return fmt.Errorf("conflicting durable idempotency key %q", accepted.IdempotencyKey)
+			}
+			continue
+		}
+		v.idempotency[accepted.IdempotencyKey] = durableCommandAcceptance{
+			digest: accepted.Digest, receipt: receipt,
+		}
+		switch sessionloop.CommandKind(accepted.Kind) {
+		case sessionloop.CommandStart:
+			v.runCommands[accepted.RunID] = receipt.CommandID
+		case sessionloop.CommandSteer, sessionloop.CommandFollowUp, sessionloop.CommandNextTurn:
+			v.queueCommands[accepted.QueueID] = receipt.CommandID
+		case sessionloop.CommandResolve:
+			if _, exists := v.runCommands[accepted.RunID]; !exists {
+				v.runCommands[accepted.RunID] = receipt.CommandID
+			}
+			if lastResolutionSequence != 0 {
+				v.resolutionCommands[lastResolutionSequence] = receipt.CommandID
+			}
+		}
+	}
+	return nil
 }
 
 // translateInputToMessage is the explicit ingress authority boundary from one
@@ -254,12 +436,13 @@ func (v *LoopView[O]) dispatchStart(
 	ctx context.Context,
 	command sessionloop.Command,
 	commandID sessionloop.CommandID,
+	marker *loopCommandAcceptedPayload,
 ) (sessionloop.Receipt, error) {
 	message, err := translateInputToMessage(command.Input)
 	if err != nil {
 		return sessionloop.Receipt{}, err
 	}
-	accepted, err := v.inner.prepareStart(ctx, message, v.lifetime)
+	accepted, err := v.inner.prepareStartWithCommand(ctx, message, v.lifetime, marker)
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
@@ -287,13 +470,15 @@ func (v *LoopView[O]) dispatchStart(
 		execution, _ := v.inner.driveAccepted(accepted)
 		v.captureOutput(accepted.runID, execution, done)
 	}()
-	return sessionloop.Receipt{
+	receipt := sessionloop.Receipt{
 		CommandID: commandID,
 		SessionID: v.ID(),
 		RunID:     sessionloop.RunID(accepted.runID),
 		Position:  loopPosition(accepted.commit.Cursor),
 		Guarantee: sessionloop.AcceptanceDurable,
-	}, nil
+	}
+	v.rememberCommandAcceptance(marker, receipt)
+	return receipt, nil
 }
 
 func (v *LoopView[O]) dispatchQueue(
@@ -301,6 +486,7 @@ func (v *LoopView[O]) dispatchQueue(
 	command sessionloop.Command,
 	commandID sessionloop.CommandID,
 	kind QueueKind,
+	marker *loopCommandAcceptedPayload,
 ) (sessionloop.Receipt, error) {
 	message, err := translateInputToMessage(command.Input)
 	if err != nil {
@@ -313,20 +499,22 @@ func (v *LoopView[O]) dispatchQueue(
 	if kind != QueueNextTurn {
 		targetRunID = string(command.RunID)
 	}
-	receipt, cursor, err := v.inner.acceptWithCursor(ctx, kind, message, targetRunID)
+	receipt, cursor, err := v.inner.acceptWithCursorCommand(ctx, kind, message, targetRunID, marker)
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
 	v.mu.Lock()
 	v.queueCommands[receipt.ID] = commandID
 	v.mu.Unlock()
-	return sessionloop.Receipt{
+	result := sessionloop.Receipt{
 		CommandID: commandID,
 		SessionID: v.ID(),
 		QueueID:   sessionloop.QueueID(receipt.ID),
 		Position:  loopPosition(cursor),
 		Guarantee: sessionloop.AcceptanceDurable,
-	}, nil
+	}
+	v.rememberCommandAcceptance(marker, result)
+	return result, nil
 }
 
 // loopResumeRequest converts a protocol resolution into the harness resume
@@ -367,12 +555,13 @@ func (v *LoopView[O]) dispatchResolve(
 	ctx context.Context,
 	command sessionloop.Command,
 	commandID sessionloop.CommandID,
+	marker *loopCommandAcceptedPayload,
 ) (sessionloop.Receipt, error) {
 	request, err := loopResumeRequest(command)
 	if err != nil {
 		return sessionloop.Receipt{}, err
 	}
-	accepted, err := v.inner.prepareResume(ctx, request, v.lifetime)
+	accepted, err := v.inner.prepareResumeWithCommand(ctx, request, v.lifetime, marker)
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
@@ -401,13 +590,15 @@ func (v *LoopView[O]) dispatchResolve(
 		}
 		v.captureOutput(accepted.runID, execution, done)
 	}()
-	return sessionloop.Receipt{
+	receipt := sessionloop.Receipt{
 		CommandID: commandID,
 		SessionID: v.ID(),
 		RunID:     sessionloop.RunID(accepted.runID),
 		Position:  loopPosition(accepted.commit.Cursor),
 		Guarantee: sessionloop.AcceptanceDurable,
-	}, nil
+	}
+	v.rememberCommandAcceptance(marker, receipt)
+	return receipt, nil
 }
 
 // announceLiveState injects a zero-position, authoritative session.state
@@ -447,22 +638,26 @@ func (v *LoopView[O]) dispatchInterrupt(
 	ctx context.Context,
 	command sessionloop.Command,
 	commandID sessionloop.CommandID,
+	marker *loopCommandAcceptedPayload,
 ) (sessionloop.Receipt, error) {
 	// The expected run ID is revalidated inside requestInterrupt's locked
 	// section (law L8): an interrupt aimed at a settled run must never
 	// cancel its successor.
-	if _, err := v.inner.requestInterrupt(ctx, string(command.RunID)); err != nil {
+	if _, err := v.inner.requestInterruptCommand(ctx, string(command.RunID), marker); err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
-	// No durable interrupt-request fact exists today; the durable trace is
-	// written at settlement. The receipt is honestly "accepted" with a zero
-	// position (law L3).
-	return sessionloop.Receipt{
+	receipt := sessionloop.Receipt{
 		CommandID: commandID,
 		SessionID: v.ID(),
 		RunID:     command.RunID,
 		Guarantee: sessionloop.AcceptanceAccepted,
-	}, nil
+	}
+	if marker != nil {
+		receipt.Position = loopPosition(v.inner.currentCursor())
+		receipt.Guarantee = sessionloop.AcceptanceDurable
+	}
+	v.rememberCommandAcceptance(marker, receipt)
+	return receipt, nil
 }
 
 // captureOutput records the structured-output projection of one settled run
