@@ -9,10 +9,9 @@ go 1.25.4
 // list drifts from that rule in either direction. See ARCHITECTURE.md.
 use (
 	.
+	./e2e
 	./harness
 	./harness/codemode/gomonty
 	./harness/sessionloop
-	./harness/store/postgres
 	./tui
-	./e2e
 )

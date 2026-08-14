@@ -258,16 +258,16 @@ func cloneCommand(command actor.Command) actor.Command {
 	return command
 }
 
-type Notifier struct {
+type Doorbell struct {
 	mu     sync.Mutex
 	nextID uint64
 	subs   map[uint64]chan actor.ActorID
 	closed bool
 }
 
-func NewNotifier() *Notifier { return &Notifier{subs: make(map[uint64]chan actor.ActorID)} }
+func NewDoorbell() *Doorbell { return &Doorbell{subs: make(map[uint64]chan actor.ActorID)} }
 
-func (n *Notifier) Publish(ctx context.Context, id actor.ActorID) error {
+func (n *Doorbell) Ring(ctx context.Context, id actor.ActorID) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -285,7 +285,7 @@ func (n *Notifier) Publish(ctx context.Context, id actor.ActorID) error {
 	return nil
 }
 
-func (n *Notifier) Subscribe(ctx context.Context) (actor.Subscription, error) {
+func (n *Doorbell) Subscribe(ctx context.Context) (actor.Subscription, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -300,7 +300,7 @@ func (n *Notifier) Subscribe(ctx context.Context) (actor.Subscription, error) {
 	return sub, nil
 }
 
-func (n *Notifier) Close() {
+func (n *Doorbell) Close() {
 	n.mu.Lock()
 	n.closed = true
 	for id, events := range n.subs {
@@ -311,7 +311,7 @@ func (n *Notifier) Close() {
 }
 
 type subscription struct {
-	owner  *Notifier
+	owner  *Doorbell
 	id     uint64
 	events chan actor.ActorID
 	done   chan struct{}
@@ -345,7 +345,7 @@ func (s *subscription) Close() error {
 var (
 	_ actor.CommandStore = (*Store)(nil)
 	_ actor.LeaseStore   = (*Store)(nil)
-	_ actor.Notifier     = (*Notifier)(nil)
+	_ actor.Doorbell     = (*Doorbell)(nil)
 )
 
 func (s *Store) Command(id actor.CommandID) (actor.Command, error) {

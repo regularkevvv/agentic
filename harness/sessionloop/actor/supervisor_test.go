@@ -10,7 +10,7 @@ import (
 
 	"github.com/regularkevvv/agentic/harness/sessionloop"
 	"github.com/regularkevvv/agentic/harness/sessionloop/actor"
-	actormemory "github.com/regularkevvv/agentic/harness/sessionloop/actor/memory"
+	actormemory "github.com/regularkevvv/agentic/harness/sessionloop/actor/internal/memory"
 	"github.com/regularkevvv/agentic/harness/sessionloop/testkit"
 )
 
@@ -23,14 +23,14 @@ func actorCommand(id, actorID, text string) actor.Command {
 	}
 }
 
-func newSupervisor(t *testing.T, store *actormemory.Store, notifier actor.Notifier, host sessionloop.Host, observer actor.Observer) *actor.Supervisor {
+func newSupervisor(t *testing.T, store *actormemory.Store, notifier actor.Doorbell, host sessionloop.Host, observer actor.EventSink) *actor.Supervisor {
 	t.Helper()
 	supervisor, err := actor.New(actor.Config{
-		Owner: "pod-a", Commands: store, Leases: store, Notifier: notifier,
-		Activator: actor.ActivatorFunc(func(ctx context.Context, _ actor.ActorID) (sessionloop.Session, error) {
+		Owner: "pod-a", Commands: store, Leases: store, Doorbell: notifier,
+		SessionOpener: actor.SessionOpenerFunc(func(ctx context.Context, _ actor.ActorID) (sessionloop.Session, error) {
 			return host.NewSession(ctx, sessionloop.SessionOptions{})
 		}),
-		Observer: observer, LeaseTTL: time.Second, ScanInterval: 5 * time.Millisecond,
+		EventSink: observer, LeaseTTL: time.Second, ScanInterval: 5 * time.Millisecond,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -40,11 +40,11 @@ func newSupervisor(t *testing.T, store *actormemory.Store, notifier actor.Notifi
 
 func TestRunActorDrainsMessagesInOrderAndObservesEvents(t *testing.T) {
 	store := actormemory.NewStore()
-	notifier := actormemory.NewNotifier()
+	notifier := actormemory.NewDoorbell()
 	host := testkit.New(testkit.WithIdempotentDispatch())
 	var mu sync.Mutex
 	var settled []sessionloop.RunID
-	supervisor := newSupervisor(t, store, notifier, host, actor.ObserverFunc(func(_ context.Context, _ actor.Lease, event sessionloop.Event) error {
+	supervisor := newSupervisor(t, store, notifier, host, actor.EventSinkFunc(func(_ context.Context, _ actor.Lease, event sessionloop.Event) error {
 		if event.Kind == sessionloop.EventRunSettled {
 			mu.Lock()
 			settled = append(settled, event.RunID)
@@ -78,7 +78,7 @@ func TestRunActorDrainsMessagesInOrderAndObservesEvents(t *testing.T) {
 
 func TestSupervisorScanRecoversDroppedNotification(t *testing.T) {
 	store := actormemory.NewStore()
-	notifier := actormemory.NewNotifier()
+	notifier := actormemory.NewDoorbell()
 	host := testkit.New(testkit.WithIdempotentDispatch())
 	supervisor := newSupervisor(t, store, notifier, host, nil)
 	if _, err := store.Enqueue(context.Background(), actorCommand("lost-wake", "conversation", "hello")); err != nil {
@@ -106,7 +106,7 @@ func TestSupervisorScanRecoversDroppedNotification(t *testing.T) {
 
 func TestSupervisorSubmitReportsDurableWakeFailure(t *testing.T) {
 	store := actormemory.NewStore()
-	notifier := actormemory.NewNotifier()
+	notifier := actormemory.NewDoorbell()
 	notifier.Close()
 	supervisor := newSupervisor(t, store, notifier, testkit.New(), nil)
 	submission, err := supervisor.Submit(context.Background(), actorCommand("durable", "actor", "message"))
@@ -124,7 +124,7 @@ func TestSupervisorValidationAndCompetingLease(t *testing.T) {
 		t.Fatal("empty config succeeded")
 	}
 	store := actormemory.NewStore()
-	notifier := actormemory.NewNotifier()
+	notifier := actormemory.NewDoorbell()
 	host := testkit.New()
 	supervisor := newSupervisor(t, store, notifier, host, nil)
 	lease, err := store.Acquire(context.Background(), "busy", "other", time.Minute)
@@ -139,12 +139,12 @@ func TestSupervisorValidationAndCompetingLease(t *testing.T) {
 
 func TestSupervisorReportsActivationFailure(t *testing.T) {
 	store := actormemory.NewStore()
-	notifier := actormemory.NewNotifier()
+	notifier := actormemory.NewDoorbell()
 	boom := errors.New("activate")
 	failures := make(chan error, 1)
 	supervisor, err := actor.New(actor.Config{
-		Owner: "pod-a", Commands: store, Leases: store, Notifier: notifier,
-		Activator:    actor.ActivatorFunc(func(context.Context, actor.ActorID) (sessionloop.Session, error) { return nil, boom }),
+		Owner: "pod-a", Commands: store, Leases: store, Doorbell: notifier,
+		SessionOpener:    actor.SessionOpenerFunc(func(context.Context, actor.ActorID) (sessionloop.Session, error) { return nil, boom }),
 		OnError:      func(_ actor.ActorID, err error) { failures <- err },
 		ScanInterval: time.Millisecond,
 	})
@@ -171,14 +171,14 @@ func TestSupervisorReportsActivationFailure(t *testing.T) {
 	}
 }
 
-func TestSupervisorKeepsScanningAndResubscribesDuringNotifierOutage(t *testing.T) {
+func TestSupervisorKeepsScanningAndResubscribesDuringDoorbellOutage(t *testing.T) {
 	store := actormemory.NewStore()
-	notifier := &flakyNotifier{delegate: actormemory.NewNotifier(), subscribeFailures: 1}
+	notifier := &flakyDoorbell{delegate: actormemory.NewDoorbell(), subscribeFailures: 1}
 	failures := make(chan error, 2)
 	host := testkit.New(testkit.WithIdempotentDispatch())
 	supervisor, err := actor.New(actor.Config{
-		Owner: "pod-a", Commands: store, Leases: store, Notifier: notifier,
-		Activator: actor.ActivatorFunc(func(ctx context.Context, _ actor.ActorID) (sessionloop.Session, error) {
+		Owner: "pod-a", Commands: store, Leases: store, Doorbell: notifier,
+		SessionOpener: actor.SessionOpenerFunc(func(ctx context.Context, _ actor.ActorID) (sessionloop.Session, error) {
 			return host.NewSession(ctx, sessionloop.SessionOptions{})
 		}),
 		OnError:  func(_ actor.ActorID, err error) { failures <- err },
@@ -218,11 +218,11 @@ func TestSupervisorKeepsScanningAndResubscribesDuringNotifierOutage(t *testing.T
 	t.Fatal("durable scan stopped during notifier outage")
 }
 
-func TestRunActorPublishesRecoveredSnapshotBeforeDraining(t *testing.T) {
+func TestRunActorRingesRecoveredSnapshotBeforeDraining(t *testing.T) {
 	store := actormemory.NewStore()
-	notifier := actormemory.NewNotifier()
+	notifier := actormemory.NewDoorbell()
 	host := testkit.New(testkit.WithIdempotentDispatch())
-	observer := &snapshotObserver{snapshots: make(chan sessionloop.Snapshot, 1)}
+	observer := &snapshotEventSink{snapshots: make(chan sessionloop.Snapshot, 1)}
 	supervisor := newSupervisor(t, store, notifier, host, observer)
 	if _, err := store.Enqueue(context.Background(), actorCommand("snapshot", "conversation", "hello")); err != nil {
 		t.Fatal(err)
@@ -240,26 +240,26 @@ func TestRunActorPublishesRecoveredSnapshotBeforeDraining(t *testing.T) {
 	}
 }
 
-type snapshotObserver struct{ snapshots chan sessionloop.Snapshot }
+type snapshotEventSink struct{ snapshots chan sessionloop.Snapshot }
 
-func (o *snapshotObserver) Observe(context.Context, actor.Lease, sessionloop.Event) error { return nil }
+func (o *snapshotEventSink) Observe(context.Context, actor.Lease, sessionloop.Event) error { return nil }
 
-func (o *snapshotObserver) ObserveSnapshot(_ context.Context, _ actor.Lease, snapshot sessionloop.Snapshot) error {
+func (o *snapshotEventSink) ObserveSnapshot(_ context.Context, _ actor.Lease, snapshot sessionloop.Snapshot) error {
 	o.snapshots <- snapshot.Clone()
 	return nil
 }
 
-type flakyNotifier struct {
+type flakyDoorbell struct {
 	mu                sync.Mutex
-	delegate          actor.Notifier
+	delegate          actor.Doorbell
 	subscribeFailures int
 }
 
-func (n *flakyNotifier) Publish(ctx context.Context, id actor.ActorID) error {
-	return n.delegate.Publish(ctx, id)
+func (n *flakyDoorbell) Ring(ctx context.Context, id actor.ActorID) error {
+	return n.delegate.Ring(ctx, id)
 }
 
-func (n *flakyNotifier) Subscribe(ctx context.Context) (actor.Subscription, error) {
+func (n *flakyDoorbell) Subscribe(ctx context.Context) (actor.Subscription, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.subscribeFailures > 0 {

@@ -35,7 +35,6 @@ agentic/                    the library — one import path for callers
     testutil/               doubles for the root package's own tests
 
   harness/                  nested module: durable sessions (experimental)
-    store/postgres/         nested module: shared PostgreSQL journal
     codemode/gomonty/       nested module: optional GoMonty executor
     sessionloop/            nested module: provider-neutral session protocol
       actor/                durable mailbox/lease supervisor contracts
@@ -83,8 +82,7 @@ everything else is chat.
 | A runnable example | `e2e/examples/<name>/` | The `e2e` module, so a table writer never reaches a caller's binary |
 | A compatible-harness terminal client | `tui/` | Pure-Go client port, renderer, app, Harness adapter, and explicit standard assembly |
 | A session-protocol type, validation rule, or conformance case | `harness/sessionloop/` | The neutral protocol and its conformance suite stay in the zero-dependency module every host and bridge imports |
-| A portable durable-session actor contract or supervisor | `harness/sessionloop/actor/` | Mailbox, lease, notifier, activation, and passivation semantics belong beside the neutral protocol; concrete database and pub/sub adapters remain application-owned |
-| A production Harness journal backed by PostgreSQL | `harness/store/postgres/` | Its pgx dependency must not enter the Harness module graph; the nested module implements the existing journal contract and cross-process exclusive ownership |
+| A portable durable-session actor contract or supervisor | `harness/sessionloop/actor/` | Mailbox, lease, doorbell, session-opening, and passivation semantics belong beside the neutral protocol; concrete database and pub/sub adapters remain application-owned |
 | A Code Mode backend that loads a native runtime | `harness/codemode/<backend>/` as a nested module | The portable Code Mode capability remains in Harness; the optional runtime stays out of its graph |
 | A live test against a real API | `e2e/providers/`, behind `//go:build e2e` | Needs a key; never runs in the default `make test` |
 | A record of why a decision was made | `docs/design/` | Not maintained afterwards; see `docs/README.md` |
@@ -102,7 +100,6 @@ is what `go get github.com/regularkevvv/agentic` should pull.
 | `.` | ✓ | — | The library |
 | `harness/` | ✓ | **Agentic `v0.6.0`** | Experimental; its dependencies and its API churn should not be the library's |
 | `harness/sessionloop/` | ✓ | — (depends on nothing) | The provider-neutral session protocol must stay importable without Agentic, Harness, TUI, or provider SDKs in the consumer's module graph |
-| `harness/store/postgres/` | ✓ | **Harness `v0.3.0`** | Shared PostgreSQL durability and advisory-lock ownership must remain optional and out of the Harness graph |
 | `harness/codemode/gomonty/` | ✓ | **Harness `v0.3.0`, GoMonty `v0.0.15`** | Optional native-backed Code Mode execution must not enter the core Harness graph |
 | `tui/` | ✓ | **Agentic `v0.6.0`, Harness `v0.3.0`** | Bubble Tea and terminal application dependencies must not enter either library graph |
 | `e2e/` | ✓ | this checkout | Live tests and examples need keys, table writers, and fixtures that no caller should inherit |
@@ -117,11 +114,11 @@ bindings are cgo-free and prepare their native runtime explicitly at execution,
 so that optional module remains in `go.work`. `make lint-all` covers all nine
 when you do have the ONNX libraries.
 
-**`harness/`, `harness/sessionloop/`, `harness/store/postgres/`,
+**`harness/`, `harness/sessionloop/`,
 `harness/codemode/gomonty/`, `tui/`, and `provider/local/onnx/` have no
 `replace` directives, and that is deliberate.**
 They are released in dependency order: sessionloop, root Agentic, the native
-ONNX provider, Harness, the PostgreSQL journal, the optional GoMonty adapter,
+ONNX provider, Harness, the optional GoMonty adapter,
 then TUI. Their
 `GOWORK=off` release checks rehearse what `go get` gives a user. Locally
 `go.work` supplies the modules being changed together, so the distinction is

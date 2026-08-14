@@ -77,11 +77,11 @@ type LeaseStore interface {
 	Release(context.Context, Lease) error
 }
 
-// Notifier is a lossy wake-up path. CommandStore remains authoritative and a
+// Doorbell is a lossy wake-up path. CommandStore remains authoritative and a
 // Supervisor periodically scans ReadyActors, so dropped notifications never
 // drop commands.
-type Notifier interface {
-	Publish(context.Context, ActorID) error
+type Doorbell interface {
+	Ring(context.Context, ActorID) error
 	Subscribe(context.Context) (Subscription, error)
 }
 
@@ -90,36 +90,36 @@ type Subscription interface {
 	Close() error
 }
 
-// Activator translates an application actor identity into one already
+// SessionOpener translates an application actor identity into one already
 // assembled SessionLoop session. It is where an application binds tenants,
 // Chacla realms, providers, permissions, and durable harness state.
-type Activator interface {
+type SessionOpener interface {
 	Open(context.Context, ActorID) (sessionloop.Session, error)
 }
 
-type ActivatorFunc func(context.Context, ActorID) (sessionloop.Session, error)
+type SessionOpenerFunc func(context.Context, ActorID) (sessionloop.Session, error)
 
-func (f ActivatorFunc) Open(ctx context.Context, id ActorID) (sessionloop.Session, error) {
+func (f SessionOpenerFunc) Open(ctx context.Context, id ActorID) (sessionloop.Session, error) {
 	return f(ctx, id)
 }
 
-// Observer receives authoritative and preview events while an actor owns the
+// EventSink receives authoritative and preview events while an actor owns the
 // session. Implementations commonly persist authoritative projections and
 // publish previews to transient subscribers.
-type Observer interface {
+type EventSink interface {
 	Observe(context.Context, Lease, sessionloop.Event) error
 }
 
-// SnapshotObserver is an optional Observer extension. A supervisor calls it
+// SnapshotSink is an optional EventSink extension. A supervisor calls it
 // immediately after activation so an application projection also reflects
 // recovery that happened while no actor owned the session (for example, a
 // process dying during an active run).
-type SnapshotObserver interface {
+type SnapshotSink interface {
 	ObserveSnapshot(context.Context, Lease, sessionloop.Snapshot) error
 }
 
-type ObserverFunc func(context.Context, Lease, sessionloop.Event) error
+type EventSinkFunc func(context.Context, Lease, sessionloop.Event) error
 
-func (f ObserverFunc) Observe(ctx context.Context, lease Lease, event sessionloop.Event) error {
+func (f EventSinkFunc) Observe(ctx context.Context, lease Lease, event sessionloop.Event) error {
 	return f(ctx, lease, event)
 }

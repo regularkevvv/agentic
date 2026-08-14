@@ -14,9 +14,9 @@ type Config struct {
 	Owner     string
 	Commands  CommandStore
 	Leases    LeaseStore
-	Notifier  Notifier
-	Activator Activator
-	Observer  Observer
+	Doorbell  Doorbell
+	SessionOpener SessionOpener
+	EventSink  EventSink
 	// OnError observes an activation failure after durable work has already
 	// been accepted. Lease contention and normal cancellation are omitted.
 	OnError      func(ActorID, error)
@@ -40,7 +40,7 @@ type Supervisor struct {
 
 func New(config Config) (*Supervisor, error) {
 	if config.Owner == "" || config.Commands == nil || config.Leases == nil ||
-		config.Notifier == nil || config.Activator == nil {
+		config.Doorbell == nil || config.SessionOpener == nil {
 		return nil, errors.New("session actor: owner, commands, leases, notifier, and activator are required")
 	}
 	if config.LeaseTTL <= 0 {
@@ -69,7 +69,7 @@ func (s *Supervisor) Submit(ctx context.Context, command Command) (Submission, e
 	if err != nil {
 		return Submission{}, err
 	}
-	if err := s.cfg.Notifier.Publish(ctx, submission.ActorID); err != nil {
+	if err := s.cfg.Doorbell.Ring(ctx, submission.ActorID); err != nil {
 		return submission, fmt.Errorf("session actor: command is durable but wake publish failed: %w", err)
 	}
 	return submission, nil
@@ -103,7 +103,7 @@ func (s *Supervisor) Run(ctx context.Context) error {
 
 func (s *Supervisor) listen(ctx context.Context, wakes chan<- ActorID) {
 	for ctx.Err() == nil {
-		subscription, err := s.cfg.Notifier.Subscribe(ctx)
+		subscription, err := s.cfg.Doorbell.Subscribe(ctx)
 		if err != nil {
 			s.notificationError(err)
 			if !waitRetry(ctx, s.cfg.NotificationRetry) {
@@ -202,7 +202,7 @@ func (s *Supervisor) RunActor(ctx context.Context, id ActorID) error {
 	leaseErr := make(chan error, 1)
 	go s.renew(actorCtx, lease, leaseUpdates, leaseErr)
 
-	session, err := s.cfg.Activator.Open(actorCtx, id)
+	session, err := s.cfg.SessionOpener.Open(actorCtx, id)
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,7 @@ func (s *Supervisor) RunActor(ctx context.Context, id ActorID) error {
 	if err != nil {
 		return err
 	}
-	if observer, ok := s.cfg.Observer.(SnapshotObserver); ok {
+	if observer, ok := s.cfg.EventSink.(SnapshotSink); ok {
 		if err := observer.ObserveSnapshot(actorCtx, lease, snapshot); err != nil {
 			return err
 		}
@@ -329,8 +329,8 @@ func (s *Supervisor) dispatchEligible(
 }
 
 func (s *Supervisor) observeEvent(ctx context.Context, lease Lease, event sessionloop.Event) error {
-	if s.cfg.Observer != nil {
-		if err := s.cfg.Observer.Observe(ctx, lease, event); err != nil {
+	if s.cfg.EventSink != nil {
+		if err := s.cfg.EventSink.Observe(ctx, lease, event); err != nil {
 			return err
 		}
 	}

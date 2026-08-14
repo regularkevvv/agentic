@@ -2,7 +2,7 @@
 
 This package turns durable SessionLoop conversations into passivating actors
 without choosing an application's database, pub/sub system, tenancy model, or
-provider. The durable mailbox is authoritative; `Notifier` is only a lossy
+provider. The durable mailbox is authoritative; `Doorbell` is only a lossy
 wake-up hint, and the supervisor's periodic scan recovers missed hints.
 
 For each actor, a supervisor:
@@ -17,9 +17,9 @@ Different actor IDs can run concurrently and on different pods. Multiple
 commands for one actor remain serialized. `actor/memory` is a deterministic
 single-process implementation for tests and local programs; production
 applications normally implement `CommandStore` and `LeaseStore` in their
-database and use NATS, Redis, or another transport only for `Notifier`.
+database and use NATS, Redis, or another transport only for `Doorbell`.
 
-Observers may also implement `SnapshotObserver`. The supervisor publishes the
+EventSinks may also implement `SnapshotSink`. The supervisor publishes the
 activated session snapshot before draining commands, which lets application
 projections incorporate durable recovery performed while the actor was
 passive.

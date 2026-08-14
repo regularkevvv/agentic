@@ -14,10 +14,10 @@ func TestSupervisorDefaultsSubmitAndActivationEdges(t *testing.T) {
 	commands := &commandStoreStub{}
 	leases := &leaseStoreStub{}
 	notifier := &notifierStub{}
-	activator := ActivatorFunc(func(context.Context, ActorID) (sessionloop.Session, error) {
+	activator := SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) {
 		return &sessionStub{}, nil
 	})
-	supervisor, err := New(Config{Owner: "pod", Commands: commands, Leases: leases, Notifier: notifier, Activator: activator})
+	supervisor, err := New(Config{Owner: "pod", Commands: commands, Leases: leases, Doorbell: notifier, SessionOpener: activator})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +150,7 @@ func TestObserveRenewAndNextEventBranches(t *testing.T) {
 	commands := &commandStoreStub{}
 	supervisor := &Supervisor{cfg: Config{Commands: commands}}
 	observer := &observerStub{err: want}
-	supervisor.cfg.Observer = observer
+	supervisor.cfg.EventSink = observer
 	if err := supervisor.observeEvent(context.Background(), Lease{}, sessionloop.Event{}); !errors.Is(err, want) {
 		t.Fatalf("observer error = %v", err)
 	}
@@ -164,7 +164,7 @@ func TestObserveRenewAndNextEventBranches(t *testing.T) {
 	if err := supervisor.observeEvent(context.Background(), Lease{}, settled); err != nil || commands.settled == 0 {
 		t.Fatalf("settle observation = %v count=%d", err, commands.settled)
 	}
-	supervisor.cfg.Observer = nil
+	supervisor.cfg.EventSink = nil
 	if err := supervisor.observeEvent(context.Background(), Lease{}, sessionloop.Event{}); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +238,7 @@ func TestListenerRecoversAndStopsCleanly(t *testing.T) {
 	t.Run("subscribe failure", func(t *testing.T) {
 		reported := make(chan error, 1)
 		supervisor := &Supervisor{cfg: Config{
-			Notifier:          &notifierStub{subscribeErr: want},
+			Doorbell:          &notifierStub{subscribeErr: want},
 			NotificationRetry: time.Hour,
 			OnError: func(_ ActorID, err error) {
 				reported <- err
@@ -268,7 +268,7 @@ func TestListenerRecoversAndStopsCleanly(t *testing.T) {
 	t.Run("next failure", func(t *testing.T) {
 		reported := make(chan error, 1)
 		supervisor := &Supervisor{cfg: Config{
-			Notifier:          &notifierStub{sub: &subscriptionStub{nextErr: want}},
+			Doorbell:          &notifierStub{sub: &subscriptionStub{nextErr: want}},
 			NotificationRetry: time.Hour,
 			OnError: func(_ ActorID, err error) {
 				reported <- err
@@ -297,7 +297,7 @@ func TestListenerRecoversAndStopsCleanly(t *testing.T) {
 	})
 	t.Run("delivery", func(t *testing.T) {
 		supervisor := &Supervisor{cfg: Config{
-			Notifier:          &notifierStub{sub: &subscriptionStub{nextIDs: []ActorID{"actor"}}},
+			Doorbell:          &notifierStub{sub: &subscriptionStub{nextIDs: []ActorID{"actor"}}},
 			NotificationRetry: time.Hour,
 		}}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -324,7 +324,7 @@ func TestListenerRecoversAndStopsCleanly(t *testing.T) {
 	})
 	t.Run("canceled blocked delivery", func(t *testing.T) {
 		supervisor := &Supervisor{cfg: Config{
-			Notifier:          &notifierStub{sub: &subscriptionStub{nextIDs: []ActorID{"actor"}}},
+			Doorbell:          &notifierStub{sub: &subscriptionStub{nextIDs: []ActorID{"actor"}}},
 			NotificationRetry: time.Hour,
 		}}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -356,9 +356,9 @@ func TestRunConsumesNotificationWake(t *testing.T) {
 		Owner:        "pod",
 		Commands:     &commandStoreStub{},
 		Leases:       &leaseStoreStub{},
-		Notifier:     &notifierStub{sub: &subscriptionStub{nextIDs: []ActorID{"actor"}}},
+		Doorbell:     &notifierStub{sub: &subscriptionStub{nextIDs: []ActorID{"actor"}}},
 		ScanInterval: time.Hour,
-		Activator: ActivatorFunc(func(context.Context, ActorID) (sessionloop.Session, error) {
+		SessionOpener: SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) {
 			return nil, want
 		}),
 		OnError: func(id ActorID, err error) {
@@ -392,8 +392,8 @@ func TestRunAndRunActorFailureSurfaces(t *testing.T) {
 	t.Run("scan failure", func(t *testing.T) {
 		commands := &commandStoreStub{readyErr: want}
 		supervisor, err := New(Config{
-			Owner: "pod", Commands: commands, Leases: &leaseStoreStub{}, Notifier: &notifierStub{sub: &subscriptionStub{}},
-			Activator:    ActivatorFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return &sessionStub{}, nil }),
+			Owner: "pod", Commands: commands, Leases: &leaseStoreStub{}, Doorbell: &notifierStub{sub: &subscriptionStub{}},
+			SessionOpener:    SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return &sessionStub{}, nil }),
 			ScanInterval: time.Millisecond,
 		})
 		if err != nil {
@@ -407,18 +407,18 @@ func TestRunAndRunActorFailureSurfaces(t *testing.T) {
 		name      string
 		commands  *commandStoreStub
 		leases    *leaseStoreStub
-		activator Activator
-		observer  Observer
+		activator SessionOpener
+		observer  EventSink
 		want      error
 	}{
-		{name: "snapshot", activator: ActivatorFunc(func(context.Context, ActorID) (sessionloop.Session, error) {
+		{name: "snapshot", activator: SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) {
 			return &sessionStub{snapshotErr: want}, nil
 		}), want: want},
-		{name: "snapshot observer", activator: ActivatorFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return &sessionStub{}, nil }), observer: &snapshotObserverStub{err: want}, want: want},
-		{name: "subscribe", activator: ActivatorFunc(func(context.Context, ActorID) (sessionloop.Session, error) {
+		{name: "snapshot observer", activator: SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return &sessionStub{}, nil }), observer: &snapshotEventSinkStub{err: want}, want: want},
+		{name: "subscribe", activator: SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) {
 			return &sessionStub{subscribeErr: want}, nil
 		}), want: want},
-		{name: "pending", commands: &commandStoreStub{pendingErr: want}, activator: ActivatorFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return &sessionStub{}, nil }), want: want},
+		{name: "pending", commands: &commandStoreStub{pendingErr: want}, activator: SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return &sessionStub{}, nil }), want: want},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -430,7 +430,7 @@ func TestRunAndRunActorFailureSurfaces(t *testing.T) {
 			if leases == nil {
 				leases = &leaseStoreStub{}
 			}
-			supervisor, err := New(Config{Owner: "pod", Commands: commands, Leases: leases, Notifier: &notifierStub{}, Activator: test.activator, Observer: test.observer})
+			supervisor, err := New(Config{Owner: "pod", Commands: commands, Leases: leases, Doorbell: &notifierStub{}, SessionOpener: test.activator, EventSink: test.observer})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -451,7 +451,7 @@ func TestRunActorLoopFailureSurfaces(t *testing.T) {
 		name     string
 		commands *commandStoreStub
 		session  *sessionStub
-		observer Observer
+		observer EventSink
 	}{
 		{
 			name:     "dispatch",
@@ -499,9 +499,9 @@ func TestRunActorLoopFailureSurfaces(t *testing.T) {
 				commands = &commandStoreStub{}
 			}
 			supervisor, err := New(Config{
-				Owner: "pod", Commands: commands, Leases: &leaseStoreStub{}, Notifier: &notifierStub{},
-				Activator: ActivatorFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return test.session, nil }),
-				Observer:  test.observer,
+				Owner: "pod", Commands: commands, Leases: &leaseStoreStub{}, Doorbell: &notifierStub{},
+				SessionOpener: SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) { return test.session, nil }),
+				EventSink:  test.observer,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -520,8 +520,8 @@ func TestRunActorConsumesRenewedFenceBeforePolling(t *testing.T) {
 		renewed: Lease{ActorID: "actor", Owner: "pod", Fence: 2},
 	}
 	supervisor, err := New(Config{
-		Owner: "pod", Commands: commands, Leases: leases, Notifier: &notifierStub{}, LeaseTTL: 3 * time.Millisecond,
-		Activator: ActivatorFunc(func(context.Context, ActorID) (sessionloop.Session, error) {
+		Owner: "pod", Commands: commands, Leases: leases, Doorbell: &notifierStub{}, LeaseTTL: 3 * time.Millisecond,
+		SessionOpener: SessionOpenerFunc(func(context.Context, ActorID) (sessionloop.Session, error) {
 			return &sessionStub{snapshot: sessionloop.Snapshot{State: sessionloop.StateIdle}, snapshotDelay: 10 * time.Millisecond}, nil
 		}),
 	})
@@ -602,7 +602,7 @@ type notifierStub struct {
 	sub                      Subscription
 }
 
-func (s *notifierStub) Publish(_ context.Context, id ActorID) error {
+func (s *notifierStub) Ring(_ context.Context, id ActorID) error {
 	s.published = id
 	return s.publishErr
 }
@@ -690,9 +690,9 @@ type observerStub struct{ err error }
 
 func (s *observerStub) Observe(context.Context, Lease, sessionloop.Event) error { return s.err }
 
-type snapshotObserverStub struct{ err error }
+type snapshotEventSinkStub struct{ err error }
 
-func (s *snapshotObserverStub) Observe(context.Context, Lease, sessionloop.Event) error { return nil }
-func (s *snapshotObserverStub) ObserveSnapshot(context.Context, Lease, sessionloop.Snapshot) error {
+func (s *snapshotEventSinkStub) Observe(context.Context, Lease, sessionloop.Event) error { return nil }
+func (s *snapshotEventSinkStub) ObserveSnapshot(context.Context, Lease, sessionloop.Snapshot) error {
 	return s.err
 }

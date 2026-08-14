@@ -65,7 +65,6 @@ type LoopView[O any] struct {
 	// could wg.Add against a joining wg.Wait or re-activate a session mid
 	// closeRoot.
 	lifecycleMu sync.RWMutex
-	dispatchMu  sync.Mutex
 
 	closeMu   sync.Mutex
 	closeDone bool
@@ -80,6 +79,12 @@ type LoopView[O any] struct {
 	runDone            map[string]chan struct{}
 	streams            map[*loopStream]struct{}
 	idempotency        map[string]durableCommandAcceptance
+	// idempotencyClaims closes the check-then-act window between reading
+	// v.idempotency and durably recording an acceptance, per key. Serializing
+	// only same-key dispatches keeps unrelated dispatches concurrent: a
+	// dispatch parked inside a locked acceptance must never block another
+	// dispatch (see TestLoopRaceStaleSteerRevalidatedInsideLockedAcceptance).
+	idempotencyClaims map[string]chan struct{}
 }
 
 type durableCommandAcceptance struct {
@@ -137,6 +142,7 @@ func NewLoopView[O any](inner *Session[O], config LoopConfig[O]) (*LoopView[O], 
 		runDone:            make(map[string]chan struct{}),
 		streams:            make(map[*loopStream]struct{}),
 		idempotency:        make(map[string]durableCommandAcceptance),
+		idempotencyClaims:  make(map[string]chan struct{}),
 	}
 	if caps.Supports(sessionloop.CapabilityIdempotentDispatch) {
 		if err := view.restoreCommandAcceptances(context.Background()); err != nil {
@@ -200,8 +206,6 @@ func (v *LoopView[O]) Dispatch(ctx context.Context, command sessionloop.Command)
 	}
 	v.lifecycleMu.RLock()
 	defer v.lifecycleMu.RUnlock()
-	v.dispatchMu.Lock()
-	defer v.dispatchMu.Unlock()
 	if v.isClosed() {
 		return sessionloop.Receipt{}, loopClosedError()
 	}
@@ -218,17 +222,14 @@ func (v *LoopView[O]) Dispatch(ctx context.Context, command sessionloop.Command)
 		return sessionloop.Receipt{}, err
 	}
 	if command.IdempotencyKey != "" {
-		v.mu.Lock()
-		accepted, exists := v.idempotency[command.IdempotencyKey]
-		v.mu.Unlock()
-		if exists {
-			if accepted.digest != digest {
-				return sessionloop.Receipt{}, fmt.Errorf(
-					"idempotency key %q was accepted for a different command: %w",
-					command.IdempotencyKey, sessionloop.ErrCommandConflict)
-			}
-			return accepted.receipt, nil
+		receipt, owned, claim, claimErr := v.claimIdempotencyKey(ctx, command.IdempotencyKey, digest)
+		if claimErr != nil {
+			return sessionloop.Receipt{}, claimErr
 		}
+		if !owned {
+			return receipt, nil
+		}
+		defer v.releaseIdempotencyClaim(command.IdempotencyKey, claim)
 	}
 	marker := v.commandAcceptance(command, commandID, digest)
 	switch command.Kind {
@@ -287,6 +288,54 @@ func (v *LoopView[O]) commandAcceptance(
 		IdempotencyKey: command.IdempotencyKey,
 		Digest:         digest,
 	}
+}
+
+// claimIdempotencyKey resolves a keyed dispatch against durable acceptance
+// state. It replays the receipt when the key is already accepted with the
+// same digest, returns ErrCommandConflict on a digest mismatch, and otherwise
+// grants ownership of the key's acceptance window. While another dispatch
+// owns that window the caller waits for it to finish and re-resolves, so a
+// key is durably accepted at most once even under concurrent retries — and
+// only same-key dispatches ever wait on each other.
+func (v *LoopView[O]) claimIdempotencyKey(
+	ctx context.Context, key, digest string,
+) (sessionloop.Receipt, bool, chan struct{}, error) {
+	for {
+		v.mu.Lock()
+		if accepted, exists := v.idempotency[key]; exists {
+			v.mu.Unlock()
+			if accepted.digest != digest {
+				return sessionloop.Receipt{}, false, nil, fmt.Errorf(
+					"idempotency key %q was accepted for a different command: %w",
+					key, sessionloop.ErrCommandConflict)
+			}
+			return accepted.receipt, false, nil, nil
+		}
+		pending, inflight := v.idempotencyClaims[key]
+		if !inflight {
+			claim := make(chan struct{})
+			v.idempotencyClaims[key] = claim
+			v.mu.Unlock()
+			return sessionloop.Receipt{}, true, claim, nil
+		}
+		v.mu.Unlock()
+		select {
+		case <-pending:
+		case <-ctx.Done():
+			return sessionloop.Receipt{}, false, nil, ctx.Err()
+		}
+	}
+}
+
+// releaseIdempotencyClaim runs after the owning dispatch finished. On success
+// rememberCommandAcceptance has already recorded the receipt, so woken
+// waiters replay it; after a failed acceptance the key is simply free again
+// and the next dispatch retries acceptance itself.
+func (v *LoopView[O]) releaseIdempotencyClaim(key string, claim chan struct{}) {
+	v.mu.Lock()
+	delete(v.idempotencyClaims, key)
+	v.mu.Unlock()
+	close(claim)
 }
 
 func (v *LoopView[O]) rememberCommandAcceptance(

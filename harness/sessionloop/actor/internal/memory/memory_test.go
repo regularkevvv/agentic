@@ -104,14 +104,14 @@ func TestStoreFencingExpiryAndFailures(t *testing.T) {
 	}
 }
 
-func TestNotifierFanoutCloseAndCancellation(t *testing.T) {
-	notifier := NewNotifier()
+func TestDoorbellFanoutCloseAndCancellation(t *testing.T) {
+	notifier := NewDoorbell()
 	first, err := notifier.Subscribe(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	second, _ := notifier.Subscribe(context.Background())
-	if err := notifier.Publish(context.Background(), "actor"); err != nil {
+	if err := notifier.Ring(context.Background(), "actor"); err != nil {
 		t.Fatal(err)
 	}
 	for _, sub := range []actor.Subscription{first, second} {
@@ -127,8 +127,8 @@ func TestNotifierFanoutCloseAndCancellation(t *testing.T) {
 		t.Fatalf("closed Next = %v", err)
 	}
 	notifier.Close()
-	if err := notifier.Publish(context.Background(), "actor"); !errors.Is(err, io.EOF) {
-		t.Fatalf("closed Publish = %v", err)
+	if err := notifier.Ring(context.Background(), "actor"); !errors.Is(err, io.EOF) {
+		t.Fatalf("closed Ring = %v", err)
 	}
 	if _, err := notifier.Subscribe(context.Background()); !errors.Is(err, io.EOF) {
 		t.Fatalf("closed Subscribe = %v", err)
@@ -248,11 +248,11 @@ func TestStoreValidationCancellationLimitsAndStateConflicts(t *testing.T) {
 	}
 }
 
-func TestNotifierCancellationAndLossyBuffer(t *testing.T) {
-	notifier := NewNotifier()
+func TestDoorbellCancellationAndLossyBuffer(t *testing.T) {
+	notifier := NewDoorbell()
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := notifier.Publish(canceled, "actor"); !errors.Is(err, context.Canceled) {
+	if err := notifier.Ring(canceled, "actor"); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled publish = %v", err)
 	}
 	if _, err := notifier.Subscribe(canceled); !errors.Is(err, context.Canceled) {
@@ -273,7 +273,7 @@ func TestNotifierCancellationAndLossyBuffer(t *testing.T) {
 		t.Fatal(err)
 	}
 	for index := 0; index < 70; index++ {
-		if err := notifier.Publish(context.Background(), actor.ActorID("actor")); err != nil {
+		if err := notifier.Ring(context.Background(), actor.ActorID("actor")); err != nil {
 			t.Fatal(err)
 		}
 	}
