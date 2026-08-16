@@ -50,7 +50,9 @@ set, and structured exception/evaluation log records. The root Agentic source
 and public instrumentation API do not import OTel or the optional adapter, and
 prompt/tool content stays off unless explicitly enabled.
 See [`otel/README.md`](otel/README.md) for setup, privacy controls, and the
-pinned semantic-convention revision.
+pinned semantic-convention revision. `make otel-e2e` runs a credential-free,
+Dockerized Collector proof and asserts the exported traces, metrics, logs,
+correlation, topology, scenarios, and privacy tripwire.
 
 ## Quick Start
 

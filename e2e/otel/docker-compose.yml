@@ -1,0 +1,31 @@
+services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.158.0@sha256:c5918f78992ee73b0d6f0e599423ac5ec52dd5d9726733114d6eca53d5a32ed5
+    # The test-only Collector writes file-exporter output to a disposable
+    # named volume. Its production OTLP endpoints are never exposed here.
+    user: "0:0"
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - telemetry:/telemetry
+    ports:
+      - "4317:4317"
+      - "13133:13133"
+
+  smoke:
+    image: otel/opentelemetry-collector-contrib:0.158.0@sha256:c5918f78992ee73b0d6f0e599423ac5ec52dd5d9726733114d6eca53d5a32ed5
+    entrypoint: ["/otel-smoke"]
+    depends_on:
+      - collector
+    environment:
+      AGENTIC_OTEL_E2E: "1"
+      AGENTIC_OTEL_OUTPUT_DIR: /telemetry
+      OTEL_COLLECTOR_HEALTH_URL: http://collector:13133/
+      OTEL_EXPORTER_OTLP_ENDPOINT: collector:4317
+    volumes:
+      - ./.bin/otel-smoke:/otel-smoke:ro
+      - telemetry:/telemetry:ro
+    command: ["-test.v", "-test.run=^TestCollectorSmoke$"]
+
+volumes:
+  telemetry:

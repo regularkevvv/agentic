@@ -1,4 +1,4 @@
-.PHONY: test lint lint-all lint-cgo vet build fmt check clean test-e2e coverage coverage-check coverage-all
+.PHONY: test lint lint-all lint-cgo vet build fmt check clean test-e2e otel-e2e coverage coverage-check coverage-all
 
 GOLANGCI_LINT_VERSION := v2.1.6
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
@@ -14,6 +14,10 @@ test:
 # are invisible to every other target here.
 test-e2e:
 	cd e2e && go test -tags=e2e -race -count=1 -timeout 300s ./...
+
+# Run the credential-free OTLP/Collector proof for traces, metrics, and logs.
+otel-e2e:
+	$(MAKE) -C e2e/otel smoke
 
 # Run coverage excluding test-only helper packages
 coverage:

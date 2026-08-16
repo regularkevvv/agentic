@@ -93,6 +93,23 @@ GenAI named events are OTel LogRecords, not trace span events. The SDK
 correlates them to the current trace/span through the context passed to the
 adapter.
 
+## Collector-backed proof
+
+The repository includes a credential-free runnable example and a Docker
+Compose smoke test under [`e2e/otel`](../e2e/otel/README.md). It exercises
+nested agents, tools, suspension/resume, streaming, provider failure,
+embeddings, inference details, and evaluation records against a pinned real
+OpenTelemetry Collector.
+
+```bash
+make otel-e2e
+```
+
+The gate parses the Collector's exported OTLP JSON using the official protobuf
+types. It checks exact span topology and counts, all metric instruments,
+trace-correlated log records, durable IDs, semantic attributes, and a privacy
+tripwire that fails if deliberately sensitive raw text appears anywhere.
+
 Error dimensions are deliberately low-cardinality. They are `canceled`,
 `deadline_exceeded`, the canonical leaf Go error type, `provider_error` for an
 in-band model failure, `tool_error` for an unsuccessful tool result, or the
