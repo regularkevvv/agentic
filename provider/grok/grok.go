@@ -58,8 +58,9 @@ type Options struct {
 
 // Model implements core.Model and core.StreamModel against the xAI API.
 type Model struct {
-	client *openai.Client
-	model  string
+	client  *openai.Client
+	model   string
+	baseURL string
 }
 
 // Option configures the Grok Model.
@@ -125,7 +126,7 @@ func New(model string, opts ...Option) (*Model, error) {
 
 	client := openai.NewClient(reqOpts...)
 
-	return &Model{client: &client, model: model}, nil
+	return &Model{client: &client, model: model, baseURL: baseURL}, nil
 }
 
 // MustNew is like New but panics on error.
@@ -140,6 +141,11 @@ func MustNew(model string, opts ...Option) *Model {
 // Name implements core.Model.
 func (m *Model) Name() string {
 	return m.model
+}
+
+// ModelMetadata reports semantic provider and transport identity.
+func (m *Model) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadataForEndpoint("x_ai", "chat", m.baseURL)
 }
 
 // Request implements core.Model.

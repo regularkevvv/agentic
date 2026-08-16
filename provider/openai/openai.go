@@ -17,11 +17,15 @@ import (
 	"github.com/openai/openai-go/shared"
 )
 
+// DefaultBaseURL is the official OpenAI API endpoint.
+const DefaultBaseURL = "https://api.openai.com/v1"
+
 // Model implements the core.Model and core.StreamModel interfaces
 // using the OpenAI ChatCompletions API.
 type Model struct {
-	client *openai.Client
-	model  string
+	client  *openai.Client
+	model   string
+	baseURL string
 }
 
 // Option configures the OpenAI Model.
@@ -82,8 +86,12 @@ func New(model string, opts ...Option) (*Model, error) {
 	if cfg.apiKey != "" {
 		reqOpts = append(reqOpts, option.WithAPIKey(cfg.apiKey))
 	}
+	baseURL := cfg.baseURL
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
+	}
 	if cfg.baseURL != "" {
-		reqOpts = append(reqOpts, option.WithBaseURL(cfg.baseURL))
+		reqOpts = append(reqOpts, option.WithBaseURL(baseURL))
 	}
 	if cfg.organization != "" {
 		reqOpts = append(reqOpts, option.WithOrganization(cfg.organization))
@@ -93,8 +101,9 @@ func New(model string, opts ...Option) (*Model, error) {
 	client := openai.NewClient(reqOpts...)
 
 	return &Model{
-		client: &client,
-		model:  model,
+		client:  &client,
+		model:   model,
+		baseURL: baseURL,
 	}, nil
 }
 
@@ -244,6 +253,11 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 // Name implements core.Model.
 func (m *Model) Name() string {
 	return m.model
+}
+
+// ModelMetadata reports semantic provider and transport identity.
+func (m *Model) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadataForEndpoint("openai", "chat", m.baseURL)
 }
 
 // buildParams converts core.ChatRequest to OpenAI params.

@@ -25,6 +25,10 @@ type agentConfig struct {
 	endStrategy          EndStrategy
 	toolPrepareFunc      toolPrepareAdapter
 	historyProcessor     HistoryProcessor
+	instrumentation      Instrumentation
+	instrumentationSet   bool
+	agentIdentity        AgentIdentity
+	modelMetadata        *ModelMetadata
 }
 
 func defaultAgentConfig() agentConfig {
@@ -154,6 +158,38 @@ type runOptions struct {
 	modelStreaming        *bool
 	toolCancellationGrace *time.Duration
 	promptCache           *PromptCacheConfig
+	instrumentation       Instrumentation
+	instrumentationSet    bool
+	runMetadata           RunMetadata
+	runMetadataSet        bool
+}
+
+// WithInstrumentation observes every agent invocation, model request, and
+// admitted tool execution. The observer is optional; Agentic's source and
+// public API import no OpenTelemetry packages, while
+// github.com/regularkevvv/agentic/otel supplies the standard adapter. Nested
+// agents inherit an observer through context unless they explicitly configure
+// one; passing nil explicitly disables inheritance.
+func WithInstrumentation(instrumentation Instrumentation) AgentOption {
+	return func(c *agentConfig) {
+		c.instrumentation = instrumentation
+		c.instrumentationSet = true
+	}
+}
+
+// WithAgentIdentity supplies the stable agent identity used by observability
+// integrations. Empty fields remain unknown rather than being fabricated.
+func WithAgentIdentity(identity AgentIdentity) AgentOption {
+	return func(c *agentConfig) { c.agentIdentity = identity }
+}
+
+// WithModelMetadata overrides metadata discovered from the Model. This is
+// useful for custom providers and compatible endpoints.
+func WithModelMetadata(metadata ModelMetadata) AgentOption {
+	return func(c *agentConfig) {
+		copy := metadata
+		c.modelMetadata = &copy
+	}
 }
 
 func WithMessages(messages ...Message) RunOption {
@@ -234,6 +270,26 @@ func WithRunPromptCache(config PromptCacheConfig) RunOption {
 	return func(o *runOptions) {
 		copy := config
 		o.promptCache = &copy
+	}
+}
+
+// WithRunInstrumentation overrides the agent-level observer for one
+// execution. Passing nil disables observation for that execution.
+func WithRunInstrumentation(instrumentation Instrumentation) RunOption {
+	return func(o *runOptions) {
+		o.instrumentation = instrumentation
+		o.instrumentationSet = true
+	}
+}
+
+// WithRunMetadata attaches correlation identifiers supplied by the owning
+// runtime. Agentic never invents conversation or durable run identifiers.
+// Nested agents inherit these identifiers unless a run explicitly replaces
+// them, including with an empty value.
+func WithRunMetadata(metadata RunMetadata) RunOption {
+	return func(o *runOptions) {
+		o.runMetadata = metadata
+		o.runMetadataSet = true
 	}
 }
 

@@ -14,6 +14,8 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
+const defaultBaseURL = "https://api.anthropic.com"
+
 const (
 	// defaultMaxTokens is the output ceiling used when the caller sets none.
 	// Anthropic requires max_tokens on every request.
@@ -44,8 +46,9 @@ var adaptiveThinkingPrefixes = []string{
 // Model implements the core.Model and core.StreamModel interfaces
 // using the Anthropic Messages API.
 type Model struct {
-	client *anthropic.Client
-	model  string
+	client  *anthropic.Client
+	model   string
+	baseURL string
 }
 
 // Option configures the Anthropic Model.
@@ -86,10 +89,15 @@ func New(model string, opts ...Option) (*Model, error) {
 	}
 
 	client := anthropic.NewClient(reqOpts...)
+	baseURL := cfg.baseURL
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
 
 	return &Model{
-		client: &client,
-		model:  model,
+		client:  &client,
+		model:   model,
+		baseURL: baseURL,
 	}, nil
 }
 
@@ -260,6 +268,11 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 // Name implements core.Model.
 func (m *Model) Name() string {
 	return m.model
+}
+
+// ModelMetadata reports semantic provider and transport identity.
+func (m *Model) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadataForEndpoint("anthropic", "chat", m.baseURL)
 }
 
 // buildParams converts core.ChatRequest to Anthropic params.

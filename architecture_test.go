@@ -45,6 +45,7 @@ var modules = map[string]moduleRule{
 	"harness":                  {inWorkspace: true, replacesRoot: false},
 	"harness/codemode/gomonty": {inWorkspace: true, replacesRoot: false},
 	"harness/sessionloop":      {inWorkspace: true, replacesRoot: false},
+	"otel":                     {inWorkspace: true, replacesRoot: false},
 	"tui":                      {inWorkspace: true, replacesRoot: false},
 	"e2e":                      {inWorkspace: true, replacesRoot: true},
 	"provider/local/onnx":      {inWorkspace: false, replacesRoot: false},
@@ -69,6 +70,7 @@ var topLevelDirectories = map[string]string{
 	"harness":  "nested module: durable sessions",
 	"internal": "the two halves, not importable by callers",
 	"mcp":      "Model Context Protocol client",
+	"otel":     "nested module: optional OpenTelemetry integration",
 	"provider": "every provider",
 	"testdata": "compile-failure fixtures",
 	"tool":     "tool builders and toolsets",
@@ -225,7 +227,7 @@ func TestWorkspaceListsEveryNonCGOModule(t *testing.T) {
 // TestNestedModulesResolveTheRootAsDocumented protects a distinction that is
 // one line from being erased and leaves no trace when it is.
 //
-// Harness, the optional GoMonty adapter, TUI, and the native ONNX provider
+// Harness, the optional GoMonty and OTel adapters, TUI, and the native ONNX provider
 // deliberately have no `replace`: their ordered release checks rehearse what
 // users obtain through `go get`. go.work still supplies the non-CGO modules
 // during a coordinated change. Adding a replace would make that consumer
@@ -268,6 +270,58 @@ func TestNestedModulesResolveTheRootAsDocumented(t *testing.T) {
 	}
 }
 
+// TestRootSourceDoesNotImportOptionalTelemetry makes the dependency arrow
+// executable: the neutral lifecycle belongs to Agentic, while all OTel API use
+// belongs to the separately installed adapter module.
+func TestRootSourceDoesNotImportOptionalTelemetry(t *testing.T) {
+	t.Parallel()
+	root := repoRoot(t)
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if path == root {
+				return nil
+			}
+			relative, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			relative = filepath.ToSlash(relative)
+			if strings.HasPrefix(entry.Name(), ".") || entry.Name() == "vendor" {
+				return fs.SkipDir
+			}
+			if _, nestedModule := modules[relative]; nestedModule {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+		parsed, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+		if err != nil {
+			return err
+		}
+		for _, spec := range parsed.Imports {
+			imported, err := strconv.Unquote(spec.Path.Value)
+			if err != nil {
+				return err
+			}
+			if strings.HasPrefix(imported, "go.opentelemetry.io/") ||
+				strings.HasPrefix(imported, "github.com/regularkevvv/agentic/otel") {
+				relative, _ := filepath.Rel(root, path)
+				t.Errorf("%s imports optional telemetry package %q; root Agentic exposes only the dependency-neutral Instrumentation lifecycle", filepath.ToSlash(relative), imported)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestSessionloopModuleHasNoProjectDependencies keeps the session protocol
 // module at zero dependencies, which is the property the module exists for.
 //
@@ -304,14 +358,13 @@ func TestSessionloopModuleHasNoProjectDependencies(t *testing.T) {
 	}
 }
 
-// TestReleaseOrderDocumentsSessionloopFirst freezes the documented tag order.
+// TestReleaseOrderDocumentsModuleDependencies freezes the documented tag order.
 //
-// harness/go.mod requires a published sessionloop tag and carries no replace,
-// so releasing Harness before sessionloop deadlocks the GOWORK=off release
-// check (plan section 14). Remote tags are not hermetically testable; the
-// documented order in ARCHITECTURE.md is what release engineering follows,
-// so this test keeps that sentence from silently regressing.
-func TestReleaseOrderDocumentsSessionloopFirst(t *testing.T) {
+// harness/go.mod requires published sessionloop and root tags, while otel/go.mod
+// requires the new root tag. None carries a replace, so reversing those edges
+// deadlocks the GOWORK=off checks. Remote tags are not hermetically testable;
+// the documented order in ARCHITECTURE.md is what release engineering follows.
+func TestReleaseOrderDocumentsModuleDependencies(t *testing.T) {
 	requireRepositoryCheckout(t)
 	t.Parallel()
 	root := repoRoot(t)
@@ -348,6 +401,23 @@ func TestReleaseOrderDocumentsSessionloopFirst(t *testing.T) {
 		t.Errorf("ARCHITECTURE.md's release-order sentence lists Harness before sessionloop. "+
 			"harness/go.mod requires a published sessionloop tag with no replace directive, so "+
 			"tagging Harness first deadlocks its GOWORK=off release check. Sentence: %q", sentence)
+	}
+	rootAgentic := strings.Index(sentence, "root Agentic")
+	if rootAgentic < 0 {
+		t.Errorf("ARCHITECTURE.md's release-order sentence does not mention root Agentic: %q", sentence)
+	} else if harnessAt >= 0 && rootAgentic > harnessAt {
+		t.Errorf("ARCHITECTURE.md's release-order sentence lists Harness before root Agentic. "+
+			"harness/go.mod requires the new root API with no replace directive, so "+
+			"root Agentic must be published first. Sentence: %q", sentence)
+	}
+	otelAt := strings.Index(sentence, "OTel adapter")
+	switch {
+	case otelAt < 0:
+		t.Errorf("ARCHITECTURE.md's release-order sentence does not mention the OTel adapter: %q", sentence)
+	case rootAgentic >= 0 && rootAgentic > otelAt:
+		t.Errorf("ARCHITECTURE.md's release-order sentence lists the OTel adapter before root Agentic. "+
+			"otel/go.mod requires the new root instrumentation API with no replace directive, so "+
+			"root Agentic must be published first. Sentence: %q", sentence)
 	}
 }
 

@@ -78,6 +78,43 @@ jobs:
           install-mode: goinstall
           working-directory: harness
 
+  otel-module:
+    name: Optional OpenTelemetry module
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: otel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: otel/go.mod
+      # The root instrumentation API and this adapter release together. The
+      # workspace supplies the checkout until root v0.7.0 has been published;
+      # release-view.yml later proves the adapter with GOWORK=off.
+      - name: Race test against the coordinated workspace
+        run: go test -race -count=1 -timeout 60s ./...
+      - name: Vet and pure-Go build
+        run: go vet ./... && CGO_ENABLED=0 go build ./...
+      - name: Enforce coverage threshold
+        run: make coverage-check
+
+  otel-lint:
+    name: Optional OpenTelemetry lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: otel/go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+          working-directory: otel
+
   gomonty-module:
     name: Optional GoMonty adapter
     runs-on: ubuntu-latest
@@ -329,8 +366,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Test all six non-CGO modules
-        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./tui/... ./e2e/...
+      - name: Test all seven non-CGO modules
+        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./otel/... ./tui/... ./e2e/...
 
   coverage:
     name: Coverage

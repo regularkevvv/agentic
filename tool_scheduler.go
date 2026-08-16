@@ -8,9 +8,12 @@ import (
 )
 
 type scheduledResult struct {
-	index  int
-	result ToolExecutionResult
-	err    error
+	index         int
+	result        ToolExecutionResult
+	err           error
+	deferral      *ToolDeferral
+	suspended     bool
+	suspensionErr error
 }
 
 // executeAdmittedTools runs one already-gated batch concurrently while keeping
@@ -45,16 +48,48 @@ func (c *agentCore) executeAdmittedTools(
 		attempt := ls.retryCounts[call.Name] + 1
 		go func() {
 			callCtx := WithToolCallContext(baseCtx, ToolCallContext{ID: call.ID, Name: call.Name, Attempt: attempt})
-			if resume, ok := resumes[call.ID]; ok {
+			resume, resumed := resumes[call.ID]
+			if resumed {
 				callCtx = withToolResumeContext(callCtx, resume)
 			}
+			definition, _ := ls.registry.Tool(call.Name)
+			callCtx, span := safeStartTool(callCtx, ls.instrumentation, ToolOperation{
+				Agent: ls.agentIdentity, Run: ls.runMetadata, Call: call,
+				Definition: definition, Attempt: attempt, HandlerResumed: resumed,
+			})
 			result, err := ls.registry.Execute(callCtx, call, ls.deps)
-			resultCh <- scheduledResult{index: index, result: result, err: err}
+			deferral, suspended, suspensionErr := handlerDeferral(ls.registry, call, result)
+			safeEndTool(span, ToolOperationResult{
+				Result: result, Error: errors.Join(err, suspensionErr), Suspended: suspended,
+			})
+			resultCh <- scheduledResult{
+				index: index, result: result, err: err,
+				deferral: deferral, suspended: suspended, suspensionErr: suspensionErr,
+			}
 		}()
 	}
 
 	remaining := len(calls)
 	var firstErr error
+	var toolDeferral *ToolDeferral
+	acceptCompletion := func(completion scheduledResult) {
+		if received[completion.index] {
+			return
+		}
+		received[completion.index] = true
+		remaining--
+		if completionErr := errors.Join(completion.err, completion.suspensionErr); completionErr != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("execute tool %q: %w", calls[completion.index].Name, completionErr)
+			}
+			results[completion.index] = makeToolResultError(calls[completion.index], completionErr.Error(), completionErr)
+			return
+		}
+		results[completion.index] = completion.result
+		if completion.suspended {
+			toolDeferral = completion.deferral
+		}
+	}
 	var cancellation <-chan struct{}
 	if ls.ctx.Done() != nil {
 		cancellation = ls.ctx.Done()
@@ -62,19 +97,7 @@ func (c *agentCore) executeAdmittedTools(
 	for remaining > 0 {
 		select {
 		case completion := <-resultCh:
-			if received[completion.index] {
-				continue
-			}
-			received[completion.index] = true
-			remaining--
-			if completion.err != nil {
-				if firstErr == nil {
-					firstErr = fmt.Errorf("execute tool %q: %w", calls[completion.index].Name, completion.err)
-				}
-				results[completion.index] = makeToolResultError(calls[completion.index], completion.err.Error(), completion.err)
-				continue
-			}
-			results[completion.index] = completion.result
+			acceptCompletion(completion)
 		case <-cancellation:
 			grace := time.Second
 			if ls.options.toolCancellationGrace != nil {
@@ -87,19 +110,7 @@ func (c *agentCore) executeAdmittedTools(
 			for remaining > 0 {
 				select {
 				case completion := <-resultCh:
-					if received[completion.index] {
-						continue
-					}
-					received[completion.index] = true
-					remaining--
-					if completion.err != nil {
-						if firstErr == nil {
-							firstErr = fmt.Errorf("execute tool %q: %w", calls[completion.index].Name, completion.err)
-						}
-						results[completion.index] = makeToolResultError(calls[completion.index], completion.err.Error(), completion.err)
-					} else {
-						results[completion.index] = completion.result
-					}
+					acceptCompletion(completion)
 				case <-timer.C:
 					for index, call := range calls {
 						if received[index] {
@@ -124,18 +135,8 @@ func (c *agentCore) executeAdmittedTools(
 			cancellation = nil
 		}
 	}
-	for index, result := range results {
-		deferral, suspended, err := handlerDeferral(ls.registry, calls[index], result)
-		if err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
-			results[index] = makeToolResultError(calls[index], err.Error(), err)
-			continue
-		}
-		if suspended {
-			return nil, deferral, firstErr
-		}
+	if toolDeferral != nil {
+		return nil, toolDeferral, firstErr
 	}
 	return results, nil, firstErr
 }

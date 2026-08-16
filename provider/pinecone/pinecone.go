@@ -70,6 +70,7 @@ package pinecone
 import (
 	"net/http"
 
+	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
@@ -336,6 +337,11 @@ func MustNew(model string, opts ...Option) *Encoder {
 
 // Name implements retrieval.RepresentationEncoder and retrieval.Embedder.
 func (e *Encoder) Name() string { return e.model }
+
+// ModelMetadata reports semantic provider and transport identity.
+func (e *Encoder) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadataForEndpoint("pinecone", "embeddings", e.baseURL)
+}
 
 // Capabilities implements retrieval.RepresentationEncoder.
 //

@@ -92,6 +92,36 @@ type countingDriver struct {
 	before    func(agentic.DriveInput) error
 }
 
+type correlationInstrumentation struct {
+	agents chan agentic.AgentOperation
+}
+
+func (i *correlationInstrumentation) StartAgent(ctx context.Context, operation agentic.AgentOperation) (context.Context, agentic.AgentOperationSpan) {
+	i.agents <- operation
+	return ctx, correlationAgentSpan{}
+}
+
+func (*correlationInstrumentation) StartModelRequest(ctx context.Context, _ agentic.ModelOperation) (context.Context, agentic.ModelOperationSpan) {
+	return ctx, correlationModelSpan{}
+}
+
+func (*correlationInstrumentation) StartTool(ctx context.Context, _ agentic.ToolOperation) (context.Context, agentic.ToolOperationSpan) {
+	return ctx, correlationToolSpan{}
+}
+
+type correlationAgentSpan struct{}
+
+func (correlationAgentSpan) End(agentic.AgentOperationResult) {}
+
+type correlationModelSpan struct{}
+
+func (correlationModelSpan) ObserveStreamEvent(agentic.StreamEvent) {}
+func (correlationModelSpan) End(agentic.ModelOperationResult)       {}
+
+type correlationToolSpan struct{}
+
+func (correlationToolSpan) End(agentic.ToolOperationResult) {}
+
 type rejectingAssistantCodec struct {
 	codec.Codec
 }
@@ -316,6 +346,48 @@ func TestDurableQueueDrainExactlyOnceAcrossRestart(t *testing.T) {
 	if accepted != 1 || drained != 1 {
 		t.Fatalf("accepted=%d drained=%d", accepted, drained)
 	}
+}
+
+func TestPromptPassesDurableSessionAndRunIDsToInstrumentation(t *testing.T) {
+	repository := storememory.New()
+	observer := &correlationInstrumentation{agents: make(chan agentic.AgentOperation, 1)}
+	model := &scriptedModel{steps: []modelStep{textStep("done")}}
+	config := sessionConfig(t,
+		agentic.NewAgent("", model, agentic.WithInstrumentation(observer)),
+		repository,
+		artifactmemory.New(),
+		spill.Config{},
+	)
+	current, err := New(context.Background(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.Prompt(context.Background(), agentic.NewTextMessage(agentic.RoleUser, "prompt")); err != nil {
+		t.Fatal(err)
+	}
+	operation := <-observer.agents
+	if operation.Run.ConversationID != config.ID || operation.Run.RunID == "" {
+		t.Fatalf("instrumentation correlation = %#v", operation.Run)
+	}
+
+	loaded, err := current.journal.Load(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range loaded.Entries {
+		if entry.Kind != kindRunOpened {
+			continue
+		}
+		opened, err := decodePayload[runOpenedPayload](config.Codec, entry)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if operation.Run.RunID != opened.ID {
+			t.Fatalf("instrumentation run ID %q != durable run ID %q", operation.Run.RunID, opened.ID)
+		}
+		return
+	}
+	t.Fatal("journal contains no run.opened entry")
 }
 
 func TestPromptAndNextTurnAreDurableBeforeDriverExecution(t *testing.T) {

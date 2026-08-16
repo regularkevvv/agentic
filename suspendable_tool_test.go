@@ -113,7 +113,8 @@ func TestSuspendableHandlerResumesExactlyAndCanSuspendAgain(t *testing.T) {
 		}}},
 		providertest.ModelResponse{Text: "done"},
 	)
-	driver := NewAgent("system", model).AddTool(definition, handler)
+	recorder := &recordingInstrumentation{}
+	driver := NewAgent("system", model, WithInstrumentation(recorder)).AddTool(definition, handler)
 	prompt := NewTextMessage(RoleUser, "execute")
 
 	first, err := driver.Drive(context.Background(), DriveInput{Mode: DriveStart, Prompt: &prompt})
@@ -154,6 +155,16 @@ func TestSuspendableHandlerResumesExactlyAndCanSuspendAgain(t *testing.T) {
 	resumes, ordinary := handler.snapshots()
 	if len(resumes) != 2 || len(ordinary) != 3 || !ordinary[0] || ordinary[1] || ordinary[2] {
 		t.Fatalf("resume snapshots/ordinary flags = %#v / %#v", resumes, ordinary)
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if len(recorder.tools) != 3 || recorder.tools[0].HandlerResumed ||
+		!recorder.tools[1].HandlerResumed || !recorder.tools[2].HandlerResumed {
+		t.Fatalf("instrumented handler resume lifecycle = %#v", recorder.tools)
+	}
+	if len(recorder.toolResults) != 3 || !recorder.toolResults[0].Suspended ||
+		!recorder.toolResults[1].Suspended || recorder.toolResults[2].Suspended {
+		t.Fatalf("instrumented handler outcomes = %#v", recorder.toolResults)
 	}
 }
 

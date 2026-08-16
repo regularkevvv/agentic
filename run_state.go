@@ -23,6 +23,10 @@ type loopState struct {
 	historyProcessor HistoryProcessor
 	options          *runOptions
 	registry         *executionToolRegistry
+	instrumentation  Instrumentation
+	agentIdentity    AgentIdentity
+	modelMetadata    ModelMetadata
+	runMetadata      RunMetadata
 
 	allToolCalls      []ToolUse
 	allToolResults    []ToolExecutionResult
@@ -252,6 +256,15 @@ func (c *agentCore) prepareLoopWithHistory(
 	}
 
 	calls, results := transcriptToolState(history)
+	inherited := instrumentationFromContext(ctx)
+	instrumentation := c.config.instrumentation
+	if !c.config.instrumentationSet {
+		instrumentation = inherited.observer
+	}
+	runMetadata := options.runMetadata
+	if !options.runMetadataSet {
+		runMetadata = inherited.run
+	}
 	state := &loopState{
 		ctx:              ctx,
 		deps:             deps,
@@ -263,11 +276,67 @@ func (c *agentCore) prepareLoopWithHistory(
 		historyProcessor: historyProcessor,
 		options:          options,
 		registry:         registry,
+		instrumentation:  instrumentation,
+		agentIdentity:    c.config.agentIdentity,
+		modelMetadata:    c.resolveModelMetadata(),
+		runMetadata:      runMetadata,
 		allToolCalls:     calls,
 		allToolResults:   results,
 	}
+	if options.instrumentationSet {
+		state.instrumentation = options.instrumentation
+	}
 	state.configFingerprint = c.executionFingerprint(state)
 	return state, nil
+}
+
+func (c *agentCore) resolveModelMetadata() ModelMetadata {
+	if c.config.modelMetadata != nil {
+		metadata := *c.config.modelMetadata
+		if metadata.Operation == "" {
+			metadata.Operation = "chat"
+		}
+		if metadata.Provider == "" {
+			metadata.Provider = "custom"
+		}
+		return metadata
+	}
+	metadata := ModelMetadata{Provider: "custom", Operation: "chat"}
+	if provider, ok := c.model.(ModelMetadataProvider); ok {
+		reported := provider.ModelMetadata()
+		if reported.Provider != "" {
+			metadata.Provider = reported.Provider
+		}
+		if reported.Operation != "" {
+			metadata.Operation = reported.Operation
+		}
+		metadata.ServerAddress = reported.ServerAddress
+		metadata.ServerPort = reported.ServerPort
+		metadata.InProcess = reported.InProcess
+	}
+	return metadata
+}
+
+// instrumentationRequest returns invocation-level settings without executing
+// callbacks or applying history transformations. A dynamic tool-preparation
+// callback can change definitions on each inference request, so in that case
+// only the actual model spans receive the prepared tool list.
+func (c *agentCore) instrumentationRequest(ls *loopState) ChatRequest {
+	request := ChatRequest{
+		Model:          c.model.Name(),
+		Temperature:    firstNonNil(ls.options.temperature, c.config.temperature),
+		MaxTokens:      firstNonNil(ls.options.maxTokens, c.config.maxTokens),
+		TopP:           firstNonNil(ls.options.topP, c.config.topP),
+		Stream:         ls.options.modelStreaming != nil && *ls.options.modelStreaming,
+		ToolChoice:     firstNonNil(ls.options.toolChoice, c.config.toolChoice),
+		ResponseFormat: c.responseFormat,
+		Thinking:       c.config.thinking,
+		PromptCache:    clonePromptCache(firstNonNil(ls.options.promptCache, c.config.promptCache)),
+	}
+	if c.config.toolPrepareFunc == nil && ls.registry.Count() > 0 {
+		request.Tools = ls.registry.Tools()
+	}
+	return request
 }
 
 func (c *agentCore) buildRequest(ls *loopState, stream bool) (*ChatRequest, error) {

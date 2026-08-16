@@ -160,7 +160,7 @@ func (s *Session[O]) driveResumed(accepted *acceptedResume[O]) (*agentic.Executi
 		Suspension: *accepted.suspension,
 		Decisions:  accepted.decisions,
 		Prompt:     accepted.prompt,
-	}, s.runOptions(accepted.limits)...)
+	}, s.runOptions(accepted.runID, accepted.limits)...)
 	return s.finishExecution(execution, runErr)
 }
 
@@ -174,7 +174,7 @@ func (s *Session[O]) driveResumedIndeterminate(accepted *acceptedResume[O]) (*ag
 	execution, runErr := s.driver.Drive(runCtx, agentic.DriveInput{
 		Mode:    agentic.DriveContinue,
 		History: accepted.history,
-	}, s.runOptions(accepted.limits)...)
+	}, s.runOptions(accepted.runID, accepted.limits)...)
 	return s.finishExecution(execution, runErr)
 }
 

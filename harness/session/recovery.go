@@ -723,11 +723,12 @@ func (s *Session[O]) continueRecovered() {
 		s.run.limits = cloneLimitsPointer(limits)
 	}
 	history := cloneMessages(s.run.history)
+	runID := s.run.id
 	runCtx, cancel := context.WithCancel(context.Background())
 	s.runCancel = cancel
 	s.mu.Unlock()
 	runCtx = s.withToolRuntime(runCtx)
-	execution, err := s.driver.Drive(runCtx, agentic.DriveInput{Mode: agentic.DriveContinue, History: history}, s.runOptions(limits)...)
+	execution, err := s.driver.Drive(runCtx, agentic.DriveInput{Mode: agentic.DriveContinue, History: history}, s.runOptions(runID, limits)...)
 	_, _ = s.finishExecution(execution, err)
 }
 

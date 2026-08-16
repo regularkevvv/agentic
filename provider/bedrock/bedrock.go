@@ -352,6 +352,11 @@ func (m *Model) Name() string {
 	return m.modelID
 }
 
+// ModelMetadata reports semantic provider and transport identity.
+func (m *Model) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadata{Provider: "aws.bedrock", Operation: "chat"}
+}
+
 // converseParams holds the shared parameters for Converse and ConverseStream.
 type converseParams struct {
 	messages      []types.Message

@@ -24,6 +24,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/internal/retrieval/batch"
 	"github.com/regularkevvv/agentic/internal/retrieval/wire"
@@ -330,6 +331,12 @@ func (e *Encoder) Name() string {
 		return e.model
 	}
 	return e.endpoint
+}
+
+// ModelMetadata reports semantic provider identity. The AWS SDK owns runtime
+// endpoint resolution, so server fields remain unknown.
+func (e *Encoder) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadata{Provider: "aws.sagemaker", Operation: "embeddings"}
 }
 
 // Capabilities implements retrieval.RepresentationEncoder.

@@ -7,6 +7,7 @@ on:
       - "harness/v*"
       - "harness/codemode/gomonty/v*"
       - "harness/sessionloop/v*"
+      - "otel/v*"
       - "provider/local/onnx/v*"
       - "tui/v*"
   workflow_dispatch:
@@ -21,6 +22,7 @@ on:
           - gomonty
           - sessionloop
           - onnx
+          - otel
           - tui
 
 permissions:
@@ -68,8 +70,8 @@ jobs:
           # VCS tag; root Agentic and sessionloop remain checksummed.
           GOWORK=off GONOSUMDB=github.com/regularkevvv/agentic/harness GOPROXY=direct go run -mod=mod .
           test -z "$(GOWORK=off go list -m -f '{{if .Replace}}{{.Path}}{{end}}' all)"
-          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/harness)" = "v0.3.0"
-          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic)" = "v0.6.0"
+          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/harness)" = "v0.5.0"
+          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic)" = "v0.7.0"
           test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/harness/sessionloop)" = "v0.1.0"
 
   gomonty:
@@ -176,6 +178,37 @@ jobs:
           GONOSUMDB=github.com/regularkevvv/agentic/provider/local/onnx GOPROXY=direct go run -mod=mod .
           test -z "$(go list -m -f '{{if .Replace}}{{.Path}}{{end}}' all)"
           test "$(go list -m -f '{{.Version}}' github.com/regularkevvv/agentic)" = "v0.6.0"
+
+  otel:
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.module == 'otel') || startsWith(github.ref, 'refs/tags/otel/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: otel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: otel/go.mod
+      - run: GOWORK=off go test -race -count=1 -timeout 60s ./...
+      - run: GOWORK=off go vet ./...
+      - run: GOWORK=off CGO_ENABLED=0 go build ./...
+      - run: GOWORK=off make coverage-check
+      - run: GOWORK=off go mod tidy -diff
+      - name: Run a fresh no-replace OTel consumer
+        run: |
+          consumer="${RUNNER_TEMP}/agentic-otel-consumer"
+          mkdir -p "${consumer}"
+          cp -R ../.github/testdata/otel-consumer/. "${consumer}/"
+          mv "${consumer}/go.mod.template" "${consumer}/go.mod"
+          cd "${consumer}"
+          # Fetch only the brand-new adapter from its VCS tag; its released
+          # Agentic and OpenTelemetry dependencies remain checksummed.
+          GOWORK=off GONOSUMDB=github.com/regularkevvv/agentic/otel GOPROXY=direct go run -mod=mod .
+          test -z "$(GOWORK=off go list -m -f '{{if .Replace}}{{.Path}}{{end}}' all)"
+          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/otel)" = "v0.1.0"
+          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic)" = "v0.7.0"
 
   tui:
     if: ${{ (github.event_name == 'workflow_dispatch' && inputs.module == 'tui') || startsWith(github.ref, 'refs/tags/tui/v') }}
