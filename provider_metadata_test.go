@@ -1,6 +1,8 @@
 package agentic_test
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/regularkevvv/agentic"
@@ -23,6 +25,11 @@ import (
 )
 
 func TestBuiltInModelsReportSemanticProviderMetadata(t *testing.T) {
+	vertexServer := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(vertexServer.Close)
+	t.Setenv("GOOGLE_VERTEX_BASE_URL", vertexServer.URL)
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "")
+
 	endpoint := "https://models.example:8443/v1"
 	openAI, _ := openai.New("model", openai.WithAPIKey("key"), openai.WithBaseURL(endpoint))
 	responses, _ := openai.NewResponses("model", openai.WithAPIKey("key"), openai.WithBaseURL(endpoint))
@@ -33,7 +40,10 @@ func TestBuiltInModelsReportSemanticProviderMetadata(t *testing.T) {
 		t.Fatalf("bedrock.New: %v", err)
 	}
 	geminiModel, _ := gemini.New("model", gemini.WithAPIKey("key"))
-	geminiVertex, _ := gemini.New("model", gemini.WithVertexAI("project", "location"))
+	geminiVertex, err := gemini.New("model", gemini.WithVertexAI("", ""))
+	if err != nil {
+		t.Fatalf("gemini.New Vertex AI: %v", err)
+	}
 	grokModel, _ := grok.New("model", grok.WithAPIKey("key"), grok.WithBaseURL(endpoint))
 	openRouterModel, _ := openrouter.New("model", openrouter.WithAPIKey("key"), openrouter.WithBaseURL(endpoint))
 	togetherModel, _ := together.New("model", together.WithAPIKey("key"), together.WithBaseURL(endpoint))
@@ -74,11 +84,19 @@ func TestBuiltInModelsReportSemanticProviderMetadata(t *testing.T) {
 }
 
 func TestBuiltInEmbeddersReportSemanticProviderMetadata(t *testing.T) {
+	vertexServer := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(vertexServer.Close)
+	t.Setenv("GOOGLE_VERTEX_BASE_URL", vertexServer.URL)
+	t.Setenv("GOOGLE_CLOUD_PROJECT", "")
+
 	endpointURL := "https://embeddings.example:9443/v1"
 	openAI, _ := openai.NewEmbedder("model", openai.WithAPIKey("key"), openai.WithBaseURL(endpointURL))
 	ollamaEmbedder, _ := ollama.NewEmbedder("model", ollama.WithHost("http://localhost:11434"))
 	geminiEmbedder, _ := gemini.NewEmbedder("model", gemini.WithAPIKey("key"))
-	geminiVertex, _ := gemini.NewEmbedder("model", gemini.WithVertexAI("project", "location"))
+	geminiVertex, err := gemini.NewEmbedder("model", gemini.WithVertexAI("", ""))
+	if err != nil {
+		t.Fatalf("gemini.NewEmbedder Vertex AI: %v", err)
+	}
 	bedrockEmbedder, err := bedrock.NewEmbedder("amazon.titan-embed-text-v2:0", bedrock.WithRegion("us-east-1"), bedrock.WithCredentials("key", "secret", ""))
 	if err != nil {
 		t.Fatalf("bedrock.NewEmbedder: %v", err)
