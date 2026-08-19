@@ -36,8 +36,10 @@ type UsageCharge struct {
 	Usage     agentic.Usage
 }
 
-// BudgetLease serializes one child against the parent session's cumulative
-// budget. A lease must be closed even when child execution fails.
+// BudgetLease coordinates child usage with the parent session's cumulative
+// budget. Budgeted parents serialize leases so remaining limits cannot be
+// oversubscribed; unbounded parents may issue concurrent leases. A lease must
+// be closed even when child execution fails.
 type BudgetLease interface {
 	Limits() *agentic.UsageLimits
 	Commit(context.Context, UsageCharge) error

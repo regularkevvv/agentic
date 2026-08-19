@@ -67,6 +67,26 @@ func (s *Session[O]) Scope() harnessruntime.Scope {
 }
 
 func (s *Session[O]) AcquireBudget(ctx context.Context) (harnessruntime.BudgetLease, error) {
+	s.mu.Lock()
+	if s.state == Faulted {
+		err := &FaultError{SessionID: s.id, Cause: s.fault}
+		s.mu.Unlock()
+		return nil, err
+	}
+	if s.state != Running {
+		state := s.state
+		s.mu.Unlock()
+		return nil, fmt.Errorf("child budget requires a running parent session, got %s", state)
+	}
+	// With no configured ceiling there is nothing to reserve. Each child still
+	// commits usage under the session mutex, but siblings need not hold an
+	// otherwise artificial global lease for their entire run.
+	if s.budget == nil {
+		s.mu.Unlock()
+		return &childBudgetLease[O]{session: s}, nil
+	}
+	s.mu.Unlock()
+
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -97,7 +117,7 @@ func (s *Session[O]) AcquireBudget(ctx context.Context) (harnessruntime.BudgetLe
 		limits = &remaining
 	}
 	s.mu.Unlock()
-	return &childBudgetLease[O]{session: s, limits: cloneLimitsPointer(limits)}, nil
+	return &childBudgetLease[O]{session: s, limits: cloneLimitsPointer(limits), serialized: true}, nil
 }
 
 // ProjectEvent assigns a parent cursor to a tagged child event. Child preview
@@ -208,9 +228,10 @@ type childBudgetLease[O any] struct {
 	session *Session[O]
 	limits  *agentic.UsageLimits
 
-	mu        sync.Mutex
-	committed bool
-	closed    bool
+	mu         sync.Mutex
+	committed  bool
+	closed     bool
+	serialized bool
 }
 
 func (l *childBudgetLease[O]) Limits() *agentic.UsageLimits {
@@ -294,7 +315,9 @@ func (l *childBudgetLease[O]) Close() {
 	}
 	l.closed = true
 	l.mu.Unlock()
-	l.session.childBudget <- struct{}{}
+	if l.serialized {
+		l.session.childBudget <- struct{}{}
+	}
 }
 
 func validateUsageCharge(charge harnessruntime.UsageCharge) error {

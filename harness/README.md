@@ -102,6 +102,15 @@ and `artifact/artifacttest`. The `env/local` adapter constrains its filesystem
 methods to a root, but its shell runs as the host user and is **not an OS
 sandbox**.
 
+Applications that need local command confinement can inject `env/sandbox`
+instead. It combines the same rooted file API with Seatbelt on macOS or
+Landlock plus seccomp on Linux, denies network creation, and limits writes to
+the workspace plus one private command-temporary directory. The backend fails
+closed when those platform facilities are unavailable; Windows remains
+unsupported until an AppContainer implementation exists. On macOS, executable
+children are limited to the selected command's own helper/toolchain root and
+sandbox-produced workspace or temporary binaries.
+
 `harness.Default` is a convenience composition, not a dependency direction:
 it explicitly requires absolute, non-overlapping workspace/session paths and
 assembles the same public capabilities over Local, JSONL, file-artifact, and
@@ -154,7 +163,8 @@ worker := agentic.NewAgent("You are a focused researcher.", workerModel)
 researcher, err := subagent.New(worker, subagent.Config{
     Name:        "researcher",
     Description: "Research one bounded task.",
-    Runtime:     runtimeConfig,
+    Runtime:       runtimeConfig,
+    MaxConcurrent: 4,
     Capture: subagent.Capture{
         Environment: subagent.ModeNarrow,
         Tools:       subagent.ModeNarrow,
@@ -190,8 +200,15 @@ Child sessions use distinct durable journals, inboxes, environment leases, and
 artifact scopes. Their parent ID, agent name, and depth are persisted with
 session creation and remain authoritative after reopen. The process-local
 address router is available while a delegation call is executing. Completed
-children remain recoverable by their opaque session IDs. In-process synchronous
-delegation remains the topology boundary. Phase 5 adds opt-in code execution,
+children remain recoverable by their opaque session IDs. A parent model can
+emit multiple delegation calls in one tool batch; the core runs that batch as
+bounded fork/join concurrency and waits for every result before its next model
+turn. `MaxConcurrent` defaults to four. Parents with an explicit cumulative
+usage budget retain serialized budget leases to prevent concurrent children
+from oversubscribing the remaining limit; unbounded parents can run siblings
+concurrently while committing each child's usage exactly once. This is not a
+background spawn API. In-process synchronous delegation remains the topology
+boundary. Phase 5 adds opt-in code execution,
 cross-session memory, skills, and evals without changing `harness.Default`.
 Out-of-process workers, topology presets, automatic suspended-child
 orchestration, a bundled interpreter, vector database, provider-specific

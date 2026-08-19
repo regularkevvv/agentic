@@ -617,6 +617,9 @@ func TestScopeValidationAndRecordDefaults(t *testing.T) {
 func TestBudgetLeaseCloseUnblocksWaiter(t *testing.T) {
 	current := newRunningSession(t)
 	defer current.Close(context.Background())
+	current.mu.Lock()
+	current.budget = &agentic.UsageLimits{MaxRequests: agentic.IntPtr(10)}
+	current.mu.Unlock()
 	first, err := current.AcquireBudget(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -641,4 +644,19 @@ func TestBudgetLeaseCloseUnblocksWaiter(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("closing budget lease did not unblock waiter")
 	}
+}
+
+func TestUnboundedBudgetLeasesCanRunConcurrently(t *testing.T) {
+	current := newRunningSession(t)
+	defer current.Close(context.Background())
+	first, err := current.AcquireBudget(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := current.AcquireBudget(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	first.Close()
+	second.Close()
 }

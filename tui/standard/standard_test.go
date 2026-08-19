@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -73,6 +74,9 @@ func TestStandardToolPresentationCanBeOverridden(t *testing.T) {
 	if got := defaults.PresentTool(uit.Tool{Name: "run_command"}); got.Title != "Run command" {
 		t.Fatalf("command fallback = %#v", got)
 	}
+	if got := defaults.PresentTool(uit.Tool{Name: "delegate_task", Summary: "secret task"}); got.Category != uit.ToolCategoryExplore || got.Title != "Delegate task" || strings.Contains(got.Title, "secret") {
+		t.Fatalf("delegation presentation = %#v", got)
+	}
 	custom := uit.ToolPresenterFunc(func(uit.Tool) uit.ToolPresentation {
 		return uit.ToolPresentation{Title: "Custom"}
 	})
@@ -105,11 +109,16 @@ func buildFixture(t *testing.T, factory ProviderFactory) (*Registry, Config) {
 
 func TestBuildCreatesWorkingHarnessAdapter(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("standard assembly requires a supported OS sandbox backend")
+	}
+	var fakeModel *providertest.TestModel
 	factory := FactoryFunc{Name: "fake", Create: func(_ context.Context, config ModelConfig) (agentic.Model, error) {
 		if config.Model != "model" || config.ContextWindowTokens != 200000 {
 			return nil, errors.New("bad config")
 		}
-		return providertest.NewTestModel(providertest.ModelResponse{Text: "done"}), nil
+		fakeModel = providertest.NewTestModel(providertest.ModelResponse{Text: "done"})
+		return fakeModel, nil
 	}}
 	registry, config := buildFixture(t, factory)
 	assembly, err := Build(context.Background(), registry, config)
@@ -127,8 +136,15 @@ func TestBuildCreatesWorkingHarnessAdapter(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot, _ := session.Snapshot(context.Background())
-	if snapshot.ProfileLabel != "work" || snapshot.Workspace != config.WorkspaceRoot || snapshot.Execution != "local-host governance (not an OS sandbox)" || len(snapshot.Transcript) < 2 {
+	if snapshot.ProfileLabel != "work" || snapshot.Workspace != config.WorkspaceRoot || (snapshot.Execution != "sandbox seatbelt" && snapshot.Execution != "sandbox landlock+seccomp") || len(snapshot.Transcript) < 2 {
 		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	foundDelegation := false
+	for _, tool := range fakeModel.Calls()[0].Tools {
+		foundDelegation = foundDelegation || tool.Function.Name == "delegate_task"
+	}
+	if !foundDelegation {
+		t.Fatal("standard model request omitted delegate_task")
 	}
 	_ = session.Close(context.Background())
 	resolved := appconfig.Resolved{ProfileName: "p", Provider: "fake", Model: "m", ContextWindowTokens: 1, SystemPromptFile: "s", WorkspaceRoot: "w", SessionDirectory: "d", Permission: "workspace-write"}

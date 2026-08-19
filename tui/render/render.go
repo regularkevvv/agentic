@@ -40,24 +40,16 @@ func Transcript(entries []uit.Entry, preview string, options Options) string {
 		if options.NoColor {
 			cursor = " |"
 		}
-		parts = append(parts, role("assistant", options.NoColor)+"\n"+markdown(preview, options.NoColor)+cursor)
+		parts = append(parts, assistantMessage(markdown(preview, options.NoColor)+cursor, options.NoColor))
 	}
 	if len(parts) == 0 {
-		return "No messages yet. Type a task below."
+		return muted("Start by describing a task below.", options.NoColor)
 	}
 	return strings.Join(parts, "\n\n")
 }
 
 func Entry(entry uit.Entry, options Options) string {
-	label := string(entry.Role)
-	if label == "" {
-		label = "event"
-	}
-	toolOnly := entry.Text == "" && len(entry.Thinking) == 0 && len(entry.Tools) > 0
 	lines := make([]string, 0, 4)
-	if !toolOnly {
-		lines = append(lines, role(label, options.NoColor))
-	}
 	if options.Thinking != ThinkingHidden {
 		for _, thinking := range entry.Thinking {
 			if options.Thinking == ThinkingCollapsed {
@@ -70,12 +62,77 @@ func Entry(entry uit.Entry, options Options) string {
 		}
 	}
 	if entry.Text != "" {
-		lines = append(lines, markdown(entry.Text, options.NoColor))
+		body := markdown(entry.Text, options.NoColor)
+		switch entry.Role {
+		case uit.RoleUser:
+			lines = append(lines, userMessage(body, options))
+		case uit.RoleAssistant:
+			lines = append(lines, assistantMessage(body, options.NoColor))
+		default:
+			label := string(entry.Role)
+			if label == "" {
+				label = "event"
+			}
+			lines = append(lines, role(label, options.NoColor)+"\n"+body)
+		}
 	}
 	if len(entry.Tools) > 0 {
 		lines = append(lines, Tools(entry.Tools, options))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func userMessage(value string, options Options) string {
+	prefix := "› "
+	if options.NoColor {
+		prefix = "> "
+		return prefix + indentContinuation(value, "  ")
+	}
+	content := prefix + indentContinuation(value, "  ")
+	style := lipgloss.NewStyle().
+		Foreground(lipgloss.Color("255")).
+		Background(lipgloss.Color("237")).
+		Padding(0, 1)
+	if options.Width > 2 {
+		style = style.Width(options.Width - 2)
+	}
+	return style.Render(content)
+}
+
+func assistantMessage(value string, noColor bool) string {
+	prefix := "• "
+	if noColor {
+		prefix = "* "
+	}
+	return prefix + indentContinuation(value, "  ")
+}
+
+func indentContinuation(value, prefix string) string {
+	return strings.ReplaceAll(value, "\n", "\n"+prefix)
+}
+
+// Composer gives the input a stable two-row cushion while the textarea itself
+// grows with wrapped and explicit newlines. The chrome is deliberately a TUI
+// invariant rather than another profile knob.
+func Composer(value string, width int, noColor bool) string {
+	value = terminalSafe(value)
+	if width < 4 {
+		return value
+	}
+	if noColor {
+		blank := strings.Repeat(" ", width)
+		lines := strings.Split(value, "\n")
+		for index, line := range lines {
+			lines[index] = " " + fitLine(line, width-2)
+		}
+		return blank + "\n" + strings.Join(lines, "\n") + "\n" + blank
+	}
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("255")).
+		Background(lipgloss.Color("237")).
+		Padding(1, 1).
+		Width(width - 2).
+		Render(value)
 }
 
 func Tool(tool uit.Tool, options Options) string {
@@ -327,41 +384,65 @@ func ApprovalResolving(noColor bool, widths ...int) string {
 
 func Status(snapshot uit.Snapshot, busy bool, noColor bool, widths ...int) string {
 	state := terminalSafe(string(snapshot.State))
+	if state == "" {
+		state = "idle"
+	}
 	if busy {
-		state += "/busy"
+		state = "working"
 	}
 	profile := terminalSafe(snapshot.ProfileLabel)
 	if profile == "" {
 		profile = "custom"
 	}
-	cache := ""
-	if snapshot.Usage.PromptTokens > 0 {
-		cache = fmt.Sprintf(" cache %.1f%%", snapshot.Usage.CacheHitPercent())
-	}
-	value := fmt.Sprintf("session %s  %s  profile %s  tokens %d%s  queued %d", terminalSafe(snapshotID(snapshot)), state, profile, snapshot.Usage.TotalTokens, cache, len(snapshot.Pending))
+	left := profile
 	if snapshot.Workspace != "" {
-		value += "  " + terminalSafe(snapshot.Workspace)
+		left += " · " + terminalSafe(snapshot.Workspace)
+	}
+	right := []string{state}
+	if snapshot.Usage.PromptTokens > 0 {
+		right = append(right, fmt.Sprintf("%d tokens", snapshot.Usage.TotalTokens))
+		if snapshot.Usage.CacheReadTokens > 0 {
+			right = append(right, fmt.Sprintf("%.0f%% cache", snapshot.Usage.CacheHitPercent()))
+		}
+	}
+	if len(snapshot.Pending) > 0 {
+		right = append(right, fmt.Sprintf("%d queued", len(snapshot.Pending)))
 	}
 	if snapshot.Execution != "" {
-		value += "  exec " + terminalSafe(snapshot.Execution)
+		right = append(right, terminalSafe(snapshot.Execution))
 	}
+	value := joinStatus(left, strings.Join(right, " · "), firstWidth(widths))
 	value = fitLine(value, firstWidth(widths))
 	if noColor {
 		return value
 	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("244")).Render(value)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("246")).Render(value)
 }
 
 func Footer(state uit.State, noColor bool, widths ...int) string {
-	value := "enter send  shift+enter newline  pgup/pgdn scroll  alt+s steer  alt+f follow-up  alt+n next  ctrl+t thinking  ctrl+g tools  ctrl+c interrupt  /help"
-	if state == uit.StateSuspended {
+	value := "enter send  shift+enter newline  /help"
+	switch state {
+	case uit.StateRunning, uit.StateInterrupting:
+		value = "ctrl+c interrupt  alt+s steer  alt+f follow-up  alt+n next"
+	case uit.StateSuspended:
 		value = "permission review active  a approve  d deny  enter resume  esc handoff"
 	}
 	value = fitLine(value, firstWidth(widths))
 	if noColor {
 		return value
 	}
-	return lipgloss.NewStyle().Foreground(lipgloss.Color("242")).Render(value)
+	return lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Render(value)
+}
+
+func joinStatus(left, right string, width int) string {
+	if width <= 0 {
+		return left + "  " + right
+	}
+	space := width - lipgloss.Width(left) - lipgloss.Width(right)
+	if space < 2 {
+		return left + "  " + right
+	}
+	return left + strings.Repeat(" ", space) + right
 }
 
 func Banner(message string, failure bool, noColor bool, widths ...int) string {
@@ -381,13 +462,6 @@ func Banner(message string, failure bool, noColor bool, widths ...int) string {
 		color = lipgloss.Color("196")
 	}
 	return lipgloss.NewStyle().Foreground(color).Render(message)
-}
-
-func snapshotID(snapshot uit.Snapshot) string {
-	if snapshot.SessionID != "" {
-		return snapshot.SessionID
-	}
-	return "new"
 }
 
 func role(value string, noColor bool) string {

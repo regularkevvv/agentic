@@ -39,6 +39,12 @@ func runChild[O any](
 	if _, err := agentic.RequireDriver(runner); err != nil {
 		return Result{}, err
 	}
+	select {
+	case topology.slots <- struct{}{}:
+		defer func() { <-topology.slots }()
+	case <-ctx.Done():
+		return Result{}, ctx.Err()
+	}
 
 	var budget harnessruntime.BudgetLease
 	if topology.config.Capture.Budget != ModeIsolate {

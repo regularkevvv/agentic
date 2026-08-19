@@ -14,7 +14,12 @@ import (
 
 	agentic "github.com/regularkevvv/agentic"
 	harnesscore "github.com/regularkevvv/agentic/harness"
+	"github.com/regularkevvv/agentic/harness/capability"
+	environmentcapability "github.com/regularkevvv/agentic/harness/capability/environment"
+	"github.com/regularkevvv/agentic/harness/env/local"
+	envsandbox "github.com/regularkevvv/agentic/harness/env/sandbox"
 	"github.com/regularkevvv/agentic/harness/permission"
+	"github.com/regularkevvv/agentic/harness/subagent"
 	"github.com/regularkevvv/agentic/provider/anthropic"
 	"github.com/regularkevvv/agentic/provider/openai"
 	"github.com/regularkevvv/agentic/provider/openrouter"
@@ -174,11 +179,56 @@ func Build(ctx context.Context, registry *Registry, config Config) (Assembly, er
 		retention = agentic.PromptCacheShort
 	}
 	runner := agentic.NewAgent(string(systemPrompt), model)
-	runtime, err := harnesscore.Default[string](runner, harnesscore.DefaultConfig{
+	defaultConfig := harnesscore.DefaultConfig{
 		WorkspaceRoot: config.WorkspaceRoot, SessionDir: config.SessionDirectory,
 		ContextWindowTokens: config.ContextWindowTokens, PermissionPolicy: policy,
 		PromptCacheRetention: retention, ModelStreaming: true,
+	}
+	assembly, err := harnesscore.AssembleDefault(defaultConfig)
+	if err != nil {
+		return Assembly{}, err
+	}
+	sandboxFactory, err := envsandbox.NewFactory(envsandbox.Config{
+		Root: config.WorkspaceRoot, Cwd: ".", Symlinks: local.SymlinkWithinRoot,
 	})
+	if err != nil {
+		return Assembly{}, fmt.Errorf("construct required command sandbox: %w", err)
+	}
+	assembly.Runtime.Environments = sandboxFactory
+	delegate, err := subagent.New(runner, subagent.Config{
+		Name:          "delegate_task",
+		Description:   "Delegate one focused task to an isolated child agent. Multiple calls in one tool batch run in parallel.",
+		Runtime:       assembly.Runtime,
+		MaxDepth:      1,
+		MaxConcurrent: 4,
+		Ordering:      capability.Ordering{Before: []string{"permissions"}},
+		Capture: subagent.Capture{
+			Environment: subagent.ModeNarrow,
+			Tools:       subagent.ModeNarrow,
+			Permissions: subagent.ModeNarrow,
+			Budget:      subagent.ModeShare,
+		},
+		EnvironmentRoot:  ".",
+		EnvironmentShell: true,
+		ToolFilter: func(name string) bool {
+			return name == environmentcapability.ToolReadFile ||
+				name == environmentcapability.ToolWriteFile ||
+				name == environmentcapability.ToolListFiles ||
+				name == environmentcapability.ToolStatFile ||
+				name == environmentcapability.ToolMakeDirectory ||
+				name == environmentcapability.ToolRemovePath ||
+				name == environmentcapability.ToolRunCommand
+		},
+	})
+	if err != nil {
+		return Assembly{}, fmt.Errorf("construct delegation capability: %w", err)
+	}
+	capabilities := append(append([]harnesscore.Capability(nil), assembly.Capabilities...), delegate)
+	runtime, err := harnesscore.New(
+		runner,
+		harnesscore.WithRuntime(assembly.Runtime),
+		harnesscore.WithCapabilities(capabilities...),
+	).Build()
 	if err != nil {
 		return Assembly{}, err
 	}
@@ -186,7 +236,7 @@ func Build(ctx context.Context, registry *Registry, config Config) (Assembly, er
 		runtime,
 		harnessui.WithProfileLabel(config.ProfileName),
 		harnessui.WithWorkspace(config.WorkspaceRoot),
-		harnessui.WithExecutionLabel("local-host governance (not an OS sandbox)"),
+		harnessui.WithExecutionLabel("sandbox "+sandboxFactory.Backend()),
 		harnessui.WithToolPresenter(resolveToolPresenter(config.ToolPresenter)),
 	)
 	if err != nil {
@@ -218,6 +268,8 @@ func resolveToolPresenter(custom uit.ToolPresenter) uit.ToolPresenter {
 			presentation.Category, presentation.Title = uit.ToolCategoryChange, toolTitle("Create directory", "Create directory", tool.Summary)
 		case "remove_path":
 			presentation.Category, presentation.Title = uit.ToolCategoryChange, toolTitle("Remove", "Remove path", tool.Summary)
+		case "delegate_task":
+			presentation.Category, presentation.Title = uit.ToolCategoryExplore, "Delegate task"
 		default:
 			presentation.Category = uit.ToolCategoryOther
 			presentation.Title = strings.TrimSpace(tool.Summary)

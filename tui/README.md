@@ -6,17 +6,31 @@ or attach an already assembled Agentic Harness through `tui/adapter/harness`.
 The core TUI never chooses a provider, executes a tool, or broadens permission
 policy.
 
-The composer starts at one row and grows with wrapped or multiline input. The
-transcript renders a conservative Markdown subset, folds one tool call's
+The composer keeps a padded three-row surface while its text area grows with
+wrapped or multiline input. Transcript gutters, quiet user cards, and
+assistant bullets replace explicit `USER`/`ASSISTANT` headings. The transcript
+renders a conservative Markdown subset, folds one tool call's
 planned/running/result records into one activity row, groups adjacent tool-only
 records by semantic category, and keeps provider thinking collapsed by default.
 Thinking is model reasoning, not user-facing
 progress commentary; `Ctrl+T` cycles collapsed, hidden, and explicitly visible
 modes.
 
-The standard command's status line explicitly labels execution as
-`local-host governance (not an OS sandbox)`. Permission prompts govern effects;
-they do not add kernel isolation.
+The standard command requires an OS command sandbox: command processes use
+Seatbelt on macOS and Landlock plus seccomp on Linux. File tools remain direct
+Harness operations confined with `os.Root`; permission prompts still govern
+the requested effects independently of kernel isolation. Network creation is
+denied, writes are limited to the workspace and a private per-command temporary
+directory, and unrelated host/user paths are not readable. Windows currently
+fails closed because no AppContainer backend is implemented. This standard
+assembly adds no third-party sandbox package; it uses the existing `x/sys`
+dependency and platform facilities.
+
+The standard assembly also registers `delegate_task`. A model may issue up to
+four delegation calls in one tool batch; they run as fork/join child sessions
+with isolated history, narrowed workspace tools and permissions, and shared
+usage accounting. The parent waits for all results. This is deliberately not a
+background spawn/wait protocol.
 
 Run the credential-free demonstration:
 
@@ -73,7 +87,8 @@ honored in automatic color mode; `--no-alt-screen` preserves scrollback.
 the configured session directory; it never inspects or rewrites Harness
 journals. Set it to false or pass `--resume ID` for explicit control.
 
-Interaction keys are shown in the footer. `Enter` submits, `Alt+S` steers,
+The footer shows only keys relevant to the current state; `/help` contains the
+complete inventory. `Enter` submits, `Alt+S` steers,
 `Alt+F` queues a follow-up, `Alt+N` queues the next turn, `Ctrl+C` interrupts,
 `Shift+Enter` or `Ctrl+J` inserts a newline, Up/Down navigates input history,
 and `Ctrl+E` opens `$VISUAL`/`$EDITOR` after Bubble Tea releases the terminal.

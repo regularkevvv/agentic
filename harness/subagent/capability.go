@@ -29,6 +29,7 @@ type Capability struct {
 	config  Config
 	toolset agentic.Toolset
 	router  *router
+	slots   chan struct{}
 }
 
 // New constructs a child capability from an already-bound runner. Dependency
@@ -47,7 +48,7 @@ func New[O any](runner agentic.Runner[O], config Config) (*Capability, error) {
 	if err != nil {
 		return nil, err
 	}
-	result := &Capability{config: resolved, router: newRouter()}
+	result := &Capability{config: resolved, router: newRouter(), slots: make(chan struct{}, resolved.MaxConcurrent)}
 	tool, handler, err := agentic.ToolWithContext(
 		resolved.Name,
 		resolved.Description,
@@ -74,7 +75,7 @@ func NewWithDeps[D, O any](config Config, bind BindRunner[D, O]) (*Capability, e
 	if err != nil {
 		return nil, err
 	}
-	result := &Capability{config: resolved, router: newRouter()}
+	result := &Capability{config: resolved, router: newRouter(), slots: make(chan struct{}, resolved.MaxConcurrent)}
 	tool, handler, err := agentic.ToolWithDeps(
 		resolved.Name,
 		resolved.Description,
