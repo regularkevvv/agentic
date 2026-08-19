@@ -26,7 +26,7 @@ tells you rather than a reviewer.
 
 ### Prerequisites
 
-- Go 1.25.4 or later
+- Go 1.25.5 or later
 - [just](https://just.systems/) 1.58.0 or later
 - [golangci-lint](https://golangci-lint.run/welcome/install/) (for linting)
 
