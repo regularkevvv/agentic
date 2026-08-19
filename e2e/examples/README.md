@@ -16,6 +16,7 @@ The commands below are run from the repository root, where the committed
 | `sparse/` | What a learned sparse vector is, and what it costs |
 | `codemode/` | Full Harness session through Codemode, GoMonty, a Monty worker, and a nested Go tool |
 | `tui/` | Real Harness-to-TUI adapter with streaming thinking/tool events, child metadata, permission deny/approve, interruption, cache proof, and durable recovery |
+| `otel/` | Credential-free nested agents, tools, suspension/resume, streaming, failures, embeddings, and evaluations exported through OTLP/gRPC |
 
 ## Setup
 
@@ -33,7 +34,13 @@ go run ./e2e/examples/retrieval  # needs DEEPINFRA_TOKEN
 go run ./e2e/examples/sparse     # needs DEEPINFRA_TOKEN
 go run ./e2e/examples/codemode   # no credential; explicitly downloads and verifies GoMonty
 go run ./e2e/examples/tui        # no credential; deterministic local acceptance flow
+make otel-e2e                     # no credential; example plus Collector-backed signal assertions
 ```
+
+The OpenTelemetry example is backed by a separate assertion-heavy smoke test.
+It sends all three OTel signals to a pinned real Collector and parses the
+Collector's OTLP JSON output. See [`../otel/README.md`](../otel/README.md) for
+the exact scenarios and assertions.
 
 An opt-in live TUI smoke asks a configured real provider to request two shell
 tools, denies the first exact durable suspension, approves the second, verifies

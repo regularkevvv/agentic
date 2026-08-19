@@ -1,10 +1,10 @@
-.PHONY: test lint lint-all lint-cgo vet build fmt check clean test-e2e coverage coverage-check coverage-all
+.PHONY: test lint lint-all lint-cgo vet build fmt check clean test-e2e otel-e2e coverage coverage-check coverage-all
 
 GOLANGCI_LINT_VERSION := v2.1.6
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 COVERAGE_PACKAGES := $(shell go list ./... | grep -vE '/(internal/testutil|provider/test/conformance)($$|/)')
 COVERAGE_THRESHOLD := 97.0
-WORKSPACE_PACKAGES := ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./tui/... ./e2e/...
+WORKSPACE_PACKAGES := ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./otel/... ./tui/... ./e2e/...
 
 # Run all tests
 test:
@@ -14,6 +14,10 @@ test:
 # are invisible to every other target here.
 test-e2e:
 	cd e2e && go test -tags=e2e -race -count=1 -timeout 300s ./...
+
+# Run the credential-free OTLP/Collector proof for traces, metrics, and logs.
+otel-e2e:
+	$(MAKE) -C e2e/otel smoke
 
 # Run coverage excluding test-only helper packages
 coverage:
@@ -40,6 +44,7 @@ coverage-all: coverage-check
 	$(MAKE) -C harness coverage-check
 	$(MAKE) -C harness/codemode/gomonty coverage-check
 	$(MAKE) -C harness/sessionloop coverage-check
+	$(MAKE) -C otel coverage-check
 	$(MAKE) -C tui coverage-check
 
 # Lint every module that builds without a native toolchain (same version as CI).
@@ -52,6 +57,7 @@ lint:
 	cd harness && $(GOLANGCI_LINT) run ./...
 	cd harness/codemode/gomonty && $(GOLANGCI_LINT) run ./...
 	cd harness/sessionloop && $(GOLANGCI_LINT) run ./...
+	cd otel && $(GOLANGCI_LINT) run ./...
 	cd tui && $(GOLANGCI_LINT) run ./...
 	cd e2e && $(GOLANGCI_LINT) run --build-tags=e2e ./...
 

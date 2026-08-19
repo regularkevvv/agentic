@@ -8,6 +8,7 @@ import (
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 
+	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
@@ -15,8 +16,9 @@ import (
 // supports both the official OpenAI API and OpenAI-compatible providers via
 // the WithBaseURL option.
 type Embedder struct {
-	client *openai.Client
-	model  string
+	client  *openai.Client
+	model   string
+	baseURL string
 }
 
 // NewEmbedder creates a new OpenAI Embedder. It accepts the same options as
@@ -51,10 +53,15 @@ func NewEmbedder(model string, opts ...Option) (*Embedder, error) {
 	reqOpts = append(reqOpts, cfg.extraOpts...)
 
 	client := openai.NewClient(reqOpts...)
+	baseURL := cfg.baseURL
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
+	}
 
 	return &Embedder{
-		client: &client,
-		model:  model,
+		client:  &client,
+		model:   model,
+		baseURL: baseURL,
 	}, nil
 }
 
@@ -136,6 +143,11 @@ func (e *Embedder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (
 // Name implements retrieval.Embedder.
 func (e *Embedder) Name() string {
 	return e.model
+}
+
+// ModelMetadata reports semantic provider and transport identity.
+func (e *Embedder) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadataForEndpoint("openai", "embeddings", e.baseURL)
 }
 
 // Compile-time check that Embedder implements retrieval.Embedder.

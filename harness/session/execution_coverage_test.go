@@ -245,8 +245,8 @@ func TestRunOptionsToolRuntimeAndToolUpdateEdges(t *testing.T) {
 		return agentic.ToolBatchDecision{}, nil
 	})
 	limit := 1
-	options := session.runOptions(&agentic.UsageLimits{MaxRequests: &limit})
-	if len(options) != 9 {
+	options := session.runOptions("run-1", &agentic.UsageLimits{MaxRequests: &limit})
+	if len(options) != 10 {
 		t.Fatalf("run options = %d", len(options))
 	}
 	runtimeValue, ok := harnessruntime.FromContext(session.withToolRuntime(context.Background()))

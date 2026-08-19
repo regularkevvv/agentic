@@ -43,6 +43,7 @@ const DefaultBaseURL = "https://api.together.xyz/v1"
 // It inherits all methods including Request and RequestStream.
 type Model struct {
 	*oaiProvider.Model
+	metadata core.ModelMetadata
 }
 
 // Option configures the Together AI Model.
@@ -105,8 +106,14 @@ func New(model string, opts ...Option) (*Model, error) {
 		return nil, fmt.Errorf("together: %w", err)
 	}
 
-	return &Model{Model: oaiModel}, nil
+	return &Model{
+		Model:    oaiModel,
+		metadata: core.ModelMetadataForEndpoint("together", "chat", baseURL),
+	}, nil
 }
+
+// ModelMetadata reports semantic provider and transport identity.
+func (m *Model) ModelMetadata() core.ModelMetadata { return m.metadata }
 
 // MustNew is like New but panics on error.
 func MustNew(model string, opts ...Option) *Model {

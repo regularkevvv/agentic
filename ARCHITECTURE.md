@@ -38,6 +38,7 @@ agentic/                    the library — one import path for callers
     codemode/gomonty/       nested module: optional GoMonty executor
     sessionloop/            nested module: provider-neutral session protocol
       actor/                durable mailbox/lease supervisor contracts
+  otel/                     nested module: optional OTel traces/logs/metrics
   tui/                      nested module: reusable terminal client
   e2e/                      nested module: live tests and runnable examples
     localinference/         nested module (CGO): the example that uses onnx
@@ -81,6 +82,7 @@ everything else is chat.
 | A contract suite a provider must pass | `provider/test/conformance/` | Beside the doubles, importable by an out-of-tree provider |
 | A runnable example | `e2e/examples/<name>/` | The `e2e` module, so a table writer never reaches a caller's binary |
 | A compatible-harness terminal client | `tui/` | Pure-Go client port, renderer, app, Harness adapter, and explicit standard assembly |
+| OpenTelemetry instrumentation | `otel/` | The Agentic OTel adapter and evolving GenAI conventions must not enter root source or its public API |
 | A session-protocol type, validation rule, or conformance case | `harness/sessionloop/` | The neutral protocol and its conformance suite stay in the zero-dependency module every host and bridge imports |
 | A portable durable-session actor contract or supervisor | `harness/sessionloop/actor/` | Mailbox, lease, doorbell, session-opening, and passivation semantics belong beside the neutral protocol; concrete database and pub/sub adapters remain application-owned |
 | A Code Mode backend that loads a native runtime | `harness/codemode/<backend>/` as a nested module | The portable Code Mode capability remains in Harness; the optional runtime stays out of its graph |
@@ -98,9 +100,10 @@ is what `go get github.com/regularkevvv/agentic` should pull.
 | Module | In `go.work` | Resolves the root as | Exists because |
 |---|:-:|---|---|
 | `.` | ✓ | — | The library |
-| `harness/` | ✓ | **Agentic `v0.6.0`** | Experimental; its dependencies and its API churn should not be the library's |
+| `harness/` | ✓ | **Agentic `v0.7.0`** | Experimental; its dependencies and its API churn should not be the library's |
 | `harness/sessionloop/` | ✓ | — (depends on nothing) | The provider-neutral session protocol must stay importable without Agentic, Harness, TUI, or provider SDKs in the consumer's module graph |
 | `harness/codemode/gomonty/` | ✓ | **Harness `v0.3.0`, GoMonty `v0.0.15`** | Optional native-backed Code Mode execution must not enter the core Harness graph |
+| `otel/` | ✓ | **Agentic `v0.7.0`** | Agentic-specific OTel integration and Development-status GenAI conventions remain opt-in; release root first |
 | `tui/` | ✓ | **Agentic `v0.6.0`, Harness `v0.3.0`** | Bubble Tea and terminal application dependencies must not enter either library graph |
 | `e2e/` | ✓ | this checkout | Live tests and examples need keys, table writers, and fixtures that no caller should inherit |
 | `provider/local/onnx/` | | **Agentic `v0.6.0`** | CGO, ONNX Runtime, and a statically linked tokenizer |
@@ -115,10 +118,10 @@ so that optional module remains in `go.work`. `make lint-all` covers all nine
 when you do have the ONNX libraries.
 
 **`harness/`, `harness/sessionloop/`,
-`harness/codemode/gomonty/`, `tui/`, and `provider/local/onnx/` have no
+`harness/codemode/gomonty/`, `otel/`, `tui/`, and `provider/local/onnx/` have no
 `replace` directives, and that is deliberate.**
 They are released in dependency order: sessionloop, root Agentic, the native
-ONNX provider, Harness, the optional GoMonty adapter,
+ONNX provider, Harness, the optional GoMonty adapter, the OTel adapter,
 then TUI. Their
 `GOWORK=off` release checks rehearse what `go get` gives a user. Locally
 `go.work` supplies the modules being changed together, so the distinction is
@@ -144,6 +147,7 @@ Not by convention — by tests that fail.
 | Release modules have no replace; repository acceptance modules resolve this checkout | `architecture_test.go` |
 | TUI and the optional GoMonty adapter contain no replace or cross-import | their module `architecture_test.go` files |
 | `harness/sessionloop` has zero require/replace directives | `architecture_test.go` |
+| Root source cannot import OTel APIs or the optional adapter; `otel` has no replace | `architecture_test.go` |
 | `internal/` holds only the four documented packages | `architecture_test.go` |
 | Every top-level directory is one this document names | `architecture_test.go` |
 | No compiled binary is tracked in git | `architecture_test.go` |

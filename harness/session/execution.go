@@ -166,7 +166,7 @@ func (s *Session[O]) driveAccepted(accepted *acceptedStart[O]) (*agentic.Executi
 		Mode:    agentic.DriveStart,
 		History: accepted.history,
 		Prompt:  &inputPrompt,
-	}, s.runOptions(accepted.limits)...)
+	}, s.runOptions(accepted.runID, accepted.limits)...)
 	return s.finishExecution(execution, runErr)
 }
 
@@ -196,8 +196,9 @@ func (s *Session[O]) promptErrorLocked() error {
 	}
 }
 
-func (s *Session[O]) runOptions(limits *agentic.UsageLimits) []agentic.RunOption {
+func (s *Session[O]) runOptions(runID string, limits *agentic.UsageLimits) []agentic.RunOption {
 	options := []agentic.RunOption{
+		agentic.WithRunMetadata(agentic.RunMetadata{ConversationID: s.id, RunID: runID}),
 		agentic.WithRunHistoryProcessor(agentic.HistoryProcessorFunc(s.projectHistory)),
 		agentic.WithRunTurnHook(s.turnHook),
 		agentic.WithRunEventSink(s.eventSink),

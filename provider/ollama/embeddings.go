@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/retrieval"
 	oaiProvider "github.com/regularkevvv/agentic/provider/openai"
 )
@@ -16,6 +17,7 @@ const DefaultEmbeddingModel = "nomic-embed-text"
 // /v1/embeddings endpoint. It inherits Embed and Name.
 type Embedder struct {
 	*oaiProvider.Embedder
+	metadata core.ModelMetadata
 }
 
 // NewEmbedder creates a new Ollama Embedder. It accepts the same options as
@@ -68,8 +70,14 @@ func NewEmbedder(model string, opts ...Option) (*Embedder, error) {
 		return nil, fmt.Errorf("ollama: %w", err)
 	}
 
-	return &Embedder{Embedder: oaiEmbedder}, nil
+	return &Embedder{
+		Embedder: oaiEmbedder,
+		metadata: core.ModelMetadataForEndpoint("ollama", "embeddings", baseURL),
+	}, nil
 }
+
+// ModelMetadata reports semantic provider and transport identity.
+func (e *Embedder) ModelMetadata() core.ModelMetadata { return e.metadata }
 
 // MustNewEmbedder is like NewEmbedder but panics on error.
 func MustNewEmbedder(model string, opts ...Option) *Embedder {

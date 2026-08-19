@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/internal/retrieval/embedbatch"
 
@@ -262,6 +263,11 @@ func (e *Embedder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (
 // Name implements retrieval.Embedder.
 func (e *Embedder) Name() string {
 	return e.modelID
+}
+
+// ModelMetadata reports semantic provider and transport identity.
+func (e *Embedder) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadata{Provider: "aws.bedrock", Operation: "embeddings"}
 }
 
 // titanRequest is the Amazon Titan embedding request body. Titan accepts

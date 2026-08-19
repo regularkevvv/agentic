@@ -1,0 +1,5 @@
+module example.com/agentic-otel-consumer
+
+go 1.25.4
+
+require github.com/regularkevvv/agentic/otel v0.1.0

@@ -31,8 +31,9 @@ const providerName = "openai"
 // Use [NewResponses] to create a ResponsesModel, or [NewResponsesFromClient] to
 // share a client with an existing [Model].
 type ResponsesModel struct {
-	client *openai.Client
-	model  string
+	client  *openai.Client
+	model   string
+	baseURL string
 }
 
 // NewResponses creates a new ResponsesModel using the Responses API.
@@ -54,8 +55,12 @@ func NewResponses(model string, opts ...Option) (*ResponsesModel, error) {
 	if cfg.apiKey != "" {
 		reqOpts = append(reqOpts, option.WithAPIKey(cfg.apiKey))
 	}
+	baseURL := cfg.baseURL
+	if baseURL == "" {
+		baseURL = DefaultBaseURL
+	}
 	if cfg.baseURL != "" {
-		reqOpts = append(reqOpts, option.WithBaseURL(cfg.baseURL))
+		reqOpts = append(reqOpts, option.WithBaseURL(baseURL))
 	}
 	if cfg.organization != "" {
 		reqOpts = append(reqOpts, option.WithOrganization(cfg.organization))
@@ -65,8 +70,9 @@ func NewResponses(model string, opts ...Option) (*ResponsesModel, error) {
 	client := openai.NewClient(reqOpts...)
 
 	return &ResponsesModel{
-		client: &client,
-		model:  model,
+		client:  &client,
+		model:   model,
+		baseURL: baseURL,
 	}, nil
 }
 
@@ -84,8 +90,9 @@ func MustNewResponses(model string, opts ...Option) *ResponsesModel {
 // connections when you need both Chat Completions and Responses models.
 func NewResponsesFromClient(model string, m *Model) *ResponsesModel {
 	return &ResponsesModel{
-		client: m.client,
-		model:  model,
+		client:  m.client,
+		model:   model,
+		baseURL: m.baseURL,
 	}
 }
 
@@ -240,6 +247,11 @@ func (m *ResponsesModel) RequestStream(ctx context.Context, req *core.ChatReques
 // Name implements core.Model.
 func (m *ResponsesModel) Name() string {
 	return m.model
+}
+
+// ModelMetadata reports semantic provider and transport identity.
+func (m *ResponsesModel) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadataForEndpoint("openai", "chat", m.baseURL)
 }
 
 // ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/retrieval"
 )
 
@@ -248,6 +249,11 @@ func (e *Embedder) Embed(ctx context.Context, req *retrieval.EmbeddingRequest) (
 // Name implements retrieval.Embedder.
 func (e *Embedder) Name() string {
 	return e.model
+}
+
+// ModelMetadata reports semantic provider and transport identity.
+func (e *Embedder) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadataForEndpoint("cohere", "embeddings", e.client.baseURL)
 }
 
 // usage maps Cohere's meta block onto retrieval.EmbeddingUsage. Billed units are

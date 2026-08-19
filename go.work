@@ -13,5 +13,6 @@ use (
 	./harness
 	./harness/codemode/gomonty
 	./harness/sessionloop
+	./otel
 	./tui
 )

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/internal/retrieval/embedbatch"
 
@@ -326,6 +327,15 @@ func (e *Embedder) embedBatch(ctx context.Context, inputs []string, cfg *genai.E
 // Name implements [retrieval.Embedder].
 func (e *Embedder) Name() string {
 	return e.model
+}
+
+// ModelMetadata reports semantic provider identity.
+func (e *Embedder) ModelMetadata() core.ModelMetadata {
+	provider := "gcp.gemini"
+	if e.vertexAI {
+		provider = "gcp.vertex_ai"
+	}
+	return core.ModelMetadata{Provider: provider, Operation: "embeddings"}
 }
 
 // Compile-time check that Embedder implements retrieval.Embedder.

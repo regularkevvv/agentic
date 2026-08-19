@@ -43,8 +43,9 @@ const skipThoughtSignatureValidator = "skip_thought_signature_validator"
 // Model implements the core.Model and core.StreamModel interfaces
 // using the Google Gemini API.
 type Model struct {
-	client *genai.Client
-	model  string
+	client   *genai.Client
+	model    string
+	vertexAI bool
 }
 
 // Option configures the Gemini Model.
@@ -96,8 +97,9 @@ func New(model string, opts ...Option) (*Model, error) {
 	}
 
 	return &Model{
-		client: client,
-		model:  model,
+		client:   client,
+		model:    model,
+		vertexAI: cfg.vertexAI,
 	}, nil
 }
 
@@ -268,6 +270,16 @@ func (m *Model) RequestStream(ctx context.Context, req *core.ChatRequest) (*core
 // Name implements core.Model.
 func (m *Model) Name() string {
 	return m.model
+}
+
+// ModelMetadata reports semantic provider identity. The SDK owns
+// endpoint selection, so server fields remain unknown.
+func (m *Model) ModelMetadata() core.ModelMetadata {
+	provider := "gcp.gemini"
+	if m.vertexAI {
+		provider = "gcp.vertex_ai"
+	}
+	return core.ModelMetadata{Provider: provider, Operation: "generate_content"}
 }
 
 // buildRequest converts core.ChatRequest to Gemini API parameters.

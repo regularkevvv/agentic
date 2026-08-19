@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/providerhttp"
 	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/internal/retrieval/batch"
@@ -185,6 +186,11 @@ func NewShared(model string, opts ...SharedOption) (*SharedEncoder, error) {
 
 // Name implements retrieval.RepresentationEncoder and retrieval.Embedder.
 func (e *SharedEncoder) Name() string { return e.model }
+
+// ModelMetadata reports semantic provider and transport identity.
+func (e *SharedEncoder) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadataForEndpoint("hugging_face", "embeddings", e.routerURL)
+}
 
 // Capabilities implements retrieval.RepresentationEncoder.
 func (e *SharedEncoder) Capabilities() retrieval.RepresentationCapabilities {

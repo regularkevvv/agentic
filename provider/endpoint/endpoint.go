@@ -29,6 +29,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/regularkevvv/agentic/internal/core"
 	"github.com/regularkevvv/agentic/internal/providerhttp"
 	"github.com/regularkevvv/agentic/internal/retrieval"
 	"github.com/regularkevvv/agentic/internal/retrieval/batch"
@@ -181,6 +182,12 @@ func (e *Encoder) Name() string {
 		return e.model
 	}
 	return e.endpoint
+}
+
+// ModelMetadata reports semantic transport identity for an application-owned
+// endpoint whose upstream provider is not known to the client.
+func (e *Encoder) ModelMetadata() core.ModelMetadata {
+	return core.ModelMetadataForEndpoint("custom", "embeddings", e.endpoint)
 }
 
 // Capabilities implements retrieval.RepresentationEncoder.

@@ -48,7 +48,9 @@ func runStreamWithEvaluator[O any](
 
 	go func() {
 		defer close(ch)
-		execution, runErr := driveLoop(c, ls, evaluator, nil, nil)
+		execution, runErr := observeAgentExecution(c, ls, AgentInvocationStart, func() (*Execution[O], error) {
+			return driveLoop(c, ls, evaluator, nil, nil)
+		})
 		if execution != nil {
 			stream.SetSnapshot(executionSnapshot(execution))
 		}

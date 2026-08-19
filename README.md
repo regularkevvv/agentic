@@ -6,7 +6,7 @@
 
 A lightweight, type-safe Go framework for building AI agents with tool use, structured output, and multi-agent orchestration.
 
-Current release: **v0.5.1**.
+Current release: **v0.6.0**.
 
 ## Features
 
@@ -28,6 +28,7 @@ Current release: **v0.5.1**.
 - **Reranking** -- `Reranker` cross-encoder interface with Voyage AI and Cohere implementations for two-stage retrieval
 - **Thinking tokens** -- extended reasoning for Anthropic, OpenAI o-series, and Gemini
 - **Output validation** -- struct tag validation with automatic retry
+- **Optional OpenTelemetry** -- GenAI spans, structured event logs, and metrics in a separate module with content capture off by default
 
 ## Installation
 
@@ -36,6 +37,22 @@ go get github.com/regularkevvv/agentic
 ```
 
 Requires **Go 1.25.4** or later.
+
+The Agentic OpenTelemetry integration is intentionally a separate module:
+
+```bash
+go get github.com/regularkevvv/agentic/otel
+```
+
+Pass `agenticotel.New()` through `agentic.WithInstrumentation` to emit an
+`invoke_agent` span containing provider-request and tool spans, the GenAI metric
+set, and structured exception/evaluation log records. The root Agentic source
+and public instrumentation API do not import OTel or the optional adapter, and
+prompt/tool content stays off unless explicitly enabled.
+See [`otel/README.md`](otel/README.md) for setup, privacy controls, and the
+pinned semantic-convention revision. `make otel-e2e` runs a credential-free,
+Dockerized Collector proof and asserts the exported traces, metrics, logs,
+correlation, topology, scenarios, and privacy tripwire.
 
 ## Quick Start
 
@@ -470,6 +487,7 @@ agentic/            the library: one import path, both halves
     providerhttp/   HTTP retry and bounded reads, shared by providers
     testutil/       doubles for this repository's own tests
   harness/          nested module: durable sessions (experimental)
+  otel/             nested module: optional OpenTelemetry integration
   e2e/              nested module: live tests and runnable examples
     localinference/ nested module: the example that runs a model in-process
   provider/local/onnx/  nested module: that model's encoder (CGO)

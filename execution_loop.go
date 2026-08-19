@@ -62,7 +62,13 @@ func driveWithEvaluator[O any](
 	if err != nil {
 		return nil, err
 	}
-	return driveLoop(c, ls, evaluator, nil, nil)
+	mode := AgentInvocationStart
+	if input.Mode == DriveContinue {
+		mode = AgentInvocationContinue
+	}
+	return observeAgentExecution(c, ls, mode, func() (*Execution[O], error) {
+		return driveLoop(c, ls, evaluator, nil, nil)
+	})
 }
 
 func resumeWithEvaluator[O any](
@@ -83,6 +89,17 @@ func resumeWithEvaluator[O any](
 	if err != nil {
 		return nil, err
 	}
+	return observeAgentExecution(c, ls, AgentInvocationResume, func() (*Execution[O], error) {
+		return resumePreparedWithEvaluator(c, ls, input, evaluator)
+	})
+}
+
+func resumePreparedWithEvaluator[O any](
+	c *agentCore,
+	ls *loopState,
+	input ResumeInput,
+	evaluator completionEvaluator[O],
+) (*Execution[O], error) {
 	frontier, err := inspectTranscript(ls.messages)
 	if err != nil {
 		return failedExecution[O](c, ls, err, false)
@@ -128,6 +145,43 @@ func resumeWithEvaluator[O any](
 		prompt = &copy
 	}
 	return driveLoop(c, ls, evaluator, &resumeTurn[O]{assistant: assistant, regular: regular}, prompt)
+}
+
+func observeAgentExecution[O any](
+	c *agentCore,
+	ls *loopState,
+	mode AgentInvocationMode,
+	run func() (*Execution[O], error),
+) (execution *Execution[O], err error) {
+	ctx, span := safeStartAgent(ls.ctx, ls.instrumentation, AgentOperation{
+		Agent:     ls.agentIdentity,
+		Model:     ls.modelMetadata,
+		ModelName: c.model.Name(),
+		Request:   c.instrumentationRequest(ls),
+		Run:       ls.runMetadata,
+		Mode:      mode,
+		Input:     ls.messages,
+	})
+	ctx = withInheritedInstrumentation(ctx, ls.instrumentation, ls.runMetadata)
+	ls.ctx = ctx
+	defer func() {
+		result := AgentOperationResult{
+			Status:   ExecutionFailed,
+			Messages: ls.messages,
+			Usage:    ls.totalUsage,
+			Error:    err,
+		}
+		if execution != nil {
+			result.Status = execution.Status
+			if execution.Result != nil {
+				result.Messages = execution.Result.Messages
+				result.Usage = execution.Result.Usage
+				result.FinishReason = execution.Result.FinishReason
+			}
+		}
+		safeEndAgent(span, result)
+	}()
+	return run()
 }
 
 type resumeTurn[O any] struct {
@@ -477,29 +531,45 @@ func (c *agentCore) requestTurn(ls *loopState) (*ChatResponse, error) {
 			if err != nil {
 				return nil, err
 			}
-			stream, err := model.RequestStream(ls.ctx, request)
+			modelCtx, span := safeStartModel(ls.ctx, ls.instrumentation, ModelOperation{
+				Agent: ls.agentIdentity, Model: ls.modelMetadata, Run: ls.runMetadata,
+				Request: *request, Iteration: ls.iteration,
+			})
+			stream, err := model.RequestStream(modelCtx, request)
 			if err != nil {
-				return nil, fmt.Errorf("model request: %w", err)
+				wrapped := fmt.Errorf("model request: %w", err)
+				safeEndModel(span, ModelOperationResult{Error: wrapped})
+				return nil, wrapped
 			}
-			message, usage, finishReason, err := c.consumeStream(ls, stream)
+			message, usage, finishReason, err := c.consumeStream(ls, stream, span)
 			if err != nil {
+				safeEndModel(span, ModelOperationResult{Error: err})
 				return nil, err
 			}
-			return &ChatResponse{Message: message, Usage: usage, FinishReason: finishReason, RawFinishReason: string(finishReason)}, nil
+			response := &ChatResponse{Message: message, Usage: usage, FinishReason: finishReason, RawFinishReason: string(finishReason)}
+			safeEndModel(span, ModelOperationResult{Response: response})
+			return response, nil
 		}
 	}
 	request, err := c.buildRequest(ls, false)
 	if err != nil {
 		return nil, err
 	}
-	response, err := c.model.Request(ls.ctx, request)
+	modelCtx, span := safeStartModel(ls.ctx, ls.instrumentation, ModelOperation{
+		Agent: ls.agentIdentity, Model: ls.modelMetadata, Run: ls.runMetadata,
+		Request: *request, Iteration: ls.iteration,
+	})
+	response, err := c.model.Request(modelCtx, request)
 	if err != nil {
-		return nil, fmt.Errorf("model request: %w", err)
+		wrapped := fmt.Errorf("model request: %w", err)
+		safeEndModel(span, ModelOperationResult{Response: response, Error: wrapped})
+		return nil, wrapped
 	}
+	safeEndModel(span, ModelOperationResult{Response: response})
 	return response, nil
 }
 
-func (c *agentCore) consumeStream(ls *loopState, stream *StreamResult) (Message, Usage, FinishReason, error) {
+func (c *agentCore) consumeStream(ls *loopState, stream *StreamResult, span ...ModelOperationSpan) (Message, Usage, FinishReason, error) {
 	var textContent string
 	var thinkingContent string
 	var thinkingSignature, thinkingProvider, thinkingID string
@@ -513,6 +583,9 @@ func (c *agentCore) consumeStream(ls *loopState, stream *StreamResult) (Message,
 	calls := make(map[string]*accumulator)
 	var order []string
 	for event := range stream.Events {
+		if len(span) > 0 {
+			safeObserveStreamEvent(span[0], event)
+		}
 		switch event.Type {
 		case StreamEventTextDelta:
 			textContent += event.Delta

@@ -78,6 +78,43 @@ jobs:
           install-mode: goinstall
           working-directory: harness
 
+  otel-module:
+    name: Optional OpenTelemetry module
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: otel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: otel/go.mod
+      # The root instrumentation API and this adapter release together. The
+      # workspace supplies the checkout until root v0.7.0 has been published;
+      # release-view.yml later proves the adapter with GOWORK=off.
+      - name: Race test against the coordinated workspace
+        run: go test -race -count=1 -timeout 60s ./...
+      - name: Vet and pure-Go build
+        run: go vet ./... && CGO_ENABLED=0 go build ./...
+      - name: Enforce coverage threshold
+        run: make coverage-check
+
+  otel-lint:
+    name: Optional OpenTelemetry lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: otel/go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+          working-directory: otel
+
   gomonty-module:
     name: Optional GoMonty adapter
     runs-on: ubuntu-latest
@@ -228,6 +265,22 @@ jobs:
           working-directory: e2e
           args: --build-tags=e2e
 
+  # This is a credential-free transport proof, not a mocked SDK test. The
+  # Compose stack builds the deterministic scenario runner, sends traces,
+  # metrics, and logs over OTLP/gRPC to a digest-pinned real Collector, then
+  # parses and asserts the Collector's file-exporter output.
+  otel-e2e:
+    name: OpenTelemetry Collector E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: e2e/go.mod
+      - name: Prove exported traces, metrics, logs, and privacy
+        run: make otel-e2e
+
   # Unlike the provider-tagged tests, this credential-free e2e is safe to run
   # on every change. It downloads the exact GoMonty release asset selected by
   # the source module's committed manifest, verifies all hashes, starts the real
@@ -329,8 +382,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Test all six non-CGO modules
-        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./tui/... ./e2e/...
+      - name: Test all seven non-CGO modules
+        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./otel/... ./tui/... ./e2e/...
 
   coverage:
     name: Coverage
