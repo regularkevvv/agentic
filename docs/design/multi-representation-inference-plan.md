@@ -675,7 +675,7 @@ Default CI must not require paid credentials:
 
 Live provider CI should be a manually dispatched or protected scheduled workflow with per-provider jobs. One provider outage must be attributable and must not obscure other results. Record provider model IDs and protocol revisions in the job summary. Set strict request and cost ceilings.
 
-The existing `make test-e2e` path remains the developer entrypoint unless repository conventions change during implementation.
+The existing `just test-e2e` path remains the developer entrypoint unless repository conventions change during implementation.
 
 ## Observability
 

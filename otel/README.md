@@ -102,7 +102,7 @@ embeddings, inference details, and evaluation records against a pinned real
 OpenTelemetry Collector.
 
 ```bash
-make otel-e2e
+just otel-e2e
 ```
 
 The gate parses the Collector's exported OTLP JSON using the official protobuf

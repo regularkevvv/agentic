@@ -9,7 +9,7 @@ parses those files using the official OTLP protobufs and asserts the result.
 Run the complete proof:
 
 ```bash
-make -C e2e/otel smoke
+just collector::smoke
 ```
 
 The command creates an isolated Compose volume, cross-compiles one static test
@@ -43,5 +43,5 @@ docker compose -f e2e/otel/docker-compose.yml down --volumes
 ```
 
 The example produces telemetry and reports the application scenarios. The
-`make` target is the authoritative proof because it additionally inspects and
+`just` recipe is the authoritative proof because it additionally inspects and
 asserts Collector-exported traces, metrics, and logs.

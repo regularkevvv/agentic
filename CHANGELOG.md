@@ -105,7 +105,8 @@ This is additive. Existing `Embedder` users compile and behave as before.
   go run ./e2e/examples/sparse     # was ./examples/sparse
   ```
 
-  `make test-e2e` is unchanged. No import path a consumer uses moved.
+  The repository entrypoint is `just test-e2e`. No import path a consumer uses
+  moved.
 
 - **`ARCHITECTURE.md` is the map of the repository**, and `architecture_test.go`
   enforces it: the set of modules, which of them `go.work` lists, how each

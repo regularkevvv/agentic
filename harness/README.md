@@ -217,8 +217,8 @@ not contain `replace` directives. To verify the workspace and, after the
 ordered Agentic/Harness publications, the Harness release view:
 
 ```sh
-make test
-make coverage-all
+just test
+just coverage-all
 (cd harness && GOWORK=off go test -race -count=1 ./...)
-(cd harness && GOWORK=off make coverage-check)
+(cd harness && GOWORK=off just coverage-check)
 ```

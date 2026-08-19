@@ -299,7 +299,7 @@ the scripted scenario metadata.
 
 ## Development
 
-`make check` runs formatting, vet, lint, race tests, and the independent 97%
+`just check` runs formatting, vet, lint, race tests, and the independent 97%
 coverage gate. The `conformance` and `testkit` packages are excluded from the
 coverage measurement but are exercised by the main package's tests, which run
 the conformance suite against the testkit host. An architecture test keeps

@@ -87,7 +87,7 @@ everything else is chat.
 | A session-protocol type, validation rule, or conformance case | `harness/sessionloop/` | The neutral protocol and its conformance suite stay in the zero-dependency module every host and bridge imports |
 | A portable durable-session actor contract or supervisor | `harness/sessionloop/actor/` | Mailbox, lease, doorbell, session-opening, and passivation semantics belong beside the neutral protocol; concrete database and pub/sub adapters remain application-owned |
 | A Code Mode backend that loads a native runtime | `harness/codemode/<backend>/` as a nested module | The portable Code Mode capability remains in Harness; the optional runtime stays out of its graph |
-| A live test against a real API | `e2e/providers/`, behind `//go:build e2e` | Needs a key; never runs in the default `make test` |
+| A live test against a real API | `e2e/providers/`, behind `//go:build e2e` | Needs a key; never runs in the default `just test` |
 | A record of why a decision was made | `docs/design/` | Not maintained afterwards; see `docs/README.md` |
 | A description of what exists | `docs/` | Maintained; wrong if the code moves and it doesn't |
 
@@ -116,7 +116,7 @@ The last two are absent from `go.work` on purpose: including them would make
 native ONNX Runtime. They are built, tested, and linted by the `onnx` CI job, so
 they are gated — just not by the commands you run every day. The GoMonty
 bindings are cgo-free and prepare their native runtime explicitly at execution,
-so that optional module remains in `go.work`. `make lint-all` covers all 25
+so that optional module remains in `go.work`. `just lint-all` covers all 25
 when you do have the ONNX libraries.
 
 **`harness/`, `harness/sessionloop/`,
@@ -160,7 +160,7 @@ Not by convention — by tests that fail.
 | Harness core packages do not import harness adapters | `harness/architecture_test.go` |
 | `provider/local/onnx` does not import the root's internals | `provider/local/onnx/architecture_test.go` |
 | A package comment names the package it documents | `ST1000`, in `.golangci.yml` |
-| Coverage stays above 97% | `make coverage-check` |
+| Coverage stays above 97% | `just coverage-check` |
 
 ## Things that look wrong and are not
 

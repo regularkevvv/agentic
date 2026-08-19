@@ -1,0 +1,28 @@
+set default-list
+set minimum-version := "1.58.0"
+set shell := ["bash", "-euo", "pipefail", "-c"]
+
+smoke_binary := ".bin/otel-smoke"
+
+# Build and run the Collector-backed smoke proof, then clean every artifact.
+[group("test")]
+smoke:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    architecture="$(docker info --format '{{ "{{" }}.Architecture{{ "}}" }}')"
+    case "$architecture" in
+      x86_64|amd64) goarch=amd64 ;;
+      aarch64|arm64) goarch=arm64 ;;
+      armv7l|arm) goarch=arm ;;
+      *) echo "unsupported Docker architecture: $architecture" >&2; exit 1 ;;
+    esac
+    mkdir -p .bin
+    trap 'docker compose down --volumes --remove-orphans; rm -f {{ smoke_binary }}' EXIT
+    docker compose down --volumes --remove-orphans
+    GOOS=linux GOARCH="$goarch" CGO_ENABLED=0 go -C .. test -c -o otel/{{ smoke_binary }} ./otel
+    docker compose up --abort-on-container-exit --exit-code-from smoke
+
+# Stop the Collector proof and remove its volumes.
+[group("maintenance")]
+down:
+    docker compose down --volumes --remove-orphans

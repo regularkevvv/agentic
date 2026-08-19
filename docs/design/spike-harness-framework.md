@@ -1439,11 +1439,11 @@ incorrect driver/output pairing where compile-time enforcement is possible.
 Before `v0.4.0`:
 
 ```sh
-make fmt
-make vet
-make lint
-make test
-make coverage-check
+just fmt
+just vet
+just lint
+just test
+just coverage-check
 ```
 
 Before `harness/v0.1.0`, run equivalent targets inside `harness/`, the root

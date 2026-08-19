@@ -34,7 +34,7 @@ go run ./e2e/examples/retrieval  # needs DEEPINFRA_TOKEN
 go run ./e2e/examples/sparse     # needs DEEPINFRA_TOKEN
 go run ./e2e/examples/codemode   # no credential; explicitly downloads and verifies GoMonty
 go run ./e2e/examples/tui        # no credential; deterministic local acceptance flow
-make otel-e2e                     # no credential; example plus Collector-backed signal assertions
+just otel-e2e                     # no credential; example plus Collector-backed signal assertions
 ```
 
 The OpenTelemetry example is backed by a separate assertion-heavy smoke test.
