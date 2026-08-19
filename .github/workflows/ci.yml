@@ -42,6 +42,51 @@ jobs:
       - name: Check build
         run: GOWORK=off go build ./...
 
+  provider-modules:
+    name: Provider (${{ matrix.provider }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        provider:
+          - anthropic
+          - azure
+          - bedrock
+          - cohere
+          - deepinfra
+          - endpoint
+          - gemini
+          - grok
+          - huggingface
+          - ollama
+          - openai
+          - openrouter
+          - pinecone
+          - sagemaker
+          - together
+          - voyageai
+    defaults:
+      run:
+        working-directory: provider/${{ matrix.provider }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: provider/${{ matrix.provider }}/go.mod
+      - name: Prove the standalone module view
+        run: |
+          GOWORK=off go mod tidy -diff
+          GOWORK=off go test -race -count=1 -timeout 60s ./...
+          GOWORK=off go vet ./...
+          GOWORK=off CGO_ENABLED=0 go build ./...
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+          working-directory: provider/${{ matrix.provider }}
+
   harness:
     name: Harness workspace view
     runs-on: ubuntu-latest
@@ -382,8 +427,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Test all seven non-CGO modules
-        run: go test -race -count=1 -timeout 60s ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./otel/... ./tui/... ./e2e/...
+      - name: Test every pure-Go module together
+        run: make test
 
   coverage:
     name: Coverage

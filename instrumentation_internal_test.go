@@ -11,6 +11,11 @@ import (
 
 type instrumentationContextKey string
 
+type rejectingJSON struct{}
+
+func (rejectingJSON) MarshalJSON() ([]byte, error) { return []byte(`{}`), nil }
+func (*rejectingJSON) UnmarshalJSON([]byte) error  { return errors.New("reject JSON") }
+
 type nilReturningInstrumentation struct{}
 
 func (nilReturningInstrumentation) StartAgent(context.Context, AgentOperation) (context.Context, AgentOperationSpan) {
@@ -367,6 +372,23 @@ func TestInstrumentationNilReturnsNoopsAndRunOverrides(t *testing.T) {
 	noopModel.ObserveStreamEvent(StreamEvent{})
 	noopModel.End(ModelOperationResult{})
 	noopTool.End(ToolOperationResult{})
+
+	panicToolCtx, panicTool := safeStartTool(ctx, &recordingInstrumentation{panicAt: "start_tool"}, ToolOperation{})
+	if panicToolCtx != ctx {
+		t.Fatal("panicking tool observer replaced the execution context")
+	}
+	panicTool.End(ToolOperationResult{})
+
+	_ = cloneJSONValue(rejectingJSON{})
+	uncloneable := ModelOperationResult{Response: &ChatResponse{Message: Message{
+		Role: RoleAssistant,
+		Content: []Part{{Type: ContentImageData, ImageData: &ImageData{
+			VendorMetadata: map[string]any{"channel": make(chan int)},
+		}}},
+	}}}
+	if cloned := cloneModelOperationResult(uncloneable); len(cloned.Response.Message.Content) != 0 {
+		t.Fatalf("uncloneable response message was exposed: %#v", cloned.Response.Message)
+	}
 
 	panicking := &recordingInstrumentation{panicAt: "stream"}
 	safeObserveStreamEvent(recordingModelSpan{panicking}, StreamEvent{Type: StreamEventTextDelta})

@@ -1,10 +1,12 @@
-.PHONY: test lint lint-all lint-cgo vet build fmt check clean test-e2e otel-e2e coverage coverage-check coverage-all
+.PHONY: test lint lint-all lint-cgo vet build fmt check clean test-e2e otel-e2e coverage coverage-check coverage-providers coverage-all
 
 GOLANGCI_LINT_VERSION := v2.1.6
 GOLANGCI_LINT := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 COVERAGE_PACKAGES := $(shell go list ./... | grep -vE '/(internal/testutil|provider/test/conformance)($$|/)')
 COVERAGE_THRESHOLD := 97.0
-WORKSPACE_PACKAGES := ./... ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./otel/... ./tui/... ./e2e/...
+PROVIDER_MODULES := anthropic azure bedrock cohere deepinfra endpoint gemini grok huggingface ollama openai openrouter pinecone sagemaker together voyageai
+PROVIDER_PACKAGES := $(addsuffix /...,$(addprefix ./provider/,$(PROVIDER_MODULES)))
+WORKSPACE_PACKAGES := ./... $(PROVIDER_PACKAGES) ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./otel/... ./tui/... ./e2e/...
 
 # Run all tests
 test:
@@ -35,12 +37,26 @@ coverage-check: coverage
 		printf("coverage %.1f%% meets required %.1f%%\n", pct + 0, threshold + 0); \
 	}'
 
+# Providers are separate modules so their SDKs never enter the root graph, but
+# they retain one aggregate coverage gate: capability density varies by vendor,
+# and the former root-module gate measured them together.
+coverage-providers:
+	go test -count=1 -coverprofile=provider-coverage.out $(PROVIDER_PACKAGES)
+	@pct=$$(go tool cover -func=provider-coverage.out | awk '/^total:/ { gsub(/%/, "", $$3); print $$3 }'); \
+	awk -v pct="$$pct" -v threshold="$(COVERAGE_THRESHOLD)" 'BEGIN { \
+		if ((pct + 0) < (threshold + 0)) { \
+			printf("provider coverage %.1f%% is below required %.1f%%\n", pct + 0, threshold + 0); \
+			exit 1; \
+		} \
+		printf("provider coverage %.1f%% meets required %.1f%%\n", pct + 0, threshold + 0); \
+	}'
+
 # Each released pure-Go production module owns an independent 97% gate. E2E and
 # test hosts prove integration behavior and are intentionally not coverage
 # padding. The native ONNX module gates its CGO build and recorded real-model
 # compatibility separately because its inference paths require an external
 # runtime, tokenizer, and exported graph.
-coverage-all: coverage-check
+coverage-all: coverage-check coverage-providers
 	$(MAKE) -C harness coverage-check
 	$(MAKE) -C harness/codemode/gomonty coverage-check
 	$(MAKE) -C harness/sessionloop coverage-check
@@ -60,6 +76,10 @@ lint:
 	cd otel && $(GOLANGCI_LINT) run ./...
 	cd tui && $(GOLANGCI_LINT) run ./...
 	cd e2e && $(GOLANGCI_LINT) run --build-tags=e2e ./...
+	@for module in $(PROVIDER_MODULES); do \
+		echo "lint provider/$$module"; \
+		(cd provider/$$module && $(GOLANGCI_LINT) run ./...) || exit 1; \
+	done
 
 # The two CGO modules are linted apart from the others, not forgotten by them.
 # Linting compiles, and compiling these means linking cgo against ONNX Runtime
@@ -92,5 +112,5 @@ check: fmt vet lint test coverage-all
 
 # Remove build artifacts
 clean:
-	rm -f coverage.out
+	rm -f coverage.out provider-coverage.out
 	go clean -testcache

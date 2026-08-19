@@ -71,6 +71,9 @@ func TestTypedFacadeConfigurationAndBinding(t *testing.T) {
 
 	depsModel := testprovider.NewTestModel(testprovider.ModelResponse{Text: `{"value":"ok"}`})
 	typed := NewTypedAgentWithDepsMode[facadeAnswer, *facadeDeps]("system", depsModel, output)
+	if identity := NewIdentityHandoff("identity", "identity", typed); identity == nil {
+		t.Fatal("identity handoff is nil")
+	}
 	var validatorCalls int
 	typed.SetDepsValidator(func(context.Context, *facadeDeps) error { return nil }).
 		AddTextOutputValidator(OutputValidatorWithDepsFunc[*facadeDeps](func(RunContext[*facadeDeps], string) error { return nil })).

@@ -24,7 +24,6 @@ import (
 	"fmt"
 
 	agentic "github.com/regularkevvv/agentic"
-	"github.com/regularkevvv/agentic/provider/deepinfra"
 	testprovider "github.com/regularkevvv/agentic/provider/test"
 )
 
@@ -112,15 +111,6 @@ func main() {
 	}
 	if _, err := agentic.RepresentationEncoderAsEmbedder(encoder); err != nil {
 		panic(err)
-	}
-
-	// A real provider satisfies both contracts without the consumer importing
-	// anything internal.
-	live := deepinfra.MustNew(deepinfra.BGEM3Model, deepinfra.WithAPIToken("unused-in-this-check"))
-	var _ agentic.RepresentationEncoder = live
-	var _ agentic.Embedder = live
-	if !live.Capabilities().Supports(agentic.RepresentationSparse) {
-		panic("expected sparse support")
 	}
 
 	// A validator built from the facade enforces the same contract.

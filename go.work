@@ -1,6 +1,6 @@
 go 1.25.4
 
-// Seven of the repository's nine modules. provider/local/onnx and
+// All pure-Go modules in the repository. provider/local/onnx and
 // e2e/localinference are deliberately absent: they need CGO, a native ONNX
 // Runtime, and a statically linked tokenizer, and adding them here would make
 // `go build ./...` at the repository root fail for everyone who has not
@@ -14,5 +14,21 @@ use (
 	./harness/codemode/gomonty
 	./harness/sessionloop
 	./otel
+	./provider/anthropic
+	./provider/azure
+	./provider/bedrock
+	./provider/cohere
+	./provider/deepinfra
+	./provider/endpoint
+	./provider/gemini
+	./provider/grok
+	./provider/huggingface
+	./provider/ollama
+	./provider/openai
+	./provider/openrouter
+	./provider/pinecone
+	./provider/sagemaker
+	./provider/together
+	./provider/voyageai
 	./tui
 )

@@ -51,3 +51,10 @@ func TestMaxIterationsError(t *testing.T) {
 		t.Errorf("expected %q, got %q", expected, err.Error())
 	}
 }
+
+func TestProviderErrorWithoutReason(t *testing.T) {
+	err := &ProviderError{}
+	if got := err.Error(); got != "provider returned no usable response" {
+		t.Fatalf("Error() = %q", got)
+	}
+}

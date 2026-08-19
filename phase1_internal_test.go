@@ -312,6 +312,28 @@ func TestPhase1TurnArbitrationAndStreamTransportErrors(t *testing.T) {
 	}
 
 	model.Response = &ChatResponse{Message: NewTextMessage(RoleAssistant, "done"), FinishReason: FinishReasonStop}
+	hookFailure := errors.New("turn hook failed")
+	if execution, err := agent.Drive(context.Background(), DriveInput{Mode: DriveStart, Prompt: messagePointer(NewTextMessage(RoleUser, "run"))}, WithRunTurnHook(func(context.Context, Turn) (TurnDecision, error) {
+		return TurnDecision{}, hookFailure
+	})); !errors.Is(err, hookFailure) || execution.Status != ExecutionFailed {
+		t.Fatalf("turn hook error = %#v, %v", execution, err)
+	}
+
+	injectionFailure := errors.New("injection event failed")
+	if execution, err := agent.Drive(context.Background(), DriveInput{Mode: DriveStart, Prompt: messagePointer(NewTextMessage(RoleUser, "run"))},
+		WithRunTurnHook(func(context.Context, Turn) (TurnDecision, error) {
+			return TurnDecision{Action: TurnContinue, Inject: []Message{NewTextMessage(RoleUser, "more")}}, nil
+		}),
+		WithRunEventSink(EventSinkFunc(func(_ context.Context, event Event) error {
+			if event.Type() == EventTypeTurnMessagesInjected {
+				return injectionFailure
+			}
+			return nil
+		})),
+	); !errors.Is(err, injectionFailure) || execution.Status != ExecutionFailed {
+		t.Fatalf("message injection event error = %#v, %v", execution, err)
+	}
+
 	if execution, err := agent.Drive(context.Background(), DriveInput{Mode: DriveStart, Prompt: messagePointer(NewTextMessage(RoleUser, "run"))}, WithRunTurnHook(func(context.Context, Turn) (TurnDecision, error) {
 		return TurnDecision{Action: TurnContinue}, nil
 	})); err == nil || execution.Status != ExecutionFailed {
