@@ -1,4 +1,4 @@
-go 1.25.4
+go 1.25.5
 
 // All pure-Go modules in the repository. provider/local/onnx and
 // e2e/localinference are deliberately absent: they need CGO, a native ONNX

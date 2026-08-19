@@ -37,7 +37,7 @@ go get github.com/regularkevvv/agentic
 go get github.com/regularkevvv/agentic/provider/openai # choose only the provider(s) you use
 ```
 
-Requires **Go 1.25.4** or later.
+Requires **Go 1.25.5** or later.
 
 The Agentic OpenTelemetry integration is intentionally a separate module:
 
