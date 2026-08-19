@@ -1,7 +1,7 @@
 # Agentic Harness (experimental)
 
-This nested module contains the experimental `v0.3` harness surface for
-Agentic `v0.6.0`. It currently provides:
+This nested module contains the experimental `v0.5` harness surface for
+Agentic `v0.7.0`. It currently provides:
 
 - write-ahead `Harness`/`Session` execution with steering, follow-up,
   next-turn queues, interruption, snapshots, budgets, and crash recovery;
@@ -203,7 +203,7 @@ standard CLI now live in the separate `../tui` module described in
 The module requires the released root module:
 
 ```text
-github.com/regularkevvv/agentic v0.6.0
+github.com/regularkevvv/agentic v0.7.0
 ```
 
 The separately released optional GoMonty adapter pins:
