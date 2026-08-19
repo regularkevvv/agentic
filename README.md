@@ -34,6 +34,7 @@ Current release: **v0.7.0**.
 
 ```bash
 go get github.com/regularkevvv/agentic
+go get github.com/regularkevvv/agentic/provider/openai # choose only the provider(s) you use
 ```
 
 Requires **Go 1.25.4** or later.
@@ -139,6 +140,9 @@ fmt.Println(result.Output.Title)  // typed access
 *and* an encoder. Any arrangement by role would have to file those packages in
 two places, so the table is the index instead — and a test enforces that every
 provider declares its capabilities in code, so this cannot silently go stale.
+Each production provider is also its own Go module. The import paths are
+unchanged, but choosing one provider no longer adds every provider SDK to the
+root Agentic module graph or to your application's module graph.
 
 | Provider | Import | Chat | Embed | Encode | Rerank |
 |---|---|:-:|:-:|:-:|:-:|

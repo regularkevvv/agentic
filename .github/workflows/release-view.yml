@@ -8,6 +8,7 @@ on:
       - "harness/codemode/gomonty/v*"
       - "harness/sessionloop/v*"
       - "otel/v*"
+      - "provider/*/v*"
       - "provider/local/onnx/v*"
       - "tui/v*"
   workflow_dispatch:
@@ -23,6 +24,7 @@ on:
           - sessionloop
           - onnx
           - otel
+          - providers
           - tui
 
 permissions:
@@ -42,6 +44,57 @@ jobs:
       - run: GOWORK=off go vet ./...
       - run: GOWORK=off CGO_ENABLED=0 go build ./...
       - run: GOWORK=off make coverage-check
+
+  providers:
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.module == 'providers') || (startsWith(github.ref, 'refs/tags/provider/') && !startsWith(github.ref, 'refs/tags/provider/local/onnx/')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        provider:
+          - anthropic
+          - azure
+          - bedrock
+          - cohere
+          - deepinfra
+          - endpoint
+          - gemini
+          - grok
+          - huggingface
+          - ollama
+          - openai
+          - openrouter
+          - pinecone
+          - sagemaker
+          - together
+          - voyageai
+    defaults:
+      run:
+        working-directory: provider/${{ matrix.provider }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: provider/${{ matrix.provider }}/go.mod
+      - run: GOWORK=off go mod tidy -diff
+      - run: GOWORK=off go test -race -count=1 -timeout 60s ./...
+      - run: GOWORK=off go vet ./...
+      - run: GOWORK=off CGO_ENABLED=0 go build ./...
+      - name: Run a fresh no-replace provider consumer
+        if: ${{ startsWith(github.ref, format('refs/tags/provider/{0}/v', matrix.provider)) }}
+        run: |
+          module="github.com/regularkevvv/agentic/provider/${{ matrix.provider }}"
+          version="${GITHUB_REF_NAME#provider/${{ matrix.provider }}/}"
+          consumer="${RUNNER_TEMP}/agentic-${{ matrix.provider }}-consumer"
+          mkdir -p "${consumer}"
+          cd "${consumer}"
+          go mod init consumer
+          GOWORK=off GONOSUMDB="${module}" GOPROXY=direct go get "${module}@${version}"
+          test -z "$(GOWORK=off go list -m -f '{{if .Replace}}{{.Path}}{{end}}' all)"
+          test "$(GOWORK=off go list -m -f '{{.Version}}' "${module}")" = "${version}"
+          GOWORK=off go test "${module}/..."
 
   harness:
     if: ${{ (github.event_name == 'workflow_dispatch' && inputs.module == 'harness') || startsWith(github.ref, 'refs/tags/harness/v') }}

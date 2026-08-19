@@ -48,6 +48,22 @@ var modules = map[string]moduleRule{
 	"otel":                     {inWorkspace: true, replacesRoot: false},
 	"tui":                      {inWorkspace: true, replacesRoot: false},
 	"e2e":                      {inWorkspace: true, replacesRoot: true},
+	"provider/anthropic":       {inWorkspace: true, replacesRoot: false},
+	"provider/azure":           {inWorkspace: true, replacesRoot: false},
+	"provider/bedrock":         {inWorkspace: true, replacesRoot: false},
+	"provider/cohere":          {inWorkspace: true, replacesRoot: false},
+	"provider/deepinfra":       {inWorkspace: true, replacesRoot: false},
+	"provider/endpoint":        {inWorkspace: true, replacesRoot: false},
+	"provider/gemini":          {inWorkspace: true, replacesRoot: false},
+	"provider/grok":            {inWorkspace: true, replacesRoot: false},
+	"provider/huggingface":     {inWorkspace: true, replacesRoot: false},
+	"provider/ollama":          {inWorkspace: true, replacesRoot: false},
+	"provider/openai":          {inWorkspace: true, replacesRoot: false},
+	"provider/openrouter":      {inWorkspace: true, replacesRoot: false},
+	"provider/pinecone":        {inWorkspace: true, replacesRoot: false},
+	"provider/sagemaker":       {inWorkspace: true, replacesRoot: false},
+	"provider/together":        {inWorkspace: true, replacesRoot: false},
+	"provider/voyageai":        {inWorkspace: true, replacesRoot: false},
 	"provider/local/onnx":      {inWorkspace: false, replacesRoot: false},
 	"e2e/localinference":       {inWorkspace: false, replacesRoot: true},
 }
@@ -681,12 +697,6 @@ func TestEveryProviderDeclaresItsCapabilities(t *testing.T) {
 		}
 		dir := filepath.Join(providerRoot, entry.Name())
 
-		// A package with its own go.mod is a separate module and is compiled,
-		// tested, and asserted by itself. Walking into it from here would test
-		// source this module never builds.
-		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
-			continue
-		}
 		// provider/test holds the test doubles and the conformance suite rather
 		// than a provider, and is exercised by the packages that consume it.
 		if entry.Name() == "test" {

@@ -24,6 +24,7 @@ agentic/                    the library — one import path for callers
   mcp/                      Model Context Protocol client and toolset
 
   provider/                 every provider, flat — see the README table
+    <vendor>/               one dependency-isolated module per provider
     test/                   the one exception: doubles and the contract suite
     local/onnx/             nested module (CGO)
 
@@ -71,8 +72,8 @@ everything else is chat.
 
 | What you are adding | Where | Why |
 |---|---|---|
-| A new provider | `provider/<vendor>/` | Flat. Declare capability with `var _ retrieval.Embedder = …`; a test fails if you don't |
-| A provider that needs CGO or a native library | its own nested module | Must not enter the dependency graph of `go get agentic` |
+| A new provider | `provider/<vendor>/` as its own nested module | Flat by capability, isolated by dependency. Declare capability with `var _ retrieval.Embedder = …`; a test fails if you don't |
+| A provider that needs CGO or a native library | its own nested module, absent from `go.work` | Must not enter the ordinary contributor build either |
 | Something two or more providers share | `internal/providerhttp/` if transport, otherwise `internal/retrieval` or `internal/core` | The half it belongs to decides |
 | A chat concept (message, tool call, stream event) | `internal/core/`, re-exported in `aliases.go` | |
 | A retrieval concept (vector, space, encoder) | `internal/retrieval/`, re-exported in `aliases.go` | |
@@ -90,7 +91,7 @@ everything else is chat.
 | A record of why a decision was made | `docs/design/` | Not maintained afterwards; see `docs/README.md` |
 | A description of what exists | `docs/` | Maintained; wrong if the code moves and it doesn't |
 
-## The nine modules
+## The 25 modules
 
 A nested module exists to keep something out of a dependency graph, and for no
 other reason. Depth means nothing to Go — `provider/local/onnx` is no more
@@ -106,6 +107,7 @@ is what `go get github.com/regularkevvv/agentic` should pull.
 | `otel/` | ✓ | **Agentic `v0.7.0`** | Agentic-specific OTel integration and Development-status GenAI conventions remain opt-in; release root first |
 | `tui/` | ✓ | **Agentic `v0.6.0`, Harness `v0.3.0`** | Bubble Tea and terminal application dependencies must not enter either library graph |
 | `e2e/` | ✓ | this checkout | Live tests and examples need keys, table writers, and fixtures that no caller should inherit |
+| `provider/<vendor>/` (16 modules) | ✓ | a published Agentic revision | Installing one provider must not add every other provider SDK to the module graph |
 | `provider/local/onnx/` | | **Agentic `v0.6.0`** | CGO, ONNX Runtime, and a statically linked tokenizer |
 | `e2e/localinference/` | | this checkout | The example that imports it, kept apart for the same reason |
 
@@ -114,15 +116,16 @@ The last two are absent from `go.work` on purpose: including them would make
 native ONNX Runtime. They are built, tested, and linted by the `onnx` CI job, so
 they are gated — just not by the commands you run every day. The GoMonty
 bindings are cgo-free and prepare their native runtime explicitly at execution,
-so that optional module remains in `go.work`. `make lint-all` covers all nine
+so that optional module remains in `go.work`. `make lint-all` covers all 25
 when you do have the ONNX libraries.
 
 **`harness/`, `harness/sessionloop/`,
-`harness/codemode/gomonty/`, `otel/`, `tui/`, and `provider/local/onnx/` have no
+`harness/codemode/gomonty/`, `otel/`, `tui/`, every production provider module,
+and `provider/local/onnx/` have no
 `replace` directives, and that is deliberate.**
-They are released in dependency order: sessionloop, root Agentic, the native
-ONNX provider, Harness, the optional GoMonty adapter, the OTel adapter,
-then TUI. Their
+They are released in dependency order: sessionloop, root Agentic, the network
+providers (OpenAI before Azure, Ollama, and Together), the native ONNX provider,
+Harness, the optional GoMonty adapter, the OTel adapter, then TUI. Their
 `GOWORK=off` release checks rehearse what `go get` gives a user. Locally
 `go.work` supplies the modules being changed together, so the distinction is
 invisible day to day for the non-CGO modules. The tag-triggered
@@ -145,6 +148,7 @@ Not by convention — by tests that fail.
 | The chat and retrieval halves do not reference each other | `architecture_test.go` |
 | `go.work` lists every non-CGO module and no CGO module | `architecture_test.go` |
 | Release modules have no replace; repository acceptance modules resolve this checkout | `architecture_test.go` |
+| Provider SDKs stay out of the root module graph and each provider owns one module | `architecture_test.go`, provider CI matrix |
 | TUI and the optional GoMonty adapter contain no replace or cross-import | their module `architecture_test.go` files |
 | `harness/sessionloop` has zero require/replace directives | `architecture_test.go` |
 | Root source cannot import OTel APIs or the optional adapter; `otel` has no replace | `architecture_test.go` |
