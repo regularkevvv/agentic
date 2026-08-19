@@ -352,12 +352,12 @@ trusting a model card. Treat the strings as diagnostics only.
 `provider/local/onnx` runs a SPLADE-family sparse model through ONNX Runtime in the
 calling process. There is no HTTP, no handler, and no Python at runtime.
 
-It is a **nested module**, and the only directory under `provider/` that the
-root module does not contain. `go get github.com/regularkevvv/agentic` does not
-pull it, `go build ./...` at the root does not reach it, and it is deliberately
+Like every production provider it is a **nested module**, so `go get
+github.com/regularkevvv/agentic` does not pull it. Unlike the pure-Go network
+providers, `go build ./...` at the root does not reach it and it is deliberately
 absent from `go.work`. That is not tidiness: it needs CGO, a native ONNX Runtime
 shared library, and a statically linked tokenizer, and none of those can be a
-condition of importing the library. Working on it means `cd provider/local/onnx`.
+condition of working on the library. Working on it means `cd provider/local/onnx`.
 
 ```go
 encoder, err := onnx.New(modelPath, tokenizerPath, agentic.VectorSpace{

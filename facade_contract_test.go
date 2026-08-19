@@ -126,6 +126,17 @@ func TestDependencyPreflightHasZeroExternalEffects(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "dependency provider: provider failed") || calls.Load() != 1 || model.CallCount() != 0 {
 			t.Fatalf("provider error: err=%v calls=%d model=%d", err, calls.Load(), model.CallCount())
 		}
+		driver := runner.(agentic.Driver[string])
+		if _, err = driver.Resume(context.Background(), agentic.ResumeInput{}); err == nil || !strings.Contains(err.Error(), "dependency provider: provider failed") {
+			t.Fatalf("resume provider error: %v", err)
+		}
+		streamer := runner.(agentic.StreamRunner)
+		if _, err = streamer.RunStream(context.Background(), "go"); err == nil || !strings.Contains(err.Error(), "dependency provider: provider failed") {
+			t.Fatalf("stream provider error: %v", err)
+		}
+		if calls.Load() != 3 || model.CallCount() != 0 {
+			t.Fatalf("provider error calls=%d model=%d", calls.Load(), model.CallCount())
+		}
 
 		nilRunner := agent.BindProvider(func(context.Context) (*deps, error) { return nil, nil })
 		_, err = nilRunner.Run(context.Background(), "go")

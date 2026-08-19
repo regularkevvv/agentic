@@ -168,9 +168,10 @@ root Agentic module graph or to your application's module graph.
 `RepresentationEncoder` (dense, learned sparse, and multi-vector in one pass),
 **Rerank** is `Reranker`. Implement the matching interface to add your own.
 
-`provider/local/onnx` is the one entry that is not part of this module: it needs
-CGO and a native ONNX Runtime, so it carries its own `go.mod` and `go get
-agentic` never pulls it. Constructors:
+Every production provider is outside the root module. `provider/local/onnx`
+differs from the network providers because it also needs CGO and a native ONNX
+Runtime, so it is excluded from `go.work` and the ordinary contributor build.
+Constructors:
 
 ```go
 openai.New("gpt-4o")                          anthropic.New("claude-sonnet-4-6")
@@ -282,10 +283,10 @@ protocol through SageMaker Runtime. See
 for the full contract.
 
 `provider/local/onnx` encodes sparse vectors in your own process with no server at
-all. It is a **nested module** — the one directory under `provider/` that
-`go get github.com/regularkevvv/agentic` does not pull — because it needs CGO, a
-native ONNX Runtime, and a statically linked tokenizer, none of which can be a
-condition of importing the library. See
+all. Like every production provider it is a nested module, but unlike the
+pure-Go network providers it is absent from `go.work`: it needs CGO, a native
+ONNX Runtime, and a statically linked tokenizer, none of which can be a
+condition of working on the ordinary library. See
 [`provider/local/onnx/README.md`](provider/local/onnx/README.md) for the setup, which is a
 real barrier rather than a formality.
 
@@ -484,6 +485,7 @@ agentic/            the library: one import path, both halves
   tool/             tool builders, registry, toolsets
   mcp/              Model Context Protocol client and toolset
   provider/         every provider, flat — see the table above
+    <vendor>/       one dependency-isolated module per provider
     test/           the one exception: doubles and the contract suite
   internal/
     core/           chat primitives
