@@ -13,6 +13,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  JUST_VERSION: 1.58.0
+
 jobs:
   lint:
     name: Lint
@@ -99,6 +102,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: harness/go.mod
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
       - name: Test against the coordinated workspace
         run: go test -race -count=1 -timeout 60s ./...
       - name: Vet
@@ -106,7 +112,7 @@ jobs:
       - name: Check build
         run: CGO_ENABLED=0 go build ./...
       - name: Enforce coverage threshold
-        run: make coverage-check
+        run: just coverage-check
 
   harness-lint:
     name: Harness lint
@@ -135,6 +141,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: otel/go.mod
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
       # The root instrumentation API and this adapter release together. The
       # workspace supplies the checkout until root v0.7.0 has been published;
       # release-view.yml later proves the adapter with GOWORK=off.
@@ -143,7 +152,7 @@ jobs:
       - name: Vet and pure-Go build
         run: go vet ./... && CGO_ENABLED=0 go build ./...
       - name: Enforce coverage threshold
-        run: make coverage-check
+        run: just coverage-check
 
   otel-lint:
     name: Optional OpenTelemetry lint
@@ -172,12 +181,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: harness/codemode/gomonty/go.mod
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
       - name: Race test
         run: go test -race -count=1 -timeout 60s ./...
       - name: Vet and pure-Go build
         run: go vet ./... && CGO_ENABLED=0 go build ./...
       - name: Enforce coverage threshold
-        run: make coverage-check
+        run: just coverage-check
 
   gomonty-lint:
     name: Optional GoMonty adapter lint
@@ -206,12 +218,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: harness/sessionloop/go.mod
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
       - name: Race test
         run: go test -race -count=1 -timeout 60s ./...
       - name: Vet and pure-Go build
         run: go vet ./... && CGO_ENABLED=0 go build ./...
       - name: Enforce coverage threshold
-        run: make coverage-check
+        run: just coverage-check
       - name: Module isolation
         run: GOWORK=off go test -race -count=1 ./... && GOWORK=off go mod tidy -diff && test "$(GOWORK=off go list -m all | wc -l)" -eq 1
 
@@ -242,12 +257,15 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: tui/go.mod
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
       - name: Race test
         run: go test -race -count=1 -timeout 60s ./...
       - name: Vet and pure-Go build
         run: go vet ./... && CGO_ENABLED=0 go build ./...
       - name: Enforce coverage threshold
-        run: make coverage-check
+        run: just coverage-check
 
   tui-lint:
     name: TUI module lint
@@ -323,8 +341,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: e2e/go.mod
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
       - name: Prove exported traces, metrics, logs, and privacy
-        run: make otel-e2e
+        run: just otel-e2e
 
   # Unlike the provider-tagged tests, this credential-free e2e is safe to run
   # on every change. It downloads the exact GoMonty release asset selected by
@@ -427,8 +448,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
       - name: Test every pure-Go module together
-        run: make test
+        run: just test
 
   coverage:
     name: Coverage
@@ -439,8 +463,11 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
       - name: Enforce coverage threshold
-        run: make coverage-all
+        run: just coverage-all
 
   vet:
     name: Vet
@@ -451,7 +478,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - run: make vet
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
+      - run: just vet
 
   # Golden fixtures are meant to be derived from sanitized real responses, so a
   # sanitization miss commits a live credential to a public repository. This

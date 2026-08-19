@@ -75,7 +75,7 @@ Verified in the repository, not assumed:
 - `go.work` declares `use ( . ./harness )`.
 - CI runs: lint, test, harness, harness-lint, workspace, coverage, vet,
   handler (Python), fixtures (secret scan).
-- `make test-e2e` runs `go test -tags=e2e ./e2e/...` from the root.
+- `just test-e2e` runs `go test -tags=e2e ./e2e/...` from the root.
 - `COVERAGE_PACKAGES` excludes `e2e`, `examples`, `internal/testutil`, and
   `provider/test/conformance`.
 
@@ -238,7 +238,7 @@ ignored has to name it.
 - Move `examples/` to `e2e/examples/`, including `internal/envutil`.
 - Add `e2e/internal/corpus` and delete the duplicated scoring helpers.
 - `go.work` gains `./e2e`.
-- `make test-e2e` runs in `e2e/`.
+- `just test-e2e` runs in `e2e/`.
 - CI: the e2e job changes directory; **a new job compiles the e2e module**, so
   a breaking API change still fails the build.
 - `COVERAGE_PACKAGES` drops its `e2e` and `examples` exclusions.
@@ -445,18 +445,18 @@ Where the implementation departed from the text above, and why.
    cross-encoding, where `corpus.Documents` deliberately withholds it, so
    merging them would quietly weaken both. A comment at the site records that.
 
-8. ~~**Neither nested module is linted by CI or by `make lint`.**~~ Resolved
-   after the fact. `make lint` now runs the root, `harness`, and `e2e` in one
+8. ~~**Neither nested module is linted by CI or by `just lint`.**~~ Resolved
+   after the fact. `just lint` now runs the root, `harness`, and `e2e` in one
    pass, and CI gained an `e2e-lint` job plus a lint step inside the existing
    `onnx` job. `e2e` is linted with `--build-tags=e2e` for the same reason it is
    vetted with it: `e2e/providers` has no untagged files, and golangci-lint
    without the tag exits cleanly having read nothing — confirmed by running both
    forms, which report `no go files to analyze` and `0 issues` respectively.
 
-   `localinference` is deliberately absent from `make lint` and lives in
-   `make lint-onnx`: linting cgo compiles it, and requiring ONNX Runtime for the
+   `localinference` is deliberately absent from `just lint` and lives in
+   `just lint-cgo`: linting cgo compiles it, and requiring ONNX Runtime for the
    ordinary lint loop would reintroduce the dependency this layout exists to
-   keep optional. `make lint-all` runs everything; CI runs everything regardless.
+   keep optional. `just lint-all` runs everything; CI runs everything regardless.
 
 10. **The Python handler was removed, and `provider/onnx` became
     `localinference`.** The plan placed the ONNX encoder under `provider/` and

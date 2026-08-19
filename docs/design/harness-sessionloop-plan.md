@@ -158,7 +158,7 @@ agentic/
     sessionloop/                          NEW NESTED MODULE
       go.mod                              sessionloop module; zero requirements
       README.md
-      Makefile
+      Justfile
       host.go
       command.go
       input.go
@@ -216,7 +216,7 @@ Adding the module requires coordinated updates to:
 - `architecture_test.go`: documented module map, workspace membership, and a
   zero-require/no-replace invariant for `sessionloop`;
 - `go.work`: include `./harness/sessionloop` because it is pure Go;
-- root and module `Makefile`s: build, test, lint, vet, and independent 97%
+- root and module `Justfile`s: build, test, lint, vet, and independent 97%
   coverage;
 - `.github/workflows/ci.yml`: dedicated module and lint jobs plus the workspace
   command;
@@ -1041,7 +1041,7 @@ Changes:
 - create `harness/sessionloop/go.mod`, types, validation, cloning, errors,
   stream contract, testkit, and conformance suite;
 - add module README with the command/event mental model and a fake-host example;
-- integrate the eighth module into architecture, workspace, Makefiles, CI,
+- integrate the eighth module into architecture, workspace, Justfiles, CI,
   coverage, lint, and release-view checks; and
 - add a clean module-graph test proving no project or third-party dependency.
 
@@ -1233,27 +1233,27 @@ GOWORK=off go test -race -count=1 ./...
 GOWORK=off go vet ./...
 GOWORK=off CGO_ENABLED=0 go build ./...
 GOWORK=off go mod tidy -diff
-make coverage-check
+just coverage-check
 
 cd ../
 GOWORK=off go test -race -count=1 -timeout 60s ./...
 GOWORK=off go vet ./...
 GOWORK=off CGO_ENABLED=0 go build ./...
 GOWORK=off go mod tidy -diff
-make coverage-check
+just coverage-check
 
 cd ../tui
 GOWORK=off go test -race -count=1 -timeout 60s ./...
 GOWORK=off go vet ./...
 GOWORK=off CGO_ENABLED=0 go build ./...
 GOWORK=off go mod tidy -diff
-make coverage-check
+just coverage-check
 
 cd ..
-make test
-make vet
-make build
-make coverage-all
+just test
+just vet
+just build
+just coverage-all
 ```
 
 Run repository lint through the pinned Make targets/CI action. Do not use an
