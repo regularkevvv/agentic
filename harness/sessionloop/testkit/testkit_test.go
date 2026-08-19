@@ -311,7 +311,10 @@ func TestSuspensionRejectsMismatchesAndResolvesWithContinuationInput(t *testing.
 
 func TestInterruptWhileSuspendedSettlesTheRunAsInterrupted(t *testing.T) {
 	t.Parallel()
-	host := testkit.New(testkit.WithRunFunc(testkit.ScenarioRunFunc()))
+	host := testkit.New(
+		testkit.WithRunFunc(testkit.ScenarioRunFunc()),
+		testkit.WithIdempotentDispatch(),
+	)
 	session := openSession(t, host)
 	ctx := testContext(t)
 	stream, err := session.Subscribe(ctx, sessionloop.SubscribeOptions{})
@@ -335,11 +338,21 @@ func TestInterruptWhileSuspendedSettlesTheRunAsInterrupted(t *testing.T) {
 			break
 		}
 	}
-	if _, err := session.Dispatch(ctx, sessionloop.Command{Kind: sessionloop.CommandInterrupt, RunID: receipt.RunID}); err != nil {
+	interrupt := sessionloop.Command{
+		Kind:           sessionloop.CommandInterrupt,
+		RunID:          receipt.RunID,
+		IdempotencyKey: "interrupt-suspended-run",
+	}
+	first, err := session.Dispatch(ctx, interrupt)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Dispatch(ctx, sessionloop.Command{Kind: sessionloop.CommandInterrupt, RunID: receipt.RunID}); err != nil {
-		t.Fatalf("a second interrupt must be accepted idempotently, got %v", err)
+	second, err := session.Dispatch(ctx, interrupt)
+	if err != nil {
+		t.Fatalf("idempotent interrupt replay failed: %v", err)
+	}
+	if first != second {
+		t.Fatalf("idempotent interrupt receipts diverge:\nfirst  %#v\nsecond %#v", first, second)
 	}
 	settled, _ := awaitSettled(t, stream, receipt.RunID)
 	if settled.Outcome.Kind != sessionloop.RunInterrupted {

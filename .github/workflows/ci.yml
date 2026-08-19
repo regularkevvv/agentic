@@ -30,6 +30,9 @@ jobs:
         with:
           version: v2.1.6
           install-mode: goinstall
+          # `config verify` fetches a remote JSON schema with a hard-coded
+          # two-second timeout. `run` still loads and validates the config.
+          verify: false
 
   test:
     name: Test
@@ -88,6 +91,7 @@ jobs:
         with:
           version: v2.1.6
           install-mode: goinstall
+          verify: false
           working-directory: provider/${{ matrix.provider }}
 
   harness:
@@ -127,6 +131,7 @@ jobs:
         with:
           version: v2.1.6
           install-mode: goinstall
+          verify: false
           working-directory: harness
 
   otel-module:
@@ -167,6 +172,7 @@ jobs:
         with:
           version: v2.1.6
           install-mode: goinstall
+          verify: false
           working-directory: otel
 
   gomonty-module:
@@ -204,6 +210,7 @@ jobs:
         with:
           version: v2.1.6
           install-mode: goinstall
+          verify: false
           working-directory: harness/codemode/gomonty
 
   sessionloop-module:
@@ -243,6 +250,7 @@ jobs:
         with:
           version: v2.1.6
           install-mode: goinstall
+          verify: false
           working-directory: harness/sessionloop
 
   tui-module:
@@ -280,6 +288,7 @@ jobs:
         with:
           version: v2.1.6
           install-mode: goinstall
+          verify: false
           working-directory: tui
 
   # The live tests and the examples are their own module, so they have left the
@@ -325,6 +334,7 @@ jobs:
         with:
           version: v2.1.6
           install-mode: goinstall
+          verify: false
           working-directory: e2e
           args: --build-tags=e2e
 
