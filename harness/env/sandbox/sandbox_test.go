@@ -235,7 +235,11 @@ func TestExecutionHelpers(t *testing.T) {
 	if err := os.Chdir(previousDirectory); err != nil {
 		t.Fatal(err)
 	}
-	if resolveErr != nil || resolved != "/bin/echo" {
+	canonicalEcho, err := filepath.EvalSymlinks("/bin/echo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolveErr != nil || resolved != canonicalEcho {
 		t.Fatalf("relative PATH command = %q, %v", resolved, resolveErr)
 	}
 	path, err := privateTemp()

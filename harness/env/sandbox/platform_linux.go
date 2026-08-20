@@ -131,7 +131,7 @@ func enterLinuxSandbox(root, temporary, target string, network bool) error {
 	if err != nil {
 		return fmt.Errorf("create landlock ruleset: %w", err)
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	readOnly := landlockAccessReadFile | landlockAccessReadDir
 	for _, path := range []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/proc/self", "/proc/thread-self", "/opt", "/nix/store"} {
 		if err := addLandlockPath(fd, path, readOnly); err != nil && !errors.Is(err, os.ErrNotExist) {
@@ -194,7 +194,7 @@ func addLandlockPath(ruleset int, path string, access uint64) error {
 	if err != nil {
 		return err
 	}
-	defer unix.Close(fd)
+	defer func() { _ = unix.Close(fd) }()
 	attribute := landlockPathBeneathAttr{AllowedAccess: access, ParentFD: int32(fd)}
 	_, _, errno := unix.Syscall6(
 		unix.SYS_LANDLOCK_ADD_RULE, uintptr(ruleset), landlockRulePathBeneath,

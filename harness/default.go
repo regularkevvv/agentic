@@ -17,6 +17,7 @@ import (
 	environmentcapability "github.com/regularkevvv/agentic/harness/capability/environment"
 	jsoncodec "github.com/regularkevvv/agentic/harness/codec/json"
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
+	harnessenv "github.com/regularkevvv/agentic/harness/env"
 	envlocal "github.com/regularkevvv/agentic/harness/env/local"
 	"github.com/regularkevvv/agentic/harness/event/inproc"
 	"github.com/regularkevvv/agentic/harness/permission"
@@ -24,12 +25,17 @@ import (
 	storejsonl "github.com/regularkevvv/agentic/harness/store/jsonl"
 )
 
-// DefaultConfig names every host location and model geometry assumption used
-// by the convenient local assembly.
+// DefaultConfig names the durable host locations, execution environment, and
+// model geometry assumptions used by the convenience assembly.
 type DefaultConfig struct {
 	WorkspaceRoot       string
 	SessionDir          string
 	ContextWindowTokens int
+	// Environments optionally replaces the default host-local execution
+	// substrate. Each returned lease must expose filesystem and shell facets
+	// over the same logical workspace. When nil, WorkspaceRoot is required and
+	// the ordinary non-sandboxed local environment is used.
+	Environments harnessenv.Factory
 
 	ToolCancellationGrace time.Duration
 	TokenCounter          contextpolicy.TokenCounter
@@ -53,8 +59,8 @@ type DefaultAssembly struct {
 	Capabilities []Capability
 }
 
-// AssembleDefault constructs the replaceable local adapters and ordinary
-// public capabilities behind Default.
+// AssembleDefault constructs the replaceable adapters and ordinary public
+// capabilities behind Default.
 func AssembleDefault(config DefaultConfig) (DefaultAssembly, error) {
 	workspace, sessions, err := validateDefaultPaths(config)
 	if err != nil {
@@ -84,13 +90,16 @@ func AssembleDefault(config DefaultConfig) (DefaultAssembly, error) {
 	if err != nil {
 		return DefaultAssembly{}, err
 	}
-	environments, err := envlocal.NewFactory(envlocal.Config{
-		Root:     workspace,
-		Cwd:      ".",
-		Symlinks: envlocal.SymlinkWithinRoot,
-	})
-	if err != nil {
-		return DefaultAssembly{}, err
+	environments := config.Environments
+	if environments == nil {
+		environments, err = envlocal.NewFactory(envlocal.Config{
+			Root:     workspace,
+			Cwd:      ".",
+			Symlinks: envlocal.SymlinkWithinRoot,
+		})
+		if err != nil {
+			return DefaultAssembly{}, err
+		}
 	}
 	processors, err := spill.NewFactory(artifacts, spillConfig)
 	if err != nil {
@@ -164,8 +173,9 @@ func AssembleDefault(config DefaultConfig) (DefaultAssembly, error) {
 	}, nil
 }
 
-// Default constructs the experimental local harness. Local shell commands
-// run as the host user; this assembly is governance policy, not an OS sandbox.
+// Default constructs the experimental convenience harness. Unless an
+// Environments factory is supplied, local shell commands run as the host user;
+// this assembly is governance policy, not an implicit OS sandbox.
 func Default[O any](runner agentic.Runner[O], config DefaultConfig) (*Harness[O], error) {
 	if _, err := agentic.RequireDriver(runner); err != nil {
 		return nil, err
@@ -185,28 +195,32 @@ func validateDefaultPaths(config DefaultConfig) (string, string, error) {
 	if config.ContextWindowTokens <= 0 {
 		return "", "", errors.New("default context window tokens must be positive")
 	}
-	if config.WorkspaceRoot == "" || !filepath.IsAbs(config.WorkspaceRoot) {
-		return "", "", errors.New("default workspace root must be absolute")
-	}
 	if config.SessionDir == "" || !filepath.IsAbs(config.SessionDir) {
 		return "", "", errors.New("default session directory must be absolute")
 	}
-	workspace, err := filepath.EvalSymlinks(filepath.Clean(config.WorkspaceRoot))
-	if err != nil {
-		return "", "", fmt.Errorf("canonicalize default workspace: %w", err)
-	}
-	info, err := os.Stat(workspace)
-	if err != nil {
-		return "", "", fmt.Errorf("stat default workspace: %w", err)
-	}
-	if !info.IsDir() {
-		return "", "", errors.New("default workspace root is not a directory")
+	workspace := config.WorkspaceRoot
+	if config.Environments == nil {
+		if workspace == "" || !filepath.IsAbs(workspace) {
+			return "", "", errors.New("default workspace root must be absolute")
+		}
+		var err error
+		workspace, err = filepath.EvalSymlinks(filepath.Clean(workspace))
+		if err != nil {
+			return "", "", fmt.Errorf("canonicalize default workspace: %w", err)
+		}
+		info, err := os.Stat(workspace)
+		if err != nil {
+			return "", "", fmt.Errorf("stat default workspace: %w", err)
+		}
+		if !info.IsDir() {
+			return "", "", errors.New("default workspace root is not a directory")
+		}
 	}
 	sessions, err := canonicalFuturePath(config.SessionDir)
 	if err != nil {
 		return "", "", fmt.Errorf("canonicalize default session directory: %w", err)
 	}
-	if pathsOverlap(workspace, sessions) {
+	if config.Environments == nil && pathsOverlap(workspace, sessions) {
 		return "", "", errors.New("default workspace and session directory must not overlap")
 	}
 	return workspace, sessions, nil

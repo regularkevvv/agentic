@@ -8,9 +8,12 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
+	harnessenv "github.com/regularkevvv/agentic/harness/env"
+	memoryenv "github.com/regularkevvv/agentic/harness/env/memory"
 	"github.com/regularkevvv/agentic/harness/permission"
 	providertest "github.com/regularkevvv/agentic/provider/test"
 
@@ -151,6 +154,165 @@ func TestBuildCreatesWorkingHarnessAdapter(t *testing.T) {
 	if got := FromResolved(resolved); got.ProfileName != "p" || got.PromptCacheRetention != agentic.PromptCacheShort {
 		t.Fatalf("from resolved = %#v", got)
 	}
+}
+
+func TestBuildUsesCompleteCustomEnvironment(t *testing.T) {
+	t.Parallel()
+	factory := FactoryFunc{Name: "fake", Create: func(context.Context, ModelConfig) (agentic.Model, error) {
+		return providertest.NewTestModel(providertest.ModelResponse{Text: "done"}), nil
+	}}
+	registry, config := buildFixture(t, factory)
+	memoryFactory, err := memoryenv.NewFactory(memoryenv.Config{
+		Cwd: "/workspace",
+		Shell: func(context.Context, harnessenv.Command) (harnessenv.CommandResult, error) {
+			return harnessenv.CommandResult{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var opens atomic.Int32
+	config.WorkspaceRoot = "memory:/workspace"
+	config.Environments = harnessenv.FactoryFunc(func(ctx context.Context, sessionID string) (harnessenv.Lease, error) {
+		opens.Add(1)
+		return memoryFactory.Open(ctx, sessionID)
+	})
+	config.ExecutionLabel = "  memory environment  "
+	assembly, err := Build(context.Background(), registry, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := assembly.Host.NewSession(context.Background(), uit.SessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close(context.Background()) }()
+	snapshot, err := session.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opens.Load() != 1 || snapshot.Workspace != "memory:/workspace" || snapshot.Execution != "memory environment" {
+		t.Fatalf("custom environment snapshot = %#v, opens=%d", snapshot, opens.Load())
+	}
+}
+
+func TestBuildDoesNotFallBackFromCustomEnvironmentFailure(t *testing.T) {
+	t.Parallel()
+	factory := FactoryFunc{Name: "fake", Create: func(context.Context, ModelConfig) (agentic.Model, error) {
+		return providertest.NewTestModel(providertest.ModelResponse{Text: "done"}), nil
+	}}
+	registry, config := buildFixture(t, factory)
+	want := errors.New("custom environment unavailable")
+	config.WorkspaceRoot = "remote:workspace"
+	config.Environments = harnessenv.FactoryFunc(func(context.Context, string) (harnessenv.Lease, error) {
+		return nil, want
+	})
+	assembly, err := Build(context.Background(), registry, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := assembly.Host.NewSession(context.Background(), uit.SessionOptions{}); !errors.Is(err, want) {
+		t.Fatalf("custom environment failure = %v", err)
+	}
+}
+
+func TestBuildRejectsIncompleteCustomEnvironmentLease(t *testing.T) {
+	t.Parallel()
+	factory := FactoryFunc{Name: "fake", Create: func(context.Context, ModelConfig) (agentic.Model, error) {
+		return providertest.NewTestModel(providertest.ModelResponse{Text: "done"}), nil
+	}}
+	registry, config := buildFixture(t, factory)
+	memoryFactory, err := memoryenv.NewFactory(memoryenv.Config{Cwd: "/workspace"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.WorkspaceRoot = "memory:/workspace"
+	config.Environments = memoryFactory
+	assembly, err := Build(context.Background(), registry, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := assembly.Host.NewSession(context.Background(), uit.SessionOptions{}); err == nil || !strings.Contains(err.Error(), "does not provide a shell") {
+		t.Fatalf("incomplete environment error = %v", err)
+	}
+}
+
+func TestCustomEnvironmentIsNarrowedForDelegation(t *testing.T) {
+	t.Parallel()
+	model := providertest.NewTestModel(
+		providertest.ModelResponse{ToolCalls: []agentic.ToolUse{{
+			ID: "delegate", Name: "delegate_task", Input: map[string]any{"task": "inspect the workspace"},
+		}}},
+		providertest.ModelResponse{Text: "child complete"},
+		providertest.ModelResponse{Text: "parent complete"},
+	)
+	factory := FactoryFunc{Name: "fake", Create: func(context.Context, ModelConfig) (agentic.Model, error) {
+		return model, nil
+	}}
+	registry, config := buildFixture(t, factory)
+	memoryFactory, err := memoryenv.NewFactory(memoryenv.Config{
+		Cwd: "/workspace",
+		Shell: func(context.Context, harnessenv.Command) (harnessenv.CommandResult, error) {
+			return harnessenv.CommandResult{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracked := &narrowTrackingFactory{inner: memoryFactory}
+	config.WorkspaceRoot = "memory:/workspace"
+	config.Environments = tracked
+	config.Permission = "custom"
+	config.PermissionPolicy, err = permission.New(permission.DecisionDeny, permission.Rule{
+		Pattern: "subagent/delegate/agent/delegate_task", Decision: permission.DecisionAllow,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := Build(context.Background(), registry, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := assembly.Host.NewSession(context.Background(), uit.SessionOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close(context.Background()) }()
+	if err := session.Submit(context.Background(), uit.Input{Text: "delegate this"}); err != nil {
+		t.Fatal(err)
+	}
+	if tracked.narrows.Load() != 1 {
+		t.Fatalf("custom environment narrow calls = %d", tracked.narrows.Load())
+	}
+}
+
+type narrowTrackingFactory struct {
+	inner   harnessenv.Factory
+	narrows atomic.Int32
+}
+
+func (f *narrowTrackingFactory) Open(ctx context.Context, sessionID string) (harnessenv.Lease, error) {
+	lease, err := f.inner.Open(ctx, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	narrower, ok := lease.(harnessenv.Narrower)
+	if !ok {
+		_ = lease.Close(ctx)
+		return nil, errors.New("test environment is not narrowable")
+	}
+	return &narrowTrackingLease{Lease: lease, narrower: narrower, narrows: &f.narrows}, nil
+}
+
+type narrowTrackingLease struct {
+	harnessenv.Lease
+	narrower harnessenv.Narrower
+	narrows  *atomic.Int32
+}
+
+func (l *narrowTrackingLease) Narrow(ctx context.Context, request harnessenv.NarrowRequest) (harnessenv.Lease, error) {
+	l.narrows.Add(1)
+	return l.narrower.Narrow(ctx, request)
 }
 
 func TestBuildFailsBeforeOrAtOwnedBoundary(t *testing.T) {

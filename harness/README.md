@@ -98,24 +98,32 @@ module [`sessionloop/`](sessionloop/README.md).
 
 The same core accepts other conforming adapters without modification. Reusable
 conformance suites live in `store/storetest`, `event/eventtest`, `env/envtest`,
-and `artifact/artifacttest`. The `env/local` adapter constrains its filesystem
-methods to a root, but its shell runs as the host user and is **not an OS
-sandbox**.
+and `artifact/artifacttest`. An `env.Factory` is the complete execution-
+environment extension point: every session lease supplies a `FileSystem` and
+an optional `Shell`, and those facets must operate over the same logical
+workspace. `DefaultConfig.Environments` can inject such a factory directly;
+when it is omitted, `harness.Default` constructs `env/local`.
+
+The `env/local` adapter constrains its filesystem methods to a root, but its
+shell runs as the host user and is **not an OS sandbox**. Filesystem confinement
+alone must never be presented as process confinement.
 
 Applications that need local command confinement can inject `env/sandbox`
 instead. It combines the same rooted file API with Seatbelt on macOS or
 Landlock plus seccomp on Linux, denies network creation, and limits writes to
 the workspace plus one private command-temporary directory. The backend fails
 closed when those platform facilities are unavailable; Windows remains
-unsupported until an AppContainer implementation exists. On macOS, executable
+unsupported until a native backend is implemented. On macOS, executable
 children are limited to the selected command's own helper/toolchain root and
 sandbox-produced workspace or temporary binaries.
 
-`harness.Default` is a convenience composition, not a dependency direction:
-it explicitly requires absolute, non-overlapping workspace/session paths and
+`harness.Default` is a convenience composition, not a dependency direction. By
+default it requires absolute, non-overlapping workspace/session paths and
 assembles the same public capabilities over Local, JSONL, file-artifact, and
-in-process adapters. Local permission policy is governance around ordinary host
-execution; it does not create an OS sandbox.
+in-process adapters. When `DefaultConfig.Environments` is supplied, the factory
+owns workspace validation and interpretation while the session directory
+remains an absolute host path. Local permission policy is governance around
+ordinary host execution; it does not create an OS sandbox.
 
 GoMonty is an optional adapter; the codemode core still depends only on its
 generic `Executor` port. The adapter pins the source-only

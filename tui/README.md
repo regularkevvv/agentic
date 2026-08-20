@@ -16,15 +16,23 @@ Thinking is model reasoning, not user-facing
 progress commentary; `Ctrl+T` cycles collapsed, hidden, and explicitly visible
 modes.
 
-The standard command requires an OS command sandbox: command processes use
-Seatbelt on macOS and Landlock plus seccomp on Linux. File tools remain direct
-Harness operations confined with `os.Root`; permission prompts still govern
-the requested effects independently of kernel isolation. Network creation is
-denied, writes are limited to the workspace and a private per-command temporary
-directory, and unrelated host/user paths are not readable. Windows currently
-fails closed because no AppContainer backend is implemented. This standard
-assembly adds no third-party sandbox package; it uses the existing `x/sys`
-dependency and platform facilities.
+By default, the standard command requires a coherent local environment: file
+tools are confined to the workspace with `os.Root`, while command processes use
+Seatbelt on macOS and Landlock plus seccomp on Linux. Both facets share the same
+workspace root. Permission prompts still govern requested effects independently
+of kernel isolation. Network creation is denied, writes are limited to the
+workspace and a private per-command temporary directory, and unrelated
+host/user paths are not readable. Windows currently fails closed because no
+native backend is implemented. This default adds no third-party sandbox package;
+it uses the existing `x/sys` dependency and platform facilities.
+
+Applications may instead set `standard.Config.Environments` to any `env.Factory`
+whose session leases present filesystem and shell operations over one logical
+workspace, such as a container, VM, or remote executor. Because Standard also
+installs `delegate_task`, these leases must implement `env.Narrower`; incomplete
+leases are closed and rejected when the session opens. Standard never falls
+back from a supplied factory to host execution. `ExecutionLabel` is display-
+only metadata and is not treated as evidence of confinement.
 
 The standard assembly also registers `delegate_task`. A model may issue up to
 four delegation calls in one tool batch; they run as fork/join child sessions

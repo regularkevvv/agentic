@@ -12,6 +12,8 @@ import (
 
 	artifactcapability "github.com/regularkevvv/agentic/harness/capability/artifacts"
 	"github.com/regularkevvv/agentic/harness/contextpolicy"
+	harnessenv "github.com/regularkevvv/agentic/harness/env"
+	memoryenv "github.com/regularkevvv/agentic/harness/env/memory"
 )
 
 func TestAssembleDefaultIsPublicCapabilityComposition(t *testing.T) {
@@ -74,6 +76,49 @@ func TestAssembleDefaultIsPublicCapabilityComposition(t *testing.T) {
 	}
 	if !reflect.DeepEqual(direct.Capabilities(), want) {
 		t.Fatalf("Default capabilities = %v", direct.Capabilities())
+	}
+}
+
+func TestAssembleDefaultUsesCompleteEnvironmentFactory(t *testing.T) {
+	t.Parallel()
+	var executed harnessenv.Command
+	environments, err := memoryenv.NewFactory(memoryenv.Config{
+		Cwd: "/workspace",
+		Shell: func(_ context.Context, command harnessenv.Command) (harnessenv.CommandResult, error) {
+			executed = command
+			return harnessenv.CommandResult{Stdout: []byte("custom")}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assembly, err := AssembleDefault(DefaultConfig{
+		SessionDir:          filepath.Join(t.TempDir(), "sessions"),
+		ContextWindowTokens: 1000,
+		Environments:        environments,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assembly.Runtime.Environments != environments {
+		t.Fatal("AssembleDefault replaced the supplied environment factory")
+	}
+	lease, err := assembly.Runtime.Environments.Open(context.Background(), "session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = lease.Close(context.Background()) }()
+	resource, err := lease.Files().CanonicalPath(context.Background(), ".")
+	if err != nil || resource.Scheme != "memory" || resource.ID != "/workspace" {
+		t.Fatalf("custom filesystem root = %#v, %v", resource, err)
+	}
+	shell, ok := lease.Shell()
+	if !ok {
+		t.Fatal("custom environment omitted its shell facet")
+	}
+	result, err := shell.Exec(context.Background(), harnessenv.Command{Name: "proof", Dir: "."})
+	if err != nil || string(result.Stdout) != "custom" || executed.Name != "proof" {
+		t.Fatalf("custom shell = %#v, %#v, %v", executed, result, err)
 	}
 }
 
