@@ -152,7 +152,15 @@ func TestSandboxAllowsExplicitNetworkPolicy(t *testing.T) {
 	}
 	defer lease.Close(context.Background())
 	shell, _ := lease.Shell()
-	command := harnessenv.Command{Name: "/bin/sh", Args: []string{"-c", "true"}}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := harnessenv.Command{
+		Name: executable,
+		Args: []string{"-test.run", "^TestSandboxNetworkProbeProcess$", "-test.v"},
+		Env:  []string{"AGENTIC_TEST_NETWORK_PROBE=allow"},
+	}
 	result, err := shell.Exec(context.Background(), command)
 	if err != nil || result.ExitCode != 0 {
 		t.Fatalf("network-enabled sandbox command = %#v, %v", result, err)
@@ -358,7 +366,7 @@ func TestSandboxDeniesNetworkCreation(t *testing.T) {
 	result, err := shell.Exec(context.Background(), harnessenv.Command{
 		Name: executable,
 		Args: []string{"-test.run", "^TestSandboxNetworkProbeProcess$", "-test.v"},
-		Env:  []string{"AGENTIC_TEST_NETWORK_PROBE=1"},
+		Env:  []string{"AGENTIC_TEST_NETWORK_PROBE=deny"},
 	})
 	if err != nil || result.ExitCode != 0 {
 		t.Fatalf("network denial probe = %#v, %v", result, err)
@@ -366,12 +374,24 @@ func TestSandboxDeniesNetworkCreation(t *testing.T) {
 }
 
 func TestSandboxNetworkProbeProcess(t *testing.T) {
-	if os.Getenv("AGENTIC_TEST_NETWORK_PROBE") != "1" {
+	policy := os.Getenv("AGENTIC_TEST_NETWORK_PROBE")
+	if policy == "" {
 		t.Skip("sandbox child probe")
 	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err == nil {
+	if listener != nil {
 		_ = listener.Close()
-		t.Fatal("sandbox allowed a TCP listener")
+	}
+	switch policy {
+	case "allow":
+		if err != nil {
+			t.Fatalf("sandbox denied an explicitly allowed TCP listener: %v", err)
+		}
+	case "deny":
+		if err == nil {
+			t.Fatal("sandbox allowed a TCP listener")
+		}
+	default:
+		t.Fatalf("unknown network probe policy %q", policy)
 	}
 }

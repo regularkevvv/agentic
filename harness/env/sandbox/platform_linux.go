@@ -6,9 +6,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
-	"unsafe"
 
+	seccomp "github.com/elastic/go-seccomp-bpf"
+	"github.com/landlock-lsm/go-landlock/landlock"
+	landlocksyscall "github.com/landlock-lsm/go-landlock/landlock/syscall"
 	"golang.org/x/sys/unix"
 
 	harnessenv "github.com/regularkevvv/agentic/harness/env"
@@ -17,61 +20,65 @@ import (
 const (
 	bootstrapArgument = "--agentic-sandbox-bootstrap"
 	bootstrapEnv      = "AGENTIC_SANDBOX_BOOTSTRAP"
-
-	landlockCreateRulesetVersion = 1
-	landlockRulePathBeneath      = 1
-
-	landlockAccessExecute    = uint64(1 << 0)
-	landlockAccessWriteFile  = uint64(1 << 1)
-	landlockAccessReadFile   = uint64(1 << 2)
-	landlockAccessReadDir    = uint64(1 << 3)
-	landlockAccessRemoveDir  = uint64(1 << 4)
-	landlockAccessRemoveFile = uint64(1 << 5)
-	landlockAccessMakeChar   = uint64(1 << 6)
-	landlockAccessMakeDir    = uint64(1 << 7)
-	landlockAccessMakeReg    = uint64(1 << 8)
-	landlockAccessMakeSock   = uint64(1 << 9)
-	landlockAccessMakeFIFO   = uint64(1 << 10)
-	landlockAccessMakeBlock  = uint64(1 << 11)
-	landlockAccessMakeSym    = uint64(1 << 12)
-	landlockAccessRefer      = uint64(1 << 13)
-	landlockAccessTruncate   = uint64(1 << 14)
 )
-
-type landlockRulesetAttr struct {
-	HandledAccessFS uint64
-}
-
-type landlockPathBeneathAttr struct {
-	AllowedAccess uint64
-	ParentFD      int32
-	_             uint32
-}
 
 func init() {
 	if os.Getenv(bootstrapEnv) != "1" || len(os.Args) < 7 || os.Args[1] != bootstrapArgument {
 		return
 	}
-	root, temporary, cwd, target := os.Args[2], os.Args[3], os.Args[4], os.Args[5]
-	network := os.Args[6] == "network"
-	if err := enterLinuxSandbox(root, temporary, target, network); err != nil {
-		fmt.Fprintln(os.Stderr, "agentic sandbox:", err)
-		os.Exit(126)
-	}
-	if err := os.Chdir(cwd); err != nil {
-		fmt.Fprintln(os.Stderr, "agentic sandbox: chdir:", err)
-		os.Exit(126)
-	}
-	environment := withoutEnvironment(os.Environ(), bootstrapEnv)
-	arguments := append([]string{target}, os.Args[7:]...)
-	if err := unix.Exec(target, arguments, environment); err != nil {
-		fmt.Fprintln(os.Stderr, "agentic sandbox: exec:", err)
-		os.Exit(126)
+	linuxBootstrapMain(
+		os.Args, os.Environ(), os.Stderr,
+		landlockABI, landlock.Config.RestrictPaths, seccomp.LoadFilter,
+		os.Chdir, unix.Exec, os.Exit,
+	)
+}
+
+func linuxBootstrapMain(
+	arguments, environment []string,
+	stderr io.Writer,
+	abi func() (int, error),
+	restrict func(landlock.Config, ...landlock.Rule) error,
+	load func(seccomp.Filter) error,
+	chdir func(string) error,
+	exec func(string, []string, []string) error,
+	exit func(int),
+) {
+	if err := linuxBootstrap(arguments, environment, abi, restrict, load, chdir, exec); err != nil {
+		_, _ = fmt.Fprintln(stderr, "agentic sandbox:", err)
+		exit(126)
 	}
 }
 
+func linuxBootstrap(
+	arguments, environment []string,
+	abi func() (int, error),
+	restrict func(landlock.Config, ...landlock.Rule) error,
+	load func(seccomp.Filter) error,
+	chdir func(string) error,
+	exec func(string, []string, []string) error,
+) error {
+	root, temporary, cwd, target := arguments[2], arguments[3], arguments[4], arguments[5]
+	network := arguments[6] == "network"
+	if err := configureLinuxSandbox(root, temporary, target, network, abi, restrict, load); err != nil {
+		return err
+	}
+	if err := chdir(cwd); err != nil {
+		return fmt.Errorf("chdir: %w", err)
+	}
+	environment = withoutEnvironment(environment, bootstrapEnv)
+	commandArguments := append([]string{target}, arguments[7:]...)
+	if err := exec(target, commandArguments, environment); err != nil {
+		return fmt.Errorf("exec: %w", err)
+	}
+	return nil
+}
+
 func probeBackend() (string, error) {
-	version, err := landlockABI()
+	return probeLinuxBackend(landlockABI)
+}
+
+func probeLinuxBackend(abi func() (int, error)) (string, error) {
+	version, err := abi()
 	if err != nil {
 		return "", fmt.Errorf("landlock unavailable: %w", err)
 	}
@@ -110,141 +117,93 @@ func execute(ctx context.Context, value execution) (harnessenv.CommandResult, er
 	return run(ctx, helper, args, environment, value.cwd, value.command.Stdin)
 }
 
-func enterLinuxSandbox(root, temporary, target string, network bool) error {
-	version, err := landlockABI()
+func configureLinuxSandbox(
+	root, temporary, target string,
+	network bool,
+	abi func() (int, error),
+	restrict func(landlock.Config, ...landlock.Rule) error,
+	load func(seccomp.Filter) error,
+) error {
+	version, err := abi()
 	if err != nil {
 		return err
 	}
-	handled := landlockAccessExecute | landlockAccessWriteFile | landlockAccessReadFile |
-		landlockAccessReadDir | landlockAccessRemoveDir | landlockAccessRemoveFile |
-		landlockAccessMakeChar | landlockAccessMakeDir | landlockAccessMakeReg |
-		landlockAccessMakeSock | landlockAccessMakeFIFO | landlockAccessMakeBlock |
-		landlockAccessMakeSym
-	if version >= 2 {
-		handled |= landlockAccessRefer
+	config, rules := linuxLandlockPolicy(version, root, temporary, target)
+	if err := restrict(config, rules...); err != nil {
+		return fmt.Errorf("restrict with landlock: %w", err)
 	}
-	if version >= 3 {
-		handled |= landlockAccessTruncate
-	}
-	attribute := landlockRulesetAttr{HandledAccessFS: handled}
-	fd, err := landlockCreateRuleset(&attribute, unsafe.Sizeof(attribute), 0)
-	if err != nil {
-		return fmt.Errorf("create landlock ruleset: %w", err)
-	}
-	defer func() { _ = unix.Close(fd) }()
-	readOnly := landlockAccessReadFile | landlockAccessReadDir
+	return loadSeccompFilter(network, load)
+}
+
+func linuxLandlockPolicy(version int, root, temporary, target string) (landlock.Config, []landlock.Rule) {
+	readOnly := landlock.AccessFSSet(landlocksyscall.AccessFSReadFile | landlocksyscall.AccessFSReadDir)
+	executable := readOnly | landlock.AccessFSSet(landlocksyscall.AccessFSExecute)
+	rules := make([]landlock.Rule, 0, 20)
 	for _, path := range []string{"/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/proc/self", "/proc/thread-self", "/opt", "/nix/store"} {
-		if err := addLandlockPath(fd, path, readOnly); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+		rules = append(rules, landlock.PathAccess(readOnly, path).IgnoreIfMissing())
 	}
 	// The kernel treats an ELF interpreter as part of execution. Restrict that
 	// grant to immutable system library trees rather than all system binaries.
 	for _, path := range []string{"/lib", "/lib64", "/usr/lib"} {
-		if err := addLandlockPath(fd, path, readOnly|landlockAccessExecute); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+		rules = append(rules, landlock.PathAccess(executable, path).IgnoreIfMissing())
 	}
 	helpers := commandHelpers(target)
-	if err := addLandlockPath(fd, helpers, readOnly|landlockAccessExecute); err != nil {
-		return err
+	rules = append(rules,
+		landlock.PathAccess(executable, helpers),
+		landlock.PathAccess(
+			landlock.AccessFSSet(landlocksyscall.AccessFSReadFile|landlocksyscall.AccessFSExecute),
+			target,
+		),
+	)
+	readWrite := landlock.RWDirs(root, temporary)
+	var config landlock.Config
+	switch {
+	case version >= 3:
+		config = landlock.V3
+		readWrite = readWrite.WithRefer()
+	case version >= 2:
+		config = landlock.V2
+		readWrite = readWrite.WithRefer()
+	default:
+		config = landlock.V1
 	}
-	if err := addLandlockPath(fd, target, landlockAccessReadFile|landlockAccessExecute); err != nil {
-		return err
-	}
-	readWrite := handled
-	for _, path := range []string{root, temporary} {
-		if err := addLandlockPath(fd, path, readWrite); err != nil {
-			return err
-		}
-	}
+	rules = append(rules, readWrite)
+	deviceAccess := landlock.AccessFSSet(landlocksyscall.AccessFSReadFile | landlocksyscall.AccessFSWriteFile)
 	for _, path := range []string{"/dev/null", "/dev/tty", "/dev/random", "/dev/urandom"} {
-		if err := addLandlockPath(fd, path, landlockAccessReadFile|landlockAccessWriteFile); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+		rules = append(rules, landlock.PathAccess(deviceAccess, path).IgnoreIfMissing())
 	}
-	if err := unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0); err != nil {
-		return fmt.Errorf("set no-new-privileges: %w", err)
-	}
-	if err := landlockRestrictSelf(fd); err != nil {
-		return fmt.Errorf("restrict with landlock: %w", err)
-	}
-	return installSeccomp(network)
+	return config, rules
 }
 
 func landlockABI() (int, error) {
-	fd, err := landlockCreateRuleset(nil, 0, landlockCreateRulesetVersion)
-	return fd, err
+	return landlocksyscall.LandlockGetABIVersion()
 }
 
-func landlockCreateRuleset(attribute *landlockRulesetAttr, size uintptr, flags uint32) (int, error) {
-	var pointer uintptr
-	if attribute != nil {
-		pointer = uintptr(unsafe.Pointer(attribute))
-	}
-	value, _, errno := unix.Syscall(unix.SYS_LANDLOCK_CREATE_RULESET, pointer, size, uintptr(flags))
-	if errno != 0 {
-		return 0, errno
-	}
-	return int(value), nil
-}
-
-func addLandlockPath(ruleset int, path string, access uint64) error {
-	fd, err := unix.Open(path, unix.O_PATH|unix.O_CLOEXEC, 0)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = unix.Close(fd) }()
-	attribute := landlockPathBeneathAttr{AllowedAccess: access, ParentFD: int32(fd)}
-	_, _, errno := unix.Syscall6(
-		unix.SYS_LANDLOCK_ADD_RULE, uintptr(ruleset), landlockRulePathBeneath,
-		uintptr(unsafe.Pointer(&attribute)), 0, 0, 0,
-	)
-	if errno != 0 {
-		return fmt.Errorf("add landlock path %s: %w", path, errno)
+func loadSeccompFilter(network bool, load func(seccomp.Filter) error) error {
+	if err := load(linuxSeccompFilter(network)); err != nil {
+		return fmt.Errorf("install seccomp filter: %w", err)
 	}
 	return nil
 }
 
-func landlockRestrictSelf(ruleset int) error {
-	_, _, errno := unix.Syscall(unix.SYS_LANDLOCK_RESTRICT_SELF, uintptr(ruleset), 0, 0)
-	if errno != 0 {
-		return errno
-	}
-	return nil
-}
-
-func installSeccomp(network bool) error {
-	denied := []uint32{
-		unix.SYS_PTRACE, unix.SYS_MOUNT, unix.SYS_UMOUNT2, unix.SYS_PIVOT_ROOT,
-		unix.SYS_CHROOT, unix.SYS_UNSHARE, unix.SYS_SETNS, unix.SYS_BPF,
-		unix.SYS_PERF_EVENT_OPEN,
+func linuxSeccompFilter(network bool) seccomp.Filter {
+	denied := []string{
+		"ptrace", "mount", "umount2", "pivot_root", "chroot", "unshare", "setns", "bpf", "perf_event_open",
 	}
 	if !network {
-		denied = append(denied, unix.SYS_SOCKET, unix.SYS_SOCKETPAIR)
+		denied = append(denied, "socket", "socketpair")
 	}
-	filter := []unix.SockFilter{
-		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 4},
-		{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jt: 1, K: auditArchitecture},
-		{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_KILL_PROCESS},
-		{Code: unix.BPF_LD | unix.BPF_W | unix.BPF_ABS, K: 0},
+	return seccomp.Filter{
+		NoNewPrivs: true,
+		Flag:       seccomp.FilterFlagTSync,
+		Policy: seccomp.Policy{
+			DefaultAction: seccomp.ActionAllow,
+			Syscalls: []seccomp.SyscallGroup{{
+				Names:  denied,
+				Action: seccomp.ActionErrno,
+			}},
+		},
 	}
-	for _, number := range denied {
-		filter = append(filter,
-			unix.SockFilter{Code: unix.BPF_JMP | unix.BPF_JEQ | unix.BPF_K, Jf: 1, K: number},
-			unix.SockFilter{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ERRNO | uint32(unix.EPERM)},
-		)
-	}
-	filter = append(filter, unix.SockFilter{Code: unix.BPF_RET | unix.BPF_K, K: unix.SECCOMP_RET_ALLOW})
-	program := unix.SockFprog{Len: uint16(len(filter)), Filter: &filter[0]}
-	_, _, errno := unix.RawSyscall6(
-		unix.SYS_PRCTL, unix.PR_SET_SECCOMP, unix.SECCOMP_MODE_FILTER,
-		uintptr(unsafe.Pointer(&program)), 0, 0, 0,
-	)
-	if errno != 0 {
-		return fmt.Errorf("install seccomp filter: %w", errno)
-	}
-	return nil
 }
 
 func withoutEnvironment(environment []string, name string) []string {

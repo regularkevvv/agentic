@@ -23,8 +23,9 @@ workspace root. Permission prompts still govern requested effects independently
 of kernel isolation. Network creation is denied, writes are limited to the
 workspace and a private per-command temporary directory, and unrelated
 host/user paths are not readable. Windows currently fails closed because no
-native backend is implemented. This default adds no third-party sandbox package;
-it uses the existing `x/sys` dependency and platform facilities.
+native backend is implemented. The Linux implementation uses the focused,
+pure-Go `go-landlock` and `go-seccomp-bpf` packages; these remain private to the
+built-in Harness environment rather than becoming part of the TUI contract.
 
 Applications may instead set `standard.Config.Environments` to any `env.Factory`
 whose session leases present filesystem and shell operations over one logical
