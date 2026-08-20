@@ -329,7 +329,7 @@ func TestSubmittedTextReconcilesWithoutDuplicatesAndRollsBackOnRejection(t *test
 	model := readyModel(t, nil)
 	model.composer.SetValue("visible immediately")
 	_, command := model.Update(key(tea.KeyEnter, "", 0))
-	if command == nil || len(model.optimistic) != 1 || !strings.Contains(model.View().Content, "USER") || !strings.Contains(model.View().Content, "visible immediately") {
+	if command == nil || len(model.optimistic) != 1 || strings.Contains(model.View().Content, "USER") || !strings.Contains(model.View().Content, "> visible immediately") {
 		t.Fatalf("optimistic submission was not rendered: pending=%#v view=%q", model.optimistic, model.View().Content)
 	}
 
@@ -525,6 +525,25 @@ func TestBridgeReconciliationDropsBufferedEventsAlreadyInSnapshot(t *testing.T) 
 	}
 }
 
+func TestChildEventsAdvanceCursorWithoutMutatingParentView(t *testing.T) {
+	t.Parallel()
+	model := readyModel(t, nil)
+	model.snapshot = uit.Snapshot{
+		SessionID: "parent", Cursor: 2, State: uit.StateRunning,
+		Transcript: []uit.Entry{{Role: uit.RoleUser, Text: "parent task"}},
+		Usage:      uit.Usage{TotalTokens: 10},
+	}
+	entry := uit.Entry{Role: uit.RoleAssistant, Text: "child-only text"}
+	usage := uit.Usage{TotalTokens: 999}
+	model.applyEvent(uit.Event{
+		Cursor: 3, SessionID: "child", ParentID: "parent", Agent: "delegate_task", Depth: 1,
+		Kind: uit.EventAssistantCommitted, Entry: &entry, Usage: &usage, Failure: "child-only failure",
+	})
+	if model.snapshot.Cursor != 3 || model.snapshot.State != uit.StateRunning || model.snapshot.Usage.TotalTokens != 10 || len(model.snapshot.Transcript) != 1 || model.preview != "" || model.banner != "" {
+		t.Fatalf("child event mutated parent state: %#v preview=%q banner=%q", model.snapshot, model.preview, model.banner)
+	}
+}
+
 func TestTerminalLayoutSnapshotsAtNarrowNormalAndWideSizes(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
@@ -533,9 +552,9 @@ func TestTerminalLayoutSnapshotsAtNarrowNormalAndWideSizes(t *testing.T) {
 		want          string
 		wantSHA       string
 	}{
-		{name: "narrow", width: 20, height: 8, want: "20x8 viewport=20x3 composer=16x1", wantSHA: "6dd2edd22bdee8b47b08fc0b2ebe774aa5eacc1b516630e8601066b33b6b4d36"},
-		{name: "normal", width: 80, height: 24, want: "80x24 viewport=80x19 composer=76x1", wantSHA: "64f29b6b7b3579b2f7f37621c2c9417f6a94a12f59ef16d83a026a78f904abe7"},
-		{name: "wide", width: 160, height: 50, want: "160x50 viewport=160x45 composer=156x1", wantSHA: "230ba71931bbe489e8e8936d18445bf6e68f3197e364d8456659dcce0ee24ce5"},
+		{name: "narrow", width: 20, height: 8, want: "20x8 viewport=20x3 composer=16x1", wantSHA: "2af8832438e91e8c1ddae793d5be9421408a4d8f667afbdd2accbb9fa3760435"},
+		{name: "normal", width: 80, height: 24, want: "80x24 viewport=76x19 composer=72x1", wantSHA: "7e842cc5649be0cc493ea78142830c7a06f15b793786cf5184f3b86985e7bc23"},
+		{name: "wide", width: 160, height: 50, want: "160x50 viewport=156x45 composer=152x1", wantSHA: "7e4a9a6284361f2cfa8fd4b87d9fb18a593ed2cfb86bbe03da15306cc9802a3d"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -571,7 +590,7 @@ func TestTerminalLayoutSnapshotsAtNarrowNormalAndWideSizes(t *testing.T) {
 					t.Fatalf("view line exceeds width %d: %q", test.width, line)
 				}
 			}
-			for _, stable := range []string{"probe", "session layout", "enter send"} {
+			for _, stable := range []string{"probe", "offline", "enter send"} {
 				if !strings.Contains(content, stable) {
 					t.Fatalf("view at %s omitted %q: %q", test.name, stable, content)
 				}

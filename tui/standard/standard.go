@@ -14,7 +14,13 @@ import (
 
 	agentic "github.com/regularkevvv/agentic"
 	harnesscore "github.com/regularkevvv/agentic/harness"
+	"github.com/regularkevvv/agentic/harness/capability"
+	environmentcapability "github.com/regularkevvv/agentic/harness/capability/environment"
+	harnessenv "github.com/regularkevvv/agentic/harness/env"
+	"github.com/regularkevvv/agentic/harness/env/local"
+	envsandbox "github.com/regularkevvv/agentic/harness/env/sandbox"
 	"github.com/regularkevvv/agentic/harness/permission"
+	"github.com/regularkevvv/agentic/harness/subagent"
 	"github.com/regularkevvv/agentic/provider/anthropic"
 	"github.com/regularkevvv/agentic/provider/openai"
 	"github.com/regularkevvv/agentic/provider/openrouter"
@@ -111,6 +117,14 @@ type Config struct {
 	PermissionPolicy     *permission.Policy
 	PromptCacheRetention agentic.PromptCacheRetention
 	ToolPresenter        uit.ToolPresenter
+	// Environments optionally supplies the complete session-scoped execution
+	// substrate. Its filesystem and shell facets must share one logical
+	// workspace, and each lease must support env.Narrower for delegate_task.
+	// When nil, Standard requires the built-in OS command sandbox.
+	Environments harnessenv.Factory
+	// ExecutionLabel describes a supplied environment in the TUI. It is
+	// presentation metadata, not a trusted claim about confinement.
+	ExecutionLabel string
 }
 
 func FromResolved(value appconfig.Resolved) Config {
@@ -137,15 +151,20 @@ func Build(ctx context.Context, registry *Registry, config Config) (Assembly, er
 	if config.SystemPromptFile == "" || config.WorkspaceRoot == "" || config.SessionDirectory == "" {
 		return Assembly{}, errors.New("system prompt file, workspace root, and session directory are required")
 	}
-	if !filepath.IsAbs(config.WorkspaceRoot) || !filepath.IsAbs(config.SessionDirectory) || !filepath.IsAbs(config.SystemPromptFile) {
-		return Assembly{}, errors.New("standard assembly paths must be absolute")
+	if !filepath.IsAbs(config.SessionDirectory) || !filepath.IsAbs(config.SystemPromptFile) {
+		return Assembly{}, errors.New("standard assembly host paths must be absolute")
 	}
-	info, err := os.Stat(config.WorkspaceRoot)
-	if err != nil {
-		return Assembly{}, fmt.Errorf("workspace root is not an accessible directory: %w", err)
-	}
-	if !info.IsDir() {
-		return Assembly{}, errors.New("workspace root is not a directory")
+	if config.Environments == nil {
+		if !filepath.IsAbs(config.WorkspaceRoot) {
+			return Assembly{}, errors.New("standard local workspace root must be absolute")
+		}
+		info, err := os.Stat(config.WorkspaceRoot)
+		if err != nil {
+			return Assembly{}, fmt.Errorf("workspace root is not an accessible directory: %w", err)
+		}
+		if !info.IsDir() {
+			return Assembly{}, errors.New("workspace root is not a directory")
+		}
 	}
 	systemPrompt, err := os.ReadFile(config.SystemPromptFile)
 	if err != nil {
@@ -174,11 +193,69 @@ func Build(ctx context.Context, registry *Registry, config Config) (Assembly, er
 		retention = agentic.PromptCacheShort
 	}
 	runner := agentic.NewAgent(string(systemPrompt), model)
-	runtime, err := harnesscore.Default[string](runner, harnesscore.DefaultConfig{
+	environments := config.Environments
+	if environments != nil {
+		environments = requireStandardEnvironment(environments)
+	}
+	defaultConfig := harnesscore.DefaultConfig{
 		WorkspaceRoot: config.WorkspaceRoot, SessionDir: config.SessionDirectory,
 		ContextWindowTokens: config.ContextWindowTokens, PermissionPolicy: policy,
 		PromptCacheRetention: retention, ModelStreaming: true,
+		Environments: environments,
+	}
+	assembly, err := harnesscore.AssembleDefault(defaultConfig)
+	if err != nil {
+		return Assembly{}, err
+	}
+	executionLabel := strings.TrimSpace(config.ExecutionLabel)
+	if config.Environments == nil {
+		sandboxFactory, err := envsandbox.NewFactory(envsandbox.Config{
+			Root: config.WorkspaceRoot, Cwd: ".", Symlinks: local.SymlinkWithinRoot,
+		})
+		if err != nil {
+			return Assembly{}, fmt.Errorf("construct required command sandbox: %w", err)
+		}
+		assembly.Runtime.Environments = sandboxFactory
+		if executionLabel == "" {
+			executionLabel = "sandbox " + sandboxFactory.Backend()
+		}
+	} else if executionLabel == "" {
+		executionLabel = "custom environment"
+	}
+	delegate, err := subagent.New(runner, subagent.Config{
+		Name:          "delegate_task",
+		Description:   "Delegate one focused task to an isolated child agent. Multiple calls in one tool batch run in parallel.",
+		Runtime:       assembly.Runtime,
+		MaxDepth:      1,
+		MaxConcurrent: 4,
+		Ordering:      capability.Ordering{Before: []string{"permissions"}},
+		Capture: subagent.Capture{
+			Environment: subagent.ModeNarrow,
+			Tools:       subagent.ModeNarrow,
+			Permissions: subagent.ModeNarrow,
+			Budget:      subagent.ModeShare,
+		},
+		EnvironmentRoot:  ".",
+		EnvironmentShell: true,
+		ToolFilter: func(name string) bool {
+			return name == environmentcapability.ToolReadFile ||
+				name == environmentcapability.ToolWriteFile ||
+				name == environmentcapability.ToolListFiles ||
+				name == environmentcapability.ToolStatFile ||
+				name == environmentcapability.ToolMakeDirectory ||
+				name == environmentcapability.ToolRemovePath ||
+				name == environmentcapability.ToolRunCommand
+		},
 	})
+	if err != nil {
+		return Assembly{}, fmt.Errorf("construct delegation capability: %w", err)
+	}
+	capabilities := append(append([]harnesscore.Capability(nil), assembly.Capabilities...), delegate)
+	runtime, err := harnesscore.New(
+		runner,
+		harnesscore.WithRuntime(assembly.Runtime),
+		harnesscore.WithCapabilities(capabilities...),
+	).Build()
 	if err != nil {
 		return Assembly{}, err
 	}
@@ -186,13 +263,42 @@ func Build(ctx context.Context, registry *Registry, config Config) (Assembly, er
 		runtime,
 		harnessui.WithProfileLabel(config.ProfileName),
 		harnessui.WithWorkspace(config.WorkspaceRoot),
-		harnessui.WithExecutionLabel("local-host governance (not an OS sandbox)"),
+		harnessui.WithExecutionLabel(executionLabel),
 		harnessui.WithToolPresenter(resolveToolPresenter(config.ToolPresenter)),
 	)
 	if err != nil {
 		return Assembly{}, err
 	}
 	return Assembly{Host: host, Runtime: runtime}, nil
+}
+
+func requireStandardEnvironment(factory harnessenv.Factory) harnessenv.Factory {
+	return harnessenv.FactoryFunc(func(ctx context.Context, sessionID string) (harnessenv.Lease, error) {
+		lease, err := factory.Open(ctx, sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if lease == nil {
+			return nil, errors.New("standard environment factory returned a nil lease")
+		}
+		if lease.Files() == nil {
+			return rejectStandardEnvironment(ctx, lease, errors.New("standard environment lease returned a nil filesystem"))
+		}
+		if shell, ok := lease.Shell(); !ok || shell == nil {
+			return rejectStandardEnvironment(ctx, lease, errors.New("standard environment lease does not provide a shell"))
+		}
+		if _, ok := lease.(harnessenv.Narrower); !ok {
+			return rejectStandardEnvironment(ctx, lease, errors.New("standard environment lease does not support narrowing"))
+		}
+		return lease, nil
+	})
+}
+
+func rejectStandardEnvironment(ctx context.Context, lease harnessenv.Lease, reason error) (harnessenv.Lease, error) {
+	if err := lease.Close(ctx); err != nil {
+		return nil, errors.Join(reason, fmt.Errorf("close rejected standard environment lease: %w", err))
+	}
+	return nil, reason
 }
 
 func resolveToolPresenter(custom uit.ToolPresenter) uit.ToolPresenter {
@@ -218,6 +324,8 @@ func resolveToolPresenter(custom uit.ToolPresenter) uit.ToolPresenter {
 			presentation.Category, presentation.Title = uit.ToolCategoryChange, toolTitle("Create directory", "Create directory", tool.Summary)
 		case "remove_path":
 			presentation.Category, presentation.Title = uit.ToolCategoryChange, toolTitle("Remove", "Remove path", tool.Summary)
+		case "delegate_task":
+			presentation.Category, presentation.Title = uit.ToolCategoryExplore, "Delegate task"
 		default:
 			presentation.Category = uit.ToolCategoryOther
 			presentation.Title = strings.TrimSpace(tool.Summary)

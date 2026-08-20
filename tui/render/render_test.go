@@ -9,7 +9,7 @@ import (
 
 func TestTranscriptModesAndTools(t *testing.T) {
 	t.Parallel()
-	if got := Transcript(nil, "", Options{NoColor: true}); !strings.Contains(got, "No messages") {
+	if got := Transcript(nil, "", Options{NoColor: true}); !strings.Contains(got, "Start by describing") {
 		t.Fatalf("empty transcript = %q", got)
 	}
 	entry := uit.Entry{
@@ -18,10 +18,16 @@ func TestTranscriptModesAndTools(t *testing.T) {
 		Tools:    []uit.Tool{{Name: "read", State: uit.ToolDone, Summary: "safe"}, {State: uit.ToolRunning}},
 	}
 	visible := Transcript([]uit.Entry{entry, {Text: "event"}}, "more", Options{NoColor: true, Thinking: ThinkingVisible, ToolExpanded: true})
-	for _, want := range []string{"ASSISTANT", "answer", "thinking\n  secret plan", "thinking [redacted]", "• Using tools", "├─ Read", "safe", "└─ Tool", "more |", "EVENT"} {
+	for _, want := range []string{"* answer", "thinking\n  secret plan", "thinking [redacted]", "• Using tools", "├─ Read", "safe", "└─ Tool", "more |", "EVENT"} {
 		if !strings.Contains(visible, want) {
 			t.Fatalf("visible transcript lacks %q: %q", want, visible)
 		}
+	}
+	if strings.Contains(visible, "ASSISTANT") || strings.Contains(visible, "USER") {
+		t.Fatalf("transcript retained role headers: %q", visible)
+	}
+	if user := Entry(uit.Entry{Role: uit.RoleUser, Text: "hello\nworld"}, Options{NoColor: true}); user != "> hello\n  world" {
+		t.Fatalf("user message = %q", user)
 	}
 	collapsed := Entry(entry, Options{NoColor: true, Thinking: ThinkingCollapsed})
 	if !strings.Contains(collapsed, "thinking collapsed (11 chars)") || strings.Contains(collapsed, "secret plan") {
@@ -33,6 +39,15 @@ func TestTranscriptModesAndTools(t *testing.T) {
 	}
 	if colored := Entry(entry, Options{Thinking: ThinkingVisible}); !strings.Contains(colored, "\x1b[") {
 		t.Fatalf("colored entry has no ANSI: %q", colored)
+	}
+	if colored := Entry(uit.Entry{Role: uit.RoleUser, Text: "hello"}, Options{Width: 40}); !strings.Contains(colored, "\x1b[") || strings.Contains(colored, "USER") {
+		t.Fatalf("colored user card = %q", colored)
+	}
+	if composer := Composer("draft", 20, true); len(strings.Split(composer, "\n")) != 3 || !strings.Contains(composer, " draft") {
+		t.Fatalf("plain composer = %q", composer)
+	}
+	if composer := Composer("draft", 20, false); !strings.Contains(composer, "\x1b[") || len(strings.Split(composer, "\n")) != 3 {
+		t.Fatalf("colored composer = %q", composer)
 	}
 }
 
@@ -176,7 +191,7 @@ func TestApprovalStatusFooterAndBanner(t *testing.T) {
 	}
 	snapshot := uit.Snapshot{SessionID: "s", State: uit.StateRunning, ProfileLabel: "work", Workspace: "/repo", Execution: "local-host governance (not an OS sandbox)", Pending: []uit.QueuedInput{{}}, Usage: uit.Usage{PromptTokens: 100, CacheReadTokens: 80, TotalTokens: 120}}
 	status := Status(snapshot, true, true)
-	for _, want := range []string{"session s", "running/busy", "profile work", "cache 80.0%", "queued 1", "/repo", "exec local-host governance (not an OS sandbox)"} {
+	for _, want := range []string{"work", "working", "120 tokens", "80% cache", "1 queued", "/repo", "local-host governance (not an OS sandbox)"} {
 		if !strings.Contains(status, want) {
 			t.Fatalf("status lacks %q: %q", want, status)
 		}
@@ -185,7 +200,7 @@ func TestApprovalStatusFooterAndBanner(t *testing.T) {
 	if !strings.Contains(defaultStatus, "custom") || !strings.Contains(defaultStatus, "\x1b[") {
 		t.Fatalf("default status = %q", defaultStatus)
 	}
-	if !strings.Contains(Footer(uit.StateIdle, true), "enter send") || !strings.Contains(Footer(uit.StateIdle, true), "pgup/pgdn scroll") || !strings.Contains(Footer(uit.StateSuspended, false), "permission review") {
+	if !strings.Contains(Footer(uit.StateIdle, true), "enter send") || !strings.Contains(Footer(uit.StateRunning, true), "ctrl+c interrupt") || !strings.Contains(Footer(uit.StateSuspended, false), "permission review") {
 		t.Fatal("footer variants missing")
 	}
 	if got := Status(snapshot, false, true, 20); len([]rune(got)) != 20 || !strings.HasSuffix(got, "...") {

@@ -73,8 +73,12 @@ type Config struct {
 
 	// MaxDepth includes the first child. Zero defaults to one, which permits
 	// delegation from the parent but removes delegation tools from the child.
-	MaxDepth     int
-	SummaryBytes int
+	MaxDepth int
+	// MaxConcurrent bounds sibling children launched by one capability. It does
+	// not make delegation asynchronous: the parent still joins the tool batch.
+	// Zero defaults to four.
+	MaxConcurrent int
+	SummaryBytes  int
 }
 
 // Result is the bounded model-visible result of one child session. Full child
@@ -173,6 +177,12 @@ func resolveConfig(config Config) (Config, error) {
 	}
 	if config.MaxDepth < 1 {
 		return Config{}, errors.New("subagent maximum depth must be positive")
+	}
+	if config.MaxConcurrent == 0 {
+		config.MaxConcurrent = 4
+	}
+	if config.MaxConcurrent < 1 {
+		return Config{}, errors.New("subagent maximum concurrency must be positive")
 	}
 	if config.SummaryBytes == 0 {
 		config.SummaryBytes = DefaultSummaryBytes

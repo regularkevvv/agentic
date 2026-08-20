@@ -254,7 +254,7 @@ func addFileTools(toolset *agentic.FuncToolset) error {
 func addShellTool(toolset *agentic.FuncToolset) error {
 	tool, handler, err := agentic.ToolWithContext(
 		ToolRunCommand,
-		"Run one command through the session environment. Local environments are not OS sandboxes.",
+		"Run one command through the session environment. Isolation is determined by the injected environment backend.",
 		func(ctx context.Context, input commandInput) (commandOutput, error) {
 			runtime, err := requireRuntime(ctx)
 			if err != nil {

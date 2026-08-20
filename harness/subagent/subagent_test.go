@@ -444,6 +444,65 @@ func TestConcurrentDelegationsSerializeSharedBudgetAndCommitExactlyOnce(t *testi
 	}
 }
 
+func TestConcurrentDelegationsAreBoundedWithoutAParentBudget(t *testing.T) {
+	runtimeConfig, _ := testRuntime(t)
+	var active atomic.Int32
+	var maximum atomic.Int32
+	childModel := newModel("parallel-child", func(context.Context, *agentic.ChatRequest, int) (*agentic.ChatResponse, error) {
+		current := active.Add(1)
+		defer active.Add(-1)
+		for {
+			observed := maximum.Load()
+			if current <= observed || maximum.CompareAndSwap(observed, current) {
+				break
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+		return textResponse("child", usage(1, 1)), nil
+	})
+	topology, err := New(agentic.NewAgent("", childModel), Config{
+		Name: "delegate", Description: "Delegate in parallel.", Runtime: runtimeConfig,
+		MaxConcurrent: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parentModel := newModel("parallel-parent", func(_ context.Context, _ *agentic.ChatRequest, call int) (*agentic.ChatResponse, error) {
+		if call == 1 {
+			return &agentic.ChatResponse{
+				ID: "response", Model: "test",
+				Message: agentic.NewToolUseMessage(
+					agentic.ToolUse{ID: "one", Name: "delegate", Input: map[string]any{"task": "one"}},
+					agentic.ToolUse{ID: "two", Name: "delegate", Input: map[string]any{"task": "two"}},
+					agentic.ToolUse{ID: "three", Name: "delegate", Input: map[string]any{"task": "three"}},
+					agentic.ToolUse{ID: "four", Name: "delegate", Input: map[string]any{"task": "four"}},
+				),
+				Usage: usage(1, 1), FinishReason: agentic.FinishReasonToolCalls,
+			}, nil
+		}
+		return textResponse("done", usage(1, 1)), nil
+	})
+	parentHarness, err := harness.New(
+		agentic.NewAgent("", parentModel),
+		harness.WithRuntime(runtimeConfig),
+		harness.WithCapabilities(topology),
+	).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := parentHarness.NewSession(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer parent.Close(context.Background())
+	if _, err := parent.Prompt(context.Background(), agentic.NewTextMessage(agentic.RoleUser, "four children")); err != nil {
+		t.Fatal(err)
+	}
+	if childModel.Calls() != 4 || maximum.Load() != 2 {
+		t.Fatalf("child execution calls=%d max_concurrency=%d", childModel.Calls(), maximum.Load())
+	}
+}
+
 func TestRecursionIsExplicitAndDepthBounded(t *testing.T) {
 	runtimeConfig, _ := testRuntime(t)
 	var sawDelegationToolMu sync.Mutex
@@ -790,6 +849,7 @@ func TestCaptureValidationAndDepthGuard(t *testing.T) {
 		{Name: "x", Description: "", Runtime: runtimeConfig},
 		{Name: "x", Description: "x", Runtime: runtimeConfig, SummaryBytes: -1},
 		{Name: "x", Description: "x", Runtime: runtimeConfig, MaxDepth: -1},
+		{Name: "x", Description: "x", Runtime: runtimeConfig, MaxConcurrent: -1},
 		{Name: "x", Description: "x", Runtime: runtimeConfig, Capture: Capture{History: ModeNarrow}},
 		{Name: "x", Description: "x", Runtime: runtimeConfig, Capture: Capture{Environment: ModeNarrow}},
 		{Name: "x", Description: "x", Runtime: runtimeConfig, Capture: Capture{Tools: ModeNarrow}},

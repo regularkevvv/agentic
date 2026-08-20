@@ -148,7 +148,7 @@ func New(host uit.Host, options Options) (*Model, error) {
 	composer.Placeholder = "Describe a task…"
 	composer.ShowLineNumbers = false
 	composer.CharLimit = 1 << 20
-	composer.MaxHeight = 8
+	composer.MaxHeight = 12
 	composer.MinHeight = 1
 	composer.DynamicHeight = true
 	composer.SetHeight(1)
@@ -162,11 +162,13 @@ func New(host uit.Host, options Options) (*Model, error) {
 	composer.Focus()
 	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(16))
 	vp.SoftWrap = true
-	return &Model{
+	model := &Model{
 		host: host, ctx: ctx, cancel: cancel, config: config, resumeID: options.ResumeID,
 		editor: options.Editor, terminalEditor: options.TerminalEditor, environ: environ, composer: composer, viewport: vp, followOutput: true,
-		decisions: make(map[string]uit.DecisionAction), historyIndex: -1,
-	}, nil
+		decisions: make(map[string]uit.DecisionAction), historyIndex: -1, width: 80, height: 24,
+	}
+	model.resize(80, 24)
+	return model, nil
 }
 
 func (m *Model) Init() tea.Cmd { return openSessionCmd(m.ctx, m.host, m.resumeID, m.config) }
@@ -779,6 +781,12 @@ func (m *Model) applyEvent(event uit.Event) {
 	if event.Cursor > m.snapshot.Cursor {
 		m.snapshot.Cursor = event.Cursor
 	}
+	// Child events share the parent's durable observation stream so operators
+	// can recover them, but they are not parent transcript or lifecycle state.
+	// The parent delegation tool remains the compact UI representation.
+	if event.SessionID != "" && m.snapshot.SessionID != "" && event.SessionID != m.snapshot.SessionID {
+		return
+	}
 	if event.State != "" {
 		m.snapshot.State = event.State
 	}
@@ -844,7 +852,7 @@ func (m *Model) applyEvent(event uit.Event) {
 		m.resolvingApprovalID = ""
 		m.resetApproval()
 		m.preview, m.thinking, m.liveTools = "", "", nil
-		m.banner, m.failure = "Completed.", false
+		m.banner, m.failure = "", false
 	case uit.EventRunEnded:
 		m.snapshot.State = uit.StateIdle
 		m.snapshot.Suspension = nil
@@ -852,7 +860,7 @@ func (m *Model) applyEvent(event uit.Event) {
 		m.resetApproval()
 		m.preview, m.thinking, m.liveTools = "", "", nil
 		if !m.failure && m.banner != "Interrupted." {
-			m.banner = "Completed."
+			m.banner = ""
 		}
 	case uit.EventRunInterrupted:
 		m.snapshot.State = uit.StateIdle
@@ -879,7 +887,7 @@ func (m *Model) replaceSession(session uit.Session, snapshot uit.Snapshot, bridg
 	m.optimistic = nil
 	m.clearBefore = 0
 	m.preview, m.thinking, m.liveTools = "", "", nil
-	m.banner, m.failure = "Session "+session.ID()+" ready.", false
+	m.banner, m.failure = "", false
 	m.resolvingApprovalID = ""
 	m.resetApproval()
 	m.syncViewport()
@@ -898,25 +906,17 @@ func (m *Model) setError(err error) {
 
 func (m *Model) resize(width, height int) {
 	m.width, m.height = max(20, width), max(8, height)
-	m.composer.MaxHeight = min(8, max(1, m.height/3))
-	m.composer.SetWidth(max(10, m.width-2))
+	m.composer.MaxHeight = min(12, max(1, m.height/3))
+	m.composer.SetWidth(max(10, m.contentWidth()-2))
 	m.composer.SetHeight(min(m.composer.MaxHeight, max(1, m.composer.LineCount())))
-	m.viewport.SetWidth(m.width)
-	m.viewport.SetHeight(max(1, m.height-m.composer.Height()-4))
+	m.viewport.SetWidth(m.contentWidth())
+	m.viewport.SetHeight(max(1, m.height-m.bottomPanelHeight()-2))
 	m.syncViewport()
 }
 
 func (m *Model) syncViewport() {
 	if m.height > 0 {
-		bottomRows := m.composer.Height()
-		if m.resolvingApprovalID != "" {
-			bottomRows = 1
-		} else if m.snapshot.Suspension != nil {
-			bottomRows = len(m.snapshot.Suspension.Approvals) + 3
-		} else if m.help {
-			bottomRows = 2
-		}
-		m.viewport.SetHeight(max(1, m.height-bottomRows-4))
+		m.viewport.SetHeight(max(1, m.height-m.bottomPanelHeight()-2))
 	}
 	entries := m.transcriptForDisplay()
 	if m.clearBefore > len(entries) {
@@ -927,8 +927,8 @@ func (m *Model) syncViewport() {
 		entry := uit.Entry{Role: uit.RoleAssistant, Thinking: []uit.Thinking{{Text: m.thinking}}, Tools: append([]uit.Tool(nil), m.liveTools...)}
 		entries = append(append([]uit.Entry(nil), entries...), entry)
 	}
-	m.viewport.SetContent(render.Transcript(entries, m.preview, render.Options{
-		Width: m.width, NoColor: m.config.NoColor, Thinking: m.config.Thinking, ToolExpanded: m.config.ToolDetails,
+	m.viewport.SetContent("\n" + render.Transcript(entries, m.preview, render.Options{
+		Width: m.contentWidth(), NoColor: m.config.NoColor, Thinking: m.config.Thinking, ToolExpanded: m.config.ToolDetails,
 	}))
 	if m.followOutput {
 		m.viewport.GotoBottom()
@@ -974,7 +974,8 @@ func (m *Model) updateViewport(message tea.Msg) tea.Cmd {
 }
 
 func (m *Model) View() tea.View {
-	parts := []string{m.viewport.View()}
+	gutter := m.gutter()
+	parts := []string{leftPad(m.viewport.View(), gutter)}
 	composerVisible := false
 	if m.resolvingApprovalID != "" {
 		parts = append(parts, render.ApprovalResolving(m.config.NoColor, m.width))
@@ -984,18 +985,18 @@ func (m *Model) View() tea.View {
 		parts = append(parts, "Commands: /new /resume ID /help /clear /export /thinking /tools /quit\nKeys: enter submit, shift+enter/ctrl+j newline, alt+s steer, alt+f follow-up, alt+n next turn, ctrl+t thinking, ctrl+g tools, ctrl+e editor, ctrl+c interrupt")
 	} else {
 		composerVisible = true
-		parts = append(parts, m.composer.View())
+		parts = append(parts, leftPad(render.Composer(m.composer.View(), m.contentWidth(), m.config.NoColor), gutter))
 	}
 	if banner := render.Banner(m.banner, m.failure, m.config.NoColor, m.width); banner != "" {
-		parts = append(parts, banner)
+		parts = append(parts, leftPad(banner, gutter))
 	}
 	footerState := m.snapshot.State
 	if m.resolvingApprovalID != "" {
 		footerState = uit.StateRunning
 	}
 	parts = append(parts,
-		render.Status(m.snapshot, m.inflight > 0, m.config.NoColor, m.width),
-		render.Footer(footerState, m.config.NoColor, m.width),
+		leftPad(render.Status(m.snapshot, m.inflight > 0, m.config.NoColor, m.contentWidth()), gutter),
+		leftPad(render.Footer(footerState, m.config.NoColor, m.contentWidth()), gutter),
 	)
 	view := tea.NewView(strings.Join(parts, "\n"))
 	view.AltScreen = ResolveAltScreen(m.config.AlternateScreen, m.environ)
@@ -1006,11 +1007,47 @@ func (m *Model) View() tea.View {
 		if composerVisible {
 			view.Cursor = m.composer.Cursor()
 			if view.Cursor != nil {
-				view.Cursor.Y += m.viewport.Height() + 1
+				view.Cursor.X += gutter + 1
+				view.Cursor.Y += m.viewport.Height() + 2
 			}
 		}
 	}
 	return view
+}
+
+func (m *Model) gutter() int {
+	if m.width >= 72 {
+		return 2
+	}
+	if m.width >= 32 {
+		return 1
+	}
+	return 0
+}
+
+func (m *Model) contentWidth() int { return max(10, m.width-2*m.gutter()) }
+
+func (m *Model) bottomPanelHeight() int {
+	rows := m.composer.Height() + 2
+	if m.resolvingApprovalID != "" {
+		rows = 1
+	} else if m.snapshot.Suspension != nil {
+		rows = len(m.snapshot.Suspension.Approvals) + 3
+	} else if m.help {
+		rows = 2
+	}
+	if m.banner != "" {
+		rows++
+	}
+	return rows
+}
+
+func leftPad(value string, width int) string {
+	if width <= 0 || value == "" {
+		return value
+	}
+	prefix := strings.Repeat(" ", width)
+	return prefix + strings.ReplaceAll(value, "\n", "\n"+prefix)
 }
 
 func (m *Model) LastExport() string { return m.lastExport }
