@@ -51,6 +51,12 @@ test-e2e:
 otel-e2e:
     just collector::smoke
 
+# Prove the local mailbox/worker path against the default disk-backed harness.
+[group("test")]
+[working-directory("e2e")]
+sessionloop-e2e:
+    go test -race -count=1 -timeout 60s ./sessionloop
+
 # Measure root-module coverage, excluding test-only helpers.
 [group("coverage")]
 coverage:

@@ -12,6 +12,12 @@ in-memory reference host (`testkit`). It does not execute a model. The full
 design rationale lives in
 [`docs/design/harness-sessionloop-plan.md`](../../docs/design/harness-sessionloop-plan.md).
 
+For independently scheduled execution, [actor/](actor/README.md) adds the
+Mailbox/Worker contract, a process-local receive adapter and a Lean protocol
+specification. The journal stays in the harness; actor delivery is not another
+conversation transcript. Hosts used by the Worker also implement the optional
+`AcceptanceReader` so recovery can look up receipts without redispatching.
+
 ## The command/event mental model
 
 A session is a long-lived actor. Callers never block on an answer; they

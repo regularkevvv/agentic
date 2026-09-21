@@ -338,6 +338,21 @@ jobs:
           working-directory: e2e
           args: --build-tags=e2e
 
+  sessionloop-e2e:
+    name: Local mailbox and worker E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: e2e
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: e2e/go.mod
+      - name: Exercise disk replay, steering and acknowledgment failure boundaries
+        run: go test -race -count=5 -timeout 90s ./sessionloop
+
   # This is a credential-free transport proof, not a mocked SDK test. The
   # Compose stack builds the deterministic scenario runner, sends traces,
   # metrics, and logs over OTLP/gRPC to a digest-pinned real Collector, then

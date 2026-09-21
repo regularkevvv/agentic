@@ -188,4 +188,7 @@ type Receipt struct {
 	QueueID   QueueID
 	Position  Position
 	Guarantee AcceptanceGuarantee
+	// Rejection is non-empty only when a RejectionRecorder durably resolved
+	// the command without executing it. It is not a model/run failure.
+	Rejection Rejection
 }

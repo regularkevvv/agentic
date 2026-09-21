@@ -179,6 +179,8 @@ type resolutionAcceptedPayload struct {
 // It deliberately stores only correlation and receipt identity: model-visible
 // input remains in the ordinary run/message/queue facts written in the same
 // atomic journal append.
+// A non-empty Rejection instead resolves the command without any model-visible
+// input or run. It shares identity/deduplication with ordinary acceptance.
 type loopCommandAcceptedPayload struct {
 	CommandID      string
 	Kind           string
@@ -186,6 +188,7 @@ type loopCommandAcceptedPayload struct {
 	Digest         string
 	RunID          string
 	QueueID        string
+	Rejection      string `json:",omitempty"`
 }
 
 type childUsagePayload struct {

@@ -378,7 +378,7 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 			if err != nil {
 				return foldedState{}, nil, err
 			}
-			if payload.Kind == "interrupt" {
+			if payload.Kind == "interrupt" && payload.Rejection == "" {
 				state.pendingInterruptRunID = payload.RunID
 			}
 		case kindUsageCommitted:

@@ -74,21 +74,25 @@ type Snapshot struct {
 
 // Repository creates or opens a single-writer session journal.
 //
-// A successful Create or Open leases that session to the returned Journal
-// until Journal.Close. A second owner must receive ErrSessionOpen.
+// At most one owner may commit. An adapter may hold an exclusive handle until
+// Close (a competing Open returns ErrSessionOpen), or bind a revocable external
+// authority and atomically fence every mutation. Revocation must reject old
+// writes even if the old process still holds a Journal. Neither strategy
+// requires a long-lived database connection in this interface.
 type Repository interface {
 	Create(context.Context, string, ...PendingEntry) (Journal, Commit, error)
 	Open(context.Context, string) (Journal, error)
 }
 
-// Journal is one exclusive writer lease. Append uses optimistic leaf checking
-// so stale in-process state cannot silently fork or duplicate a transcript.
+// Journal is a handle with mutation authority. Append atomically validates that
+// authority AND the expected leaf; checking the cursor alone does not fence an
+// old owner that happens to know the current cursor.
 type Journal interface {
 	SessionID() string
 	Load(context.Context) (Snapshot, error)
 	Append(context.Context, Cursor, ...PendingEntry) (Commit, error)
-	// Close releases the exclusive writer lease and must be idempotent so
-	// cleanup can be retried after a canceled context or transient error.
+	// Close releases this handle, never a successor's authority. It is
+	// idempotent so cleanup can be retried after cancellation or I/O failure.
 	Close(context.Context) error
 }
 

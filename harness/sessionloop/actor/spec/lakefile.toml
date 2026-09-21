@@ -1,0 +1,6 @@
+name = "session_contract"
+version = "0.1.0"
+defaultTargets = ["SessionContract"]
+
+[[lean_lib]]
+name = "SessionContract"
