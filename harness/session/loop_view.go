@@ -44,8 +44,9 @@ type LoopConfig[O any] struct {
 // governs validation and durable acceptance only; accepted runs execute
 // under the view's lifetime context and are stopped by an interrupt command
 // or Close. Command attribution (CommandID on events and entries) is stamped
-// at projection time from the view's in-memory maps; it is live-host
-// knowledge, deliberately absent after reopening a session elsewhere.
+// at projection time from the view's maps. Keyed command attribution is
+// restored from journaled acceptance across reopen; unkeyed attribution and
+// application-projected structured output remain live-handle knowledge.
 type LoopView[O any] struct {
 	inner     *Session[O]
 	closeRoot func(context.Context) error
@@ -374,6 +375,9 @@ func (v *LoopView[O]) restoreCommandAcceptances(ctx context.Context) error {
 		if accepted.CommandID == "" || accepted.IdempotencyKey == "" || accepted.Digest == "" {
 			return fmt.Errorf("invalid durable command acceptance at sequence %d", entry.Seq)
 		}
+		if accepted.Rejection != "" && (!sessionloop.Rejection(accepted.Rejection).Valid() || accepted.RunID != "" || accepted.QueueID != "") {
+			return fmt.Errorf("invalid durable command rejection at sequence %d", entry.Seq)
+		}
 		receipt := sessionloop.Receipt{
 			CommandID: sessionloop.CommandID(accepted.CommandID),
 			SessionID: v.ID(),
@@ -381,6 +385,7 @@ func (v *LoopView[O]) restoreCommandAcceptances(ctx context.Context) error {
 			QueueID:   sessionloop.QueueID(accepted.QueueID),
 			Position:  loopPosition(entry.Cursor()),
 			Guarantee: sessionloop.AcceptanceDurable,
+			Rejection: sessionloop.Rejection(accepted.Rejection),
 		}
 		if previous, exists := v.idempotency[accepted.IdempotencyKey]; exists {
 			if previous.digest != accepted.Digest || previous.receipt != receipt {
@@ -390,6 +395,9 @@ func (v *LoopView[O]) restoreCommandAcceptances(ctx context.Context) error {
 		}
 		v.idempotency[accepted.IdempotencyKey] = durableCommandAcceptance{
 			digest: accepted.Digest, receipt: receipt,
+		}
+		if accepted.Rejection != "" {
+			continue
 		}
 		switch sessionloop.CommandKind(accepted.Kind) {
 		case sessionloop.CommandStart:

@@ -206,6 +206,11 @@ func TestLoopViewRestoreRejectsCorruptAcceptances(t *testing.T) {
 			},
 			want: "conflicting durable idempotency key",
 		},
+		{
+			name:    "invalid rejection reason",
+			entries: []loopCommandAcceptedPayload{{CommandID: "cmd", Kind: "interrupt", IdempotencyKey: "key", Digest: "digest", Rejection: "invented"}},
+			want:    "invalid durable command rejection",
+		},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {

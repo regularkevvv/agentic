@@ -1,3 +1,6 @@
+// The reference session owns copy-safe transcript state and keyed acceptance
+// receipts across handle reopen; it does not claim survival of process death.
+
 package testkit
 
 import (
@@ -30,7 +33,8 @@ type sessionState struct {
 	// keys records idempotency-key -> original receipt when the host opted
 	// into WithIdempotentDispatch. It lives on the durable session state, so
 	// recorded keys survive handle close and reopen.
-	keys map[string]sessionloop.Receipt
+	keys        map[string]sessionloop.Receipt
+	keyCommands map[string]string
 }
 
 // session is one exclusive handle onto a sessionState.
@@ -67,6 +71,9 @@ func (s *session) Dispatch(ctx context.Context, command sessionloop.Command) (se
 	}
 	if command.IdempotencyKey != "" && state.host.idempotent {
 		if receipt, ok := state.keys[command.IdempotencyKey]; ok {
+			if state.keyCommands[command.IdempotencyKey] != commandSemantics(command) {
+				return sessionloop.Receipt{}, sessionloop.ErrCommandConflict
+			}
 			return receipt, nil
 		}
 	}
@@ -97,8 +104,10 @@ func (s *session) Dispatch(ctx context.Context, command sessionloop.Command) (se
 	if command.IdempotencyKey != "" && state.host.idempotent {
 		if state.keys == nil {
 			state.keys = make(map[string]sessionloop.Receipt)
+			state.keyCommands = make(map[string]string)
 		}
 		state.keys[command.IdempotencyKey] = receipt
+		state.keyCommands[command.IdempotencyKey] = commandSemantics(command)
 	}
 	return receipt, nil
 }
