@@ -1,6 +1,6 @@
 # Agentic Harness (experimental)
 
-This nested module contains the experimental `v0.5` harness surface for
+This nested module contains the experimental `v0.6` harness surface for
 Agentic `v0.7.0`. It currently provides:
 
 - write-ahead `Harness`/`Session` execution with steering, follow-up,
@@ -95,6 +95,12 @@ is not a user-message injection mechanism.
 The provider-neutral asynchronous session protocol that
 `harness.NewSessionLoopHost` implements lives in the zero-dependency nested
 module [`sessionloop/`](sessionloop/README.md).
+
+Harness v0.6.0 pins Sessionloop v0.3.0, whose actor API separates mailbox
+submission from independently scheduled workers. See the
+[actor migration guide](sessionloop/actor/README.md) before upgrading an existing
+actor assembly. Journal acceptance lookup and mutation-authority adapters are
+provided by the Harness; persistent mailbox adapters remain separately supplied.
 
 The same core accepts other conforming adapters without modification. Reusable
 conformance suites live in `store/storetest`, `event/eventtest`, `env/envtest`,

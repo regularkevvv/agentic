@@ -80,8 +80,8 @@ github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 h1:Jamvg5psRI
 github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/regularkevvv/agentic v0.7.0 h1:L7AriWKNk8P+Eb9vjpLNM2LOkKpEPDH01Hu7iIwGUJo=
 github.com/regularkevvv/agentic v0.7.0/go.mod h1:QIvc71oq7TaJeX3IGlKryHAnF1x35T9Umx+XxByCrc8=
-github.com/regularkevvv/agentic/harness/sessionloop v0.1.0 h1:WKnh3hvEptQtsEt87uQP8tRCNUd+xgiRzfT3Gepd09k=
-github.com/regularkevvv/agentic/harness/sessionloop v0.1.0/go.mod h1:9oDyF04FCeioXZeAnunw0B7pvP0ZDDbcucXh1u9x9Z4=
+github.com/regularkevvv/agentic/harness/sessionloop v0.3.0 h1:Jms/wgLodEG0Qnu3yW7ZLYF/RE0p4sNqLf8JHCfb9/g=
+github.com/regularkevvv/agentic/harness/sessionloop v0.3.0/go.mod h1:9oDyF04FCeioXZeAnunw0B7pvP0ZDDbcucXh1u9x9Z4=
 github.com/sergi/go-diff v1.3.1 h1:xkr+Oxo4BOQKmkn/B9eMK0g5Kg/983T9DqqPHwYqD+8=
 github.com/sergi/go-diff v1.3.1/go.mod h1:aMJSSKb2lpPvRNec0+w3fl7LP9IOFzdc9Pa4NFbPK1I=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=

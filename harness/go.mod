@@ -6,7 +6,7 @@ require (
 	github.com/elastic/go-seccomp-bpf v1.5.0
 	github.com/landlock-lsm/go-landlock v0.9.0
 	github.com/regularkevvv/agentic v0.7.0
-	github.com/regularkevvv/agentic/harness/sessionloop v0.1.0
+	github.com/regularkevvv/agentic/harness/sessionloop v0.3.0
 	golang.org/x/sys v0.46.0
 )
 
