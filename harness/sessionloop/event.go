@@ -64,11 +64,27 @@ type Event struct {
 	Usage      *Usage
 	Preview    *Preview
 	Dropped    uint64
+	// Origin identifies delegated progress without exposing child content,
+	// provider state, or tool arguments. SessionID still identifies this stream.
+	Origin *EventOrigin
+}
+
+// EventOrigin is safe routing metadata for a delegated-session observation.
+type EventOrigin struct {
+	SessionID SessionID
+	ParentID  SessionID
+	Agent     string
+	Depth     int
+	Turn      int
 }
 
 // Clone returns a deep, copy-owned copy of the event.
 func (e Event) Clone() Event {
 	clone := e
+	if e.Origin != nil {
+		origin := *e.Origin
+		clone.Origin = &origin
+	}
 	if e.Entry != nil {
 		entry := e.Entry.Clone()
 		clone.Entry = &entry

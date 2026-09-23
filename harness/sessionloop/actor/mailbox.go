@@ -31,13 +31,14 @@ func (c Command) Normalize() (Command, error) {
 	if c.ID == "" || c.ActorID == "" {
 		return Command{}, fmt.Errorf("actor and command IDs are required: %w", sessionloop.ErrInvalidCommand)
 	}
-	if (c.Command.ID != "" && c.Command.ID != sessionloop.CommandID(c.ID)) ||
-		(c.Command.IdempotencyKey != "" && c.Command.IdempotencyKey != string(c.ID)) {
+	if c.Command.ID != "" && c.Command.ID != sessionloop.CommandID(c.ID) {
 		return Command{}, ErrCommandConflict
 	}
 	c.Command = c.Command.Clone()
 	c.Command.ID = sessionloop.CommandID(c.ID)
-	c.Command.IdempotencyKey = string(c.ID)
+	if c.Command.IdempotencyKey == "" {
+		c.Command.IdempotencyKey = string(c.ID)
+	}
 	if err := c.Command.Validate(); err != nil {
 		return Command{}, err
 	}

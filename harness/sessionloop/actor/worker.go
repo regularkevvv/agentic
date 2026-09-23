@@ -178,14 +178,19 @@ type streamResult struct {
 	err   error
 }
 
+type executionWait struct {
+	after   uint64
+	command sessionloop.CommandID
+}
+
 func (w *worker) drive(ctx context.Context, lease Lease, session Session) error {
 	snapshot, err := session.Snapshot(ctx)
 	if err != nil {
 		return err
 	}
-	waiting := make(map[sessionloop.RunID]struct{})
+	waiting := make(map[sessionloop.RunID]executionWait)
 	if snapshot.ActiveRunID != "" && !quiescent(snapshot) {
-		waiting[snapshot.ActiveRunID] = struct{}{}
+		waiting[snapshot.ActiveRunID] = executionWait{after: snapshot.Position.Sequence}
 	}
 	if sink, ok := w.cfg.EventSink.(SnapshotSink); ok {
 		if err := sink.ObserveSnapshot(ctx, lease, snapshot); err != nil {
@@ -245,7 +250,7 @@ func (w *worker) drive(ctx context.Context, lease Lease, session Session) error 
 				return err
 			}
 			if run != "" {
-				waiting[run] = struct{}{}
+				waiting[run] = executionWait{after: snapshot.Position.Sequence, command: sessionloop.CommandID(input.ID)}
 			}
 			snapshot, err = session.Snapshot(ctx)
 			if err != nil {
@@ -361,7 +366,7 @@ func terminalRejection(err error) sessionloop.Rejection {
 	}
 }
 
-func (w *worker) observe(ctx context.Context, lease Lease, item streamResult, waiting map[sessionloop.RunID]struct{}) error {
+func (w *worker) observe(ctx context.Context, lease Lease, item streamResult, waiting map[sessionloop.RunID]executionWait) error {
 	if item.err != nil {
 		return item.err
 	}
@@ -373,7 +378,13 @@ func (w *worker) observe(ctx context.Context, lease Lease, item streamResult, wa
 	if item.event.Nature == sessionloop.EventAuthoritative &&
 		(item.event.Kind == sessionloop.EventRunSettled || item.event.Kind == sessionloop.EventRunSuspended ||
 			(item.event.Kind == sessionloop.EventSessionState && item.event.State == sessionloop.StateSuspended)) {
-		delete(waiting, item.event.RunID)
+		// A resolve continues the SAME run. An older suspension still buffered
+		// in the stream must not satisfy the resumed execution's wait.
+		if pending, found := waiting[item.event.RunID]; found &&
+			((item.event.Position.IsZero() && item.event.CommandID == pending.command) ||
+				item.event.Position.Sequence > pending.after) {
+			delete(waiting, item.event.RunID)
+		}
 	}
 	return nil
 }

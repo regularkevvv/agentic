@@ -19,6 +19,7 @@ import (
 
 	agentic "github.com/regularkevvv/agentic"
 
+	"github.com/regularkevvv/agentic/harness/hosts/localchannel"
 	"github.com/regularkevvv/agentic/harness/permission"
 	"github.com/regularkevvv/agentic/harness/sessionloop"
 	"github.com/regularkevvv/agentic/harness/sessionloop/conformance"
@@ -202,7 +203,7 @@ type conformanceDangerInput struct {
 	Value string `json:"value"`
 }
 
-func newSessionLoopEnv(t *testing.T, sessions store.Repository) conformance.Env {
+func newSessionLoopEnv(t *testing.T, sessions store.Repository, local ...bool) conformance.Env {
 	t.Helper()
 	gate := &conformanceGate{}
 	model := &conformanceModel{}
@@ -230,6 +231,32 @@ func newSessionLoopEnv(t *testing.T, sessions store.Repository) conformance.Env 
 	config.Sessions = sessions
 	config.ModelStreaming = true
 	driver := &conformanceDriver{Driver: agent, gate: gate}
+	if len(local) > 0 && local[0] {
+		loop, err := localchannel.New(localchannel.Config{Journals: sessions,
+			Build: func(journals store.Repository) (sessionloop.Host, error) {
+				owned := config
+				owned.Sessions = journals
+				runtime, err := New[string](driver, WithRuntime(owned), WithCapabilities(permissionCapability)).Build()
+				if err != nil {
+					return nil, err
+				}
+				return NewSessionLoopHost(runtime, WithSessionLoopOutputProjector[string](func(output string) (json.RawMessage, error) { return json.Marshal(output) }))
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(t.Context())
+		done := make(chan error, 1)
+		go func() { done <- loop.Run(ctx) }()
+		t.Cleanup(func() {
+			cancel()
+			if err := <-done; !errors.Is(err, context.Canceled) {
+				t.Errorf("local worker: %v", err)
+			}
+		})
+		return conformance.Env{Host: loop, Gate: gate}
+	}
 	runtime, err := New[string](driver, WithRuntime(config), WithCapabilities(permissionCapability)).Build()
 	if err != nil {
 		t.Fatal(err)
@@ -247,6 +274,16 @@ func newSessionLoopEnv(t *testing.T, sessions store.Repository) conformance.Env 
 // TestSessionLoopHostConformance runs the full independent conformance suite
 // against the real in-memory Harness. Every advertised optional capability
 // activates its case (nothing but dispatch.idempotent may skip).
+func TestLocalChannelHostConformance(t *testing.T) {
+	conformance.Run(t, func(t *testing.T) conformance.Env {
+		repository, err := storejsonl.New(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return newSessionLoopEnv(t, repository, true)
+	})
+}
+
 func TestSessionLoopHostConformance(t *testing.T) {
 	conformance.Run(t, func(t *testing.T) conformance.Env {
 		return newSessionLoopEnv(t, storememory.New())

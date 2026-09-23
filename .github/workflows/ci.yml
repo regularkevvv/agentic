@@ -350,8 +350,20 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: e2e/go.mod
-      - name: Exercise disk replay, steering and acknowledgment failure boundaries
-        run: go test -race -count=5 -timeout 90s ./sessionloop
+      - name: Exercise local delivery, disk replay and the interactive session path
+        run: go test -race -count=5 -timeout 90s ./sessionloop ./tui
+
+  postgres-sessionloop-e2e:
+    name: PostgreSQL and PgBouncer session-loop E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: e2e/go.mod
+      - name: Exercise durable delivery, killed workers and transaction pooling
+        run: bash e2e/sessionloop/postgres/run.sh
 
   # This is a credential-free transport proof, not a mocked SDK test. The
   # Compose stack builds the deterministic scenario runner, sends traces,

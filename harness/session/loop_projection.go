@@ -40,7 +40,7 @@ package session
 //	session.recovered           EventSessionState (payload state idle -> idle, continue -> running).
 //	session.fault               EventSessionState (faulted).
 //	transcript.compaction       Namespaced extension kind "agentic.transcript.compaction" with empty standard payloads, so snapshot discontinuities stay observable (plan §7.8).
-//	subagent.event              IGNORED: child-session records belong to the child session's own projection.
+//	subagent.event              Namespaced progress metadata only; child content remains private.
 //	subagent.usage              EventUsage (parent session usage projected to sessionloop.Usage).
 //	branch.moved                IGNORED: reserved kind with no writer; preserved in the log only.
 //	runtime.operation           IGNORED: opaque capability operation facts are host-internal.
@@ -108,6 +108,7 @@ type loopProjector struct {
 	sessionID string
 	codec     codec.Codec
 	suspend   SuspensionProjector
+	summarize func(agentic.ToolUse) string
 
 	commandForRun        func(runID string) sessionloop.CommandID
 	commandForQueue      func(queueID string) sessionloop.CommandID
@@ -145,7 +146,17 @@ func (p *loopProjector) queueCommand(queueID string) sessionloop.CommandID {
 func (p *loopProjector) apply(ctx context.Context, record event.Record) ([]sessionloop.Event, error) {
 	p.fold.pendingDropped += record.Dropped.Preview
 	if record.SessionID != "" && record.SessionID != p.sessionID {
-		// Child-session records (the live counterpart of subagent.event).
+		if record.ParentID == p.sessionID && record.Nature != agentic.EventPreview {
+			if record.Cursor > p.fold.lastDurable {
+				p.fold.lastDurable = record.Cursor
+			}
+			return p.deliver([]sessionloop.Event{{
+				SessionID: sessionloop.SessionID(p.sessionID), Position: sessionloop.Position{Sequence: record.Cursor},
+				Nature: sessionloop.EventAuthoritative, Kind: "agentic.child.progress",
+				Origin: &sessionloop.EventOrigin{SessionID: sessionloop.SessionID(record.SessionID),
+					ParentID: sessionloop.SessionID(record.ParentID), Agent: record.Agent, Depth: record.Depth, Turn: record.Turn},
+			}})
+		}
 		return nil, nil
 	}
 	if record.Nature == agentic.EventPreview {
@@ -257,7 +268,7 @@ func (p *loopProjector) applyAgentic(ctx context.Context, record event.Record) (
 			return nil, err
 		}
 		entry := p.entry(record.Cursor, 0, sessionloop.RoleAssistant, sessionloop.OriginAssistant,
-			p.fold.currentRunID, p.runCommand(p.fold.currentRunID), projectMessageToEntryBlocks(payload.Message))
+			p.fold.currentRunID, p.runCommand(p.fold.currentRunID), projectMessageToEntryBlocks(payload.Message, p.summarize))
 		return []sessionloop.Event{p.entryEvent(record.Cursor, entry)}, nil
 	case agentic.EventTypeToolResultCommitted:
 		payload, err := event.Decode[event.ToolResultPayload](p.codec, record)
@@ -587,10 +598,7 @@ func (p *loopProjector) entryEvent(seq uint64, entry sessionloop.Entry) sessionl
 func loopRecords(payloadCodec codec.Codec, entries []store.Entry) ([]event.Record, error) {
 	records := make([]event.Record, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Kind == kindChildEvent {
-			continue
-		}
-		if isAgenticKind(entry.Kind) {
+		if isAgenticKind(entry.Kind) || entry.Kind == kindChildEvent {
 			record, err := codec.Decode[event.Record](payloadCodec, entry.Payload)
 			if err != nil {
 				return nil, err
@@ -621,7 +629,7 @@ func loopRole(role agentic.MessageRole) sessionloop.Role {
 // become text blocks, tool uses become tool_call blocks with codec-independent
 // JSON input data, and tool results become tool_result blocks. Thinking and
 // media parts are excluded from the default authoritative projection.
-func projectMessageToEntryBlocks(message agentic.Message) []sessionloop.EntryBlock {
+func projectMessageToEntryBlocks(message agentic.Message, summaries ...func(agentic.ToolUse) string) []sessionloop.EntryBlock {
 	var blocks []sessionloop.EntryBlock
 	for _, part := range message.Content {
 		switch part.Type {
@@ -642,6 +650,9 @@ func projectMessageToEntryBlocks(message agentic.Message) []sessionloop.EntryBlo
 			}
 			if data, err := json.Marshal(part.ToolUse.Input); err == nil {
 				block.ToolCall.Data = data
+			}
+			if len(summaries) > 0 && summaries[0] != nil {
+				block.ToolCall.Summary = summaries[0](*part.ToolUse)
 			}
 			blocks = append(blocks, block)
 		case agentic.ContentToolResult:

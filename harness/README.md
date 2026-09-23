@@ -96,6 +96,12 @@ The provider-neutral asynchronous session protocol that
 `harness.NewSessionLoopHost` implements lives in the zero-dependency nested
 module [`sessionloop/`](sessionloop/README.md).
 
+Concrete execution flavors are listed in [`hosts/`](hosts/README.md).
+`hosts/localchannel` connects the local mailbox and independent worker to the
+native Harness and is the CLI's standard path. `Default` remains the native
+runtime assembly, not an implicit worker starter. The PostgreSQL flavor has a
+separate, explicitly unimplemented [transaction-pooling design](hosts/postgres/DESIGN.md).
+
 Harness v0.6.0 pins Sessionloop v0.3.0, whose actor API separates mailbox
 submission from independently scheduled workers. See the
 [actor migration guide](sessionloop/actor/README.md) before upgrading an existing

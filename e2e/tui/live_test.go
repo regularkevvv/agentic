@@ -49,6 +49,10 @@ func TestLiveProviderHarnessTUIFlow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- assembly.Worker.Run(workerCtx) }()
+	defer func() { stopWorker(); <-workerDone }()
 	session, err := assembly.Host.NewSession(ctx, uit.SessionOptions{})
 	if err != nil {
 		t.Fatal(err)

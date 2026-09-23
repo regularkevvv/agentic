@@ -17,10 +17,13 @@ import (
 	"github.com/regularkevvv/agentic/harness/capability"
 	"github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/event"
+	"github.com/regularkevvv/agentic/harness/hosts/localchannel"
 	"github.com/regularkevvv/agentic/harness/permission"
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
+	"github.com/regularkevvv/agentic/harness/sessionloop"
+	"github.com/regularkevvv/agentic/harness/store"
 	uit "github.com/regularkevvv/agentic/tui"
-	tuiharness "github.com/regularkevvv/agentic/tui/adapter/harness"
+	tuiharness "github.com/regularkevvv/agentic/tui/adapter/sessionloop"
 )
 
 const (
@@ -119,16 +122,32 @@ func Run(ctx context.Context, workspace, sessionDir string) (report Report, err 
 	}
 	capabilities := append([]harness.Capability(nil), assembly.Capabilities...)
 	capabilities = append(capabilities, childCapability)
-	runtime, err := harness.New(
-		agent,
-		harness.WithRuntime(assembly.Runtime),
-		harness.WithCapabilities(capabilities...),
-	).Build()
+	loop, err := localchannel.New(localchannel.Config{
+		Journals: assembly.Runtime.Sessions,
+		Build: func(journals store.Repository) (sessionloop.Host, error) {
+			owned := assembly.Runtime
+			owned.Sessions = journals
+			runtime, err := harness.New(agent, harness.WithRuntime(owned), harness.WithCapabilities(capabilities...)).Build()
+			if err != nil {
+				return nil, err
+			}
+			return harness.NewSessionLoopHost(runtime)
+		},
+	})
 	if err != nil {
 		return Report{}, fmt.Errorf("construct Harness: %w", err)
 	}
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- loop.Run(workerCtx) }()
+	defer func() {
+		stopWorker()
+		if workerErr := <-workerDone; !errors.Is(workerErr, context.Canceled) {
+			err = errors.Join(err, workerErr)
+		}
+	}()
 	host, err := tuiharness.New(
-		runtime,
+		loop,
 		tuiharness.WithProfileLabel("e2e:scripted"),
 		tuiharness.WithWorkspace(workspace),
 		tuiharness.WithExecutionLabel("local-host governance (not an OS sandbox)"),
@@ -450,7 +469,7 @@ func (c *eventCollector) wait(ctx context.Context, want observationCounts) error
 		}
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("wait for TUI observations: %w", ctx.Err())
+			return fmt.Errorf("wait for TUI observations: got %+v, want %+v: %w", c.counts(), want, ctx.Err())
 		case <-c.done:
 			return fmt.Errorf("TUI observation ended at %#v, want %#v", observed, want)
 		case <-ticker.C:

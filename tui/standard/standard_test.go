@@ -21,6 +21,24 @@ import (
 	appconfig "github.com/regularkevvv/agentic/tui/config"
 )
 
+func buildWithWorker(t *testing.T, registry *Registry, config Config) (Assembly, error) {
+	t.Helper()
+	assembly, err := Build(t.Context(), registry, config)
+	if err != nil {
+		return Assembly{}, err
+	}
+	ctx, stop := context.WithCancel(t.Context())
+	done := make(chan error, 1)
+	go func() { done <- assembly.Worker.Run(ctx) }()
+	t.Cleanup(func() {
+		stop()
+		if err := <-done; !errors.Is(err, context.Canceled) {
+			t.Errorf("worker cleanup: %v", err)
+		}
+	})
+	return assembly, nil
+}
+
 func TestRegistryAndFactoryValidation(t *testing.T) {
 	t.Parallel()
 	if _, err := NewRegistry(nil); err == nil {
@@ -124,7 +142,7 @@ func TestBuildCreatesWorkingHarnessAdapter(t *testing.T) {
 		return fakeModel, nil
 	}}
 	registry, config := buildFixture(t, factory)
-	assembly, err := Build(context.Background(), registry, config)
+	assembly, err := buildWithWorker(t, registry, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +196,7 @@ func TestBuildUsesCompleteCustomEnvironment(t *testing.T) {
 		return memoryFactory.Open(ctx, sessionID)
 	})
 	config.ExecutionLabel = "  memory environment  "
-	assembly, err := Build(context.Background(), registry, config)
+	assembly, err := buildWithWorker(t, registry, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +209,8 @@ func TestBuildUsesCompleteCustomEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opens.Load() != 1 || snapshot.Workspace != "memory:/workspace" || snapshot.Execution != "memory environment" {
+	// Bootstrap creates the journal; the worker reopens it under ownership.
+	if opens.Load() != 2 || snapshot.Workspace != "memory:/workspace" || snapshot.Execution != "memory environment" {
 		t.Fatalf("custom environment snapshot = %#v, opens=%d", snapshot, opens.Load())
 	}
 }
@@ -207,7 +226,7 @@ func TestBuildDoesNotFallBackFromCustomEnvironmentFailure(t *testing.T) {
 	config.Environments = harnessenv.FactoryFunc(func(context.Context, string) (harnessenv.Lease, error) {
 		return nil, want
 	})
-	assembly, err := Build(context.Background(), registry, config)
+	assembly, err := buildWithWorker(t, registry, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +247,7 @@ func TestBuildRejectsIncompleteCustomEnvironmentLease(t *testing.T) {
 	}
 	config.WorkspaceRoot = "memory:/workspace"
 	config.Environments = memoryFactory
-	assembly, err := Build(context.Background(), registry, config)
+	assembly, err := buildWithWorker(t, registry, config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +288,7 @@ func TestCustomEnvironmentIsNarrowedForDelegation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	assembly, err := Build(context.Background(), registry, config)
+	assembly, err := buildWithWorker(t, registry, config)
 	if err != nil {
 		t.Fatal(err)
 	}

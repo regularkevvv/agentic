@@ -17,7 +17,7 @@ import (
 	"github.com/regularkevvv/agentic/harness"
 	"github.com/regularkevvv/agentic/harness/sessionloop"
 	"github.com/regularkevvv/agentic/harness/sessionloop/actor"
-	"github.com/regularkevvv/agentic/harness/sessionloop/actor/memory"
+	"github.com/regularkevvv/agentic/harness/sessionloop/actor/localchannel"
 	"github.com/regularkevvv/agentic/harness/store"
 )
 
@@ -28,7 +28,7 @@ type localFixture struct {
 	config  harness.DefaultConfig
 	model   *scriptedModel
 	id      actor.ActorID
-	mailbox *memory.Store
+	mailbox *localchannel.Store
 	adapter *observedAdapter
 	errors  chan error
 }
@@ -38,7 +38,7 @@ func newLocalFixture(t *testing.T) *localFixture {
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
 	t.Cleanup(cancel)
 	f := &localFixture{
-		ctx: ctx, mailbox: memory.New(), model: &scriptedModel{entered: make(chan struct{})},
+		ctx: ctx, mailbox: localchannel.New(), model: &scriptedModel{entered: make(chan struct{})},
 		errors: make(chan error, 32),
 		config: harness.DefaultConfig{
 			WorkspaceRoot: t.TempDir(), SessionDir: filepath.Join(t.TempDir(), "sessions"),

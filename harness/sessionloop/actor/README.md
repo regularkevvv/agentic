@@ -25,7 +25,8 @@ bootstrap ──> Worker.Run            │
 | `mailbox.go` | Application ports, immutable commands and submission receipts |
 | `adapter.go` | Runtime ports: Adapter, Ownership, SessionOpener |
 | `worker.go` | Shared worker; independent discovery and active-session delivery |
-| `memory/` | Process-local receive flavor; no process-crash durability claim |
+| `localchannel/` | Process-local receive flavor; no process-crash durability claim |
+| `memory/` | Deprecated import-path alias of localchannel |
 | `conformance/` | Shared tests for concrete adapters |
 | `spec/` | Lean model, proofs, adapter obligations and receive flavor |
 
@@ -92,7 +93,7 @@ partially constructed resources before returning an error.
 The [contract](spec/CONTRACT.md) has checked Lean proofs. Go has conformance,
 race, failure-injection and real-harness/journal integration tests. This is
 NOT a formal proof of Go or production storage. See the local flavor's
-[mapping and assumptions](memory/README.md).
+[mapping and assumptions](localchannel/README.md).
 
 The [local end-to-end scenario](../../../e2e/sessionloop/README.md) assembles
 the public memory adapter, independent workers, default Harness, real file tool
@@ -107,7 +108,7 @@ This intentionally replaces the old API:
 | CommandStore, LeaseStore, required Doorbell | Adapter with Ownership and reliable Receive |
 | Open(ctx, actorID) | Open(ctx, lease), binding journal authority |
 | MarkDispatched/MarkSettled/MarkFailed queue history | Journal receipt, then mailbox Acknowledge |
-| Private memory test infrastructure | Public actor/memory flavor |
+| Private memory test infrastructure | Public actor/localchannel flavor (memory remains an alias) |
 
 Consumers must migrate their assembly/adapters separately. This package does
 not prescribe or migrate application storage schemas.

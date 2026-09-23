@@ -739,6 +739,7 @@ func (v *LoopView[O]) newProjector(live bool) *loopProjector {
 	projector.commandForRun = v.commandForRun
 	projector.commandForQueue = v.commandForQueue
 	projector.commandForResolution = v.commandForResolution
+	projector.summarize = v.inner.ToolSummary
 	if live {
 		projector.awaitRunFinalized = v.awaitRunFinalized
 		projector.outputFor = v.projectedOutput

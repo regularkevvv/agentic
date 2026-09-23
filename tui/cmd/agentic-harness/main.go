@@ -58,7 +58,7 @@ func parseFlags(arguments []string, output io.Writer) (flags, error) {
 	return values, nil
 }
 
-func run(ctx context.Context, arguments, environ []string, input io.Reader, output, errorsOutput io.Writer) error {
+func run(ctx context.Context, arguments, environ []string, input io.Reader, output, errorsOutput io.Writer) (runErr error) {
 	values, err := parseFlags(arguments, errorsOutput)
 	if err != nil {
 		return err
@@ -132,6 +132,16 @@ func run(ctx context.Context, arguments, environ []string, input io.Reader, outp
 	if err != nil {
 		return err
 	}
+	// Worker lifecycle belongs to CLI bootstrap, never the input handler.
+	workerCtx, stopWorker := context.WithCancel(ctx)
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- assembly.Worker.Run(workerCtx) }()
+	defer func() {
+		stopWorker()
+		if err := <-workerDone; !errors.Is(err, context.Canceled) {
+			runErr = errors.Join(runErr, err)
+		}
+	}()
 	resumeID := values.resumeID
 	if resumeID == "" && resolved.ResumeLast {
 		resumeID, err = readLastSessionID(resolved.SessionDirectory)

@@ -98,6 +98,8 @@ type EntryToolCall struct {
 	CallID string
 	Name   string
 	Data   json.RawMessage
+	// Summary is optional application-redacted display text, never raw arguments.
+	Summary string
 }
 
 // Clone returns a deep, copy-owned copy of the tool call.

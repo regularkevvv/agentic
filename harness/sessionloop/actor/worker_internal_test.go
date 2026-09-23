@@ -15,6 +15,34 @@ import (
 
 var errInjected = errors.New("errInjected boundary failure")
 
+func TestOldSuspensionCannotSettleResumedRun(t *testing.T) {
+	w := &worker{}
+	waiting := map[sessionloop.RunID]executionWait{"run": {after: 20, command: "new-resolve"}}
+	old := sessionloop.Event{Nature: sessionloop.EventAuthoritative, Kind: sessionloop.EventRunSuspended, RunID: "run", Position: sessionloop.Position{Sequence: 10}}
+	if err := w.observe(t.Context(), Lease{}, streamResult{event: old}, waiting); err != nil {
+		t.Fatal(err)
+	}
+	if len(waiting) != 1 {
+		t.Fatal("old suspension released resumed execution")
+	}
+	bounce := sessionloop.Event{Nature: sessionloop.EventAuthoritative, Kind: sessionloop.EventSessionState, State: sessionloop.StateSuspended, RunID: "run", CommandID: "old-resolve"}
+	if err := w.observe(t.Context(), Lease{}, streamResult{event: bounce}, waiting); err != nil || len(waiting) != 1 {
+		t.Fatal("old live-only bounce released resumed execution", err)
+	}
+	old.Position.Sequence = 21
+	if err := w.observe(t.Context(), Lease{}, streamResult{event: old}, waiting); err != nil {
+		t.Fatal(err)
+	}
+	if len(waiting) != 0 {
+		t.Fatal("new suspension did not settle the wait")
+	}
+	waiting["run"] = executionWait{after: 20, command: "new-resolve"}
+	bounce.CommandID = "new-resolve"
+	if err := w.observe(t.Context(), Lease{}, streamResult{event: bounce}, waiting); err != nil || len(waiting) != 0 {
+		t.Fatal("current live-only bounce did not settle the wait", err)
+	}
+}
+
 type adapterStub struct {
 	Adapter
 	guarantee                                sessionloop.AcceptanceGuarantee
@@ -138,7 +166,7 @@ func fixture(a *adapterStub, s Session) *worker {
 }
 
 func TestNormalizeAndWorkerConfiguration(t *testing.T) {
-	for _, edit := range []func(*Command){func(c *Command) { c.ID = "" }, func(c *Command) { c.ActorID = "" }, func(c *Command) { c.Command.ID = "different" }, func(c *Command) { c.Command.IdempotencyKey = "different" }, func(c *Command) { c.Command.Kind = "invalid" }, func(c *Command) { c.Command.Input.Blocks[0].Kind = "invalid" }} {
+	for _, edit := range []func(*Command){func(c *Command) { c.ID = "" }, func(c *Command) { c.ActorID = "" }, func(c *Command) { c.Command.ID = "different" }, func(c *Command) { c.Command.Kind = "invalid" }, func(c *Command) { c.Command.Input.Blocks[0].Kind = "invalid" }} {
 		c := goodInput()
 		edit(&c)
 		if _, err := c.Normalize(); err == nil {
@@ -153,6 +181,11 @@ func TestNormalizeAndWorkerConfiguration(t *testing.T) {
 	normalized.Command.Input.Blocks[0].Text = "copy"
 	if c.Command.Input.Blocks[0].Text != "hello" {
 		t.Fatal("normalization aliases input")
+	}
+	c.Command.IdempotencyKey = "explicit-key"
+	normalized, err = c.Normalize()
+	if err != nil || normalized.Command.IdempotencyKey != "explicit-key" {
+		t.Fatal("normalization replaced explicit immutable key", normalized, err)
 	}
 	if _, err := NewWorker(Config{}); err == nil {
 		t.Fatal("empty config accepted")

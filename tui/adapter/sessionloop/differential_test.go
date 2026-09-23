@@ -11,8 +11,6 @@ package sessionloop
 // Documented differential exclusions (each also marked where applied):
 //
 //	Snapshots
-//	  - Tool.Summary: legacy uses the session's application-owned ToolSummary
-//	    redactor; the protocol carries no summary, the bridge uses the name.
 //	  - Suspension.Description: legacy leaves supported descriptions empty;
 //	    the protocol always carries a safe display description.
 //	  - Approval.ResourceScheme / Approval.CanonicalResource: the protocol
@@ -323,6 +321,7 @@ func differentialRuntime(t *testing.T, gate *runGate, streaming bool) *harnessco
 		Clock:          fixedClock{value: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)},
 		IDs:            &counterIDs{},
 		ModelStreaming: streaming,
+		ToolSummarizer: func(call agentic.ToolUse) string { return "redacted " + call.Name },
 	}
 	runtime, err := harnesscore.New[string](agent, harnesscore.WithRuntime(config), harnesscore.WithCapabilities(capability)).Build()
 	if err != nil {
@@ -725,10 +724,7 @@ func normalizeSnapshot(value uit.Snapshot) uit.Snapshot {
 	for index, entry := range value.Transcript {
 		normalized := entry
 		normalized.Tools = make([]uit.Tool, len(entry.Tools))
-		for toolIndex, tool := range entry.Tools {
-			tool.Summary = "" // documented lossy field: protocol has no summary
-			normalized.Tools[toolIndex] = tool
-		}
+		copy(normalized.Tools, entry.Tools)
 		if len(entry.Tools) == 0 {
 			normalized.Tools = nil
 		}
