@@ -25,9 +25,8 @@ func entries(values []sl.Entry, presenter uit.ToolPresenter) []uit.Entry {
 // text blocks; tool_call blocks become planned tools; tool_result blocks
 // become done/error tools. Raw tool payloads (EntryBlock.Data) never cross.
 //
-// Documented lossy field: the legacy adapter fills Tool.Summary from the
-// session's application-owned ToolSummary redactor; the protocol carries no
-// summary, so the bridge uses the tool name instead.
+// Tool summaries come from the host's application-owned redactor. Raw tool
+// arguments and results remain outside the TUI projection.
 func entry(value sl.Entry, presenter uit.ToolPresenter) uit.Entry {
 	result := uit.Entry{Role: uit.Role(value.Role)}
 	for _, block := range value.Blocks {
@@ -36,9 +35,13 @@ func entry(value sl.Entry, presenter uit.ToolPresenter) uit.Entry {
 			result.Text += block.Text
 		case sl.EntryBlockToolCall:
 			if block.ToolCall != nil {
+				summary := block.ToolCall.Summary
+				if summary == "" {
+					summary = block.ToolCall.Name
+				}
 				result.Tools = append(result.Tools, presentTool(uit.Tool{
 					CallID: block.ToolCall.CallID, Name: block.ToolCall.Name,
-					State: uit.ToolPlanned, Summary: block.ToolCall.Name,
+					State: uit.ToolPlanned, Summary: summary,
 				}, presenter))
 			}
 		case sl.EntryBlockToolResult:
@@ -124,6 +127,10 @@ func mapEvent(value sl.Event, owner snapshotOwner, presenter uit.ToolPresenter) 
 		Cursor: value.Position.Sequence, Ordinal: value.Ordinal,
 		Durable:   value.Nature != sl.EventPreview,
 		SessionID: string(value.SessionID), Dropped: value.Dropped,
+	}
+	if value.Origin != nil {
+		base.SessionID, base.ParentID = string(value.Origin.SessionID), string(value.Origin.ParentID)
+		base.Agent, base.Depth, base.Turn = value.Origin.Agent, value.Origin.Depth, value.Origin.Turn
 	}
 	switch value.Kind {
 	case sl.EventPreviewDelta:

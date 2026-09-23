@@ -1,7 +1,8 @@
 # Proved session-delivery contract
 
-Status: an executable Lean specification, checked protocol proofs, and a
-receive-based **Lean reference flavor**. The Go ports, shared Worker and local
+Status: an executable Lean specification, checked protocol proofs, a receive-based
+**Lean reference flavor**, and a proved **PostgreSQL transaction model**.
+The Go ports, shared Worker and local
 memory adapter implement the derived contract and have separate conformance,
 race and integration tests. They are **not formally proved Go code**. Persistent
 storage adapters require their own implementation and verification.
@@ -19,6 +20,8 @@ SessionContract/Model.lean          state and atomic operations
                Isolation.lean      sessions do not modify one another
                Adapter.lean        adapter state/operation/reply obligations
                Flavors/Receive.lean  receive-based reference adapter
+               Flavors/Postgres.lean PostgreSQL transaction proof root
+               Flavors/Postgres/     rows, interleavings, recovery, replies, expiry
                Examples.lean       regression witnesses and invalid designs
 SessionContract.lean               imports the entire specification
 Audit.lean                         forbids admitted proofs and custom axioms
@@ -66,6 +69,10 @@ proof build cannot pass. GitHub Actions runs the same script.
 | Lawful adapters inherit safety, recovery and conditional progress | `every_adapter_safe`, `every_adapter_recoverable`, `every_adapter_progresses` |
 | Receive/commit/reply-loss/crash preserve the protocol | `Flavors.Receive.*_refines` |
 | A receive-based submission reply cannot precede durable submission | `Flavors.Receive.submitted_response_is_durable` |
+| PostgreSQL row state AND replies match the contract | `Flavors.Postgres.calculate_correct` |
+| Arbitrary permitted SQL microstep histories preserve safety | `Flavors.Postgres.reachable_safe` |
+| A crash at any SQL phase has a concrete transaction recovery path | `Flavors.Postgres.crash_at_every_sql_phase_recoverable` |
+| Visible success replies retain durable backing through later actions | `Flavors.Postgres.success_response_has_durable_submission`, `Flavors.Postgres.acceptance_response_has_durable_journal` |
 | Steps in one session leave other sessions unchanged | `other_session_unchanged`, `world_step_safe` |
 
 These are symbolic proofs. The parameter `n` is arbitrary, not a test size.
@@ -153,6 +160,11 @@ channel cannot claim its process-crash guarantees; a local durable adapter
 can use a channel for transport and a persisted core for acknowledged state.
 
 ## Next implementation boundary
+
+The PostgreSQL model and its exact implementation/trust obligations are described
+in [the PostgreSQL proof guide](../../../hosts/postgres/PROOF.md). Its private
+writes, commit, rollback and reply phases are explicit; the SQL engine, actual
+statements, Go code, clocks and native journal mapping are not proved by Lean.
 
 1. Review the specification and its assumptions as the contract, not only the
    green proof result. Check that the desired failure cases are in the model.

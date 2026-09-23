@@ -19,14 +19,18 @@ import (
 	harnessenv "github.com/regularkevvv/agentic/harness/env"
 	"github.com/regularkevvv/agentic/harness/env/local"
 	envsandbox "github.com/regularkevvv/agentic/harness/env/sandbox"
+	"github.com/regularkevvv/agentic/harness/hosts/localchannel"
 	"github.com/regularkevvv/agentic/harness/permission"
+	"github.com/regularkevvv/agentic/harness/sessionloop"
+	"github.com/regularkevvv/agentic/harness/sessionloop/actor"
+	"github.com/regularkevvv/agentic/harness/store"
 	"github.com/regularkevvv/agentic/harness/subagent"
 	"github.com/regularkevvv/agentic/provider/anthropic"
 	"github.com/regularkevvv/agentic/provider/openai"
 	"github.com/regularkevvv/agentic/provider/openrouter"
 
 	uit "github.com/regularkevvv/agentic/tui"
-	harnessui "github.com/regularkevvv/agentic/tui/adapter/harness"
+	harnessui "github.com/regularkevvv/agentic/tui/adapter/sessionloop"
 	appconfig "github.com/regularkevvv/agentic/tui/config"
 )
 
@@ -137,7 +141,9 @@ func FromResolved(value appconfig.Resolved) Config {
 }
 
 type Assembly struct {
-	Host    uit.Host
+	Host   uit.Host
+	Worker actor.Worker
+	// Runtime is retained for source compatibility; the CLI executes only via Host.
 	Runtime *harnesscore.Harness[string]
 }
 
@@ -259,8 +265,23 @@ func Build(ctx context.Context, registry *Registry, config Config) (Assembly, er
 	if err != nil {
 		return Assembly{}, err
 	}
+	loop, err := localchannel.New(localchannel.Config{
+		Journals: assembly.Runtime.Sessions,
+		Build: func(journals store.Repository) (sessionloop.Host, error) {
+			owned := assembly.Runtime
+			owned.Sessions = journals
+			r, err := harnesscore.New(runner, harnesscore.WithRuntime(owned), harnesscore.WithCapabilities(capabilities...)).Build()
+			if err != nil {
+				return nil, err
+			}
+			return harnesscore.NewSessionLoopHost(r)
+		},
+	})
+	if err != nil {
+		return Assembly{}, err
+	}
 	host, err := harnessui.New(
-		runtime,
+		loop,
 		harnessui.WithProfileLabel(config.ProfileName),
 		harnessui.WithWorkspace(config.WorkspaceRoot),
 		harnessui.WithExecutionLabel(executionLabel),
@@ -269,7 +290,7 @@ func Build(ctx context.Context, registry *Registry, config Config) (Assembly, er
 	if err != nil {
 		return Assembly{}, err
 	}
-	return Assembly{Host: host, Runtime: runtime}, nil
+	return Assembly{Host: host, Worker: loop, Runtime: runtime}, nil
 }
 
 func requireStandardEnvironment(factory harnessenv.Factory) harnessenv.Factory {

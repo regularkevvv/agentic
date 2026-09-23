@@ -1,4 +1,14 @@
-# Local mailbox/worker acceptance
+# Session-loop end-to-end tests
+
+| Flavor | Location | Execution and storage |
+|---|---|---|
+| Local channel | Tests in this directory | Independent worker, process-local mailbox, JSONL journal |
+| PostgreSQL | [postgres/](postgres/README.md) | Independent worker, durable mailbox and fenced journal; direct PostgreSQL and transaction-pooled PgBouncer |
+
+Both exercise the same actor contracts and shared worker. The PostgreSQL adapter
+is a reference implementation owned by e2e, not a production-module dependency.
+
+## Local mailbox/worker acceptance
 
 Run from the repository root:
 
@@ -10,7 +20,7 @@ This credential-free e2e imports only public APIs and is run by CI with the
 race detector. Only the model is scripted. The assembly is:
 
 ```text
-Mailbox.Submit -> actor/memory -> independent Worker.Run
+Mailbox.Submit -> actor/localchannel -> independent Worker.Run
                                      |
                       SessionOpener + fenced journal authority
                                      |

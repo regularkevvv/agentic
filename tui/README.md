@@ -2,9 +2,18 @@
 
 `github.com/regularkevvv/agentic/tui` is a provider-neutral terminal client for
 durable interactive sessions. Applications can implement `tui.Host` directly
-or attach an already assembled Agentic Harness through `tui/adapter/harness`.
+or attach a session-loop host through `tui/adapter/sessionloop`.
 The core TUI never chooses a provider, executes a tool, or broadens permission
 policy.
+
+The standard CLI uses `harness/hosts/localchannel`: inputs enter a mailbox and
+an independently started worker owns execution. `standard.Build` returns both
+`Host` and `Worker`; embedding applications must start `Worker.Run(serviceCtx)`
+and join it at shutdown, as the CLI does. Requests never start workers.
+The direct `tui/adapter/harness` remains available for existing integrations.
+The `--offline` presentation demo remains a deterministic UI fixture, not a
+durability or mailbox demonstration; the real local acceptance scenario is
+`go run ./e2e/examples/tui` from the repository root.
 
 The composer keeps a padded three-row surface while its text area grows with
 wrapped or multiline input. Transcript gutters, quiet user cards, and
@@ -114,7 +123,7 @@ tool arguments and results are not part of the default view.
 Harness applications may set `RuntimeConfig.ToolSummarizer` at the capability
 boundary to turn raw calls into bounded, non-sensitive display text. Compatible
 hosts may then populate `tui.Tool.Presentation`, and Agentic Harness applications
-may pass `adapter/harness.WithToolPresenter`, to provide a category, title, and
+may pass `adapter/sessionloop.WithToolPresenter`, to provide a category, title, and
 detail for tool activity. Presenters receive only that already-redacted TUI tool
 projection; they cannot inspect raw arguments or results. The standard assembly
 shows file paths and command argument vectors while omitting stdin and environment

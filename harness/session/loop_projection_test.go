@@ -33,6 +33,33 @@ func loopTestEntry(t *testing.T, payloadCodec codec.Codec, seq uint64, kind stri
 	return store.Entry{Schema: 1, Seq: seq, ID: fmt.Sprintf("id-%d", seq), Kind: kind, Payload: encoded}
 }
 
+func TestDelegatedProgressAndRedactedToolSummary(t *testing.T) {
+	encoded := jsoncodec.New()
+	child := event.Record{Cursor: 7, Nature: agentic.EventAuthoritative, SessionID: "child", ParentID: "parent", Agent: "delegate", Depth: 1, Payload: []byte("private child content")}
+	projector := newLoopProjector("parent", encoded, nil)
+	projected, err := projector.apply(t.Context(), child)
+	if err != nil || len(projected) != 1 || projected[0].Origin == nil || projected[0].Origin.Agent != "delegate" {
+		t.Fatal(projected, err)
+	}
+	public, _ := json.Marshal(projected)
+	if strings.Contains(string(public), "private child content") {
+		t.Fatal("child payload leaked")
+	}
+	child.Payload = nil
+	records, err := loopRecords(encoded, []store.Entry{loopTestEntry(t, encoded, 7, kindChildEvent, child)})
+	if err != nil || len(records) != 1 || records[0].ParentID != "parent" {
+		t.Fatal(records, err)
+	}
+	child.Nature = agentic.EventPreview
+	if projected, err := projector.apply(t.Context(), child); err != nil || len(projected) != 0 {
+		t.Fatal(projected, err)
+	}
+	blocks := projectMessageToEntryBlocks(agentic.NewToolUseMessage(agentic.ToolUse{ID: "tool", Name: "lookup", Input: map[string]any{"secret": "private"}}), func(agentic.ToolUse) string { return "safe summary" })
+	if len(blocks) != 1 || blocks[0].ToolCall.Summary != "safe summary" {
+		t.Fatal(blocks)
+	}
+}
+
 func loopAgenticEntry(t *testing.T, payloadCodec codec.Codec, seq uint64, kind string, eventType agentic.EventType, payload any) store.Entry {
 	t.Helper()
 	encoded, err := codec.Encode(payloadCodec, payload)

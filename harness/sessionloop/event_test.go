@@ -41,6 +41,7 @@ func fullEvent() sessionloop.Event {
 		Usage:   &sessionloop.Usage{TotalTokens: 10, Requests: 1},
 		Preview: &sessionloop.Preview{Kind: sessionloop.PreviewText, Text: "partial"},
 		Dropped: 2,
+		Origin:  &sessionloop.EventOrigin{SessionID: "child", ParentID: "session-1", Agent: "delegate", Depth: 1},
 	}
 }
 
@@ -59,6 +60,7 @@ func TestEventCloneDeepCopiesEveryTypedPayload(t *testing.T) {
 	clone.Outcome.Output[2] = 'X'
 	clone.Usage.TotalTokens = 999
 	clone.Preview.Text = "mutated"
+	clone.Origin.Agent = "mutated"
 	if !reflect.DeepEqual(original, reference) {
 		t.Fatalf("mutating the clone leaked into the original: %#v", original)
 	}

@@ -20,6 +20,24 @@ type staticOwner struct {
 
 func (o staticOwner) Snapshot(context.Context) (uit.Snapshot, error) { return o.snapshot, o.err }
 
+func TestSafeSummaryAndChildRouting(t *testing.T) {
+	projected := entry(sl.Entry{Role: sl.RoleAssistant, Blocks: []sl.EntryBlock{{
+		Kind: sl.EntryBlockToolCall, Data: []byte(`{"secret":"private"}`),
+		ToolCall: &sl.EntryToolCall{CallID: "call", Name: "shell", Summary: "safe summary"},
+	}}}, nil)
+	if projected.Text != "" || len(projected.Tools) != 1 || projected.Tools[0].Summary != "safe summary" {
+		t.Fatalf("safe display projection = %#v", projected)
+	}
+	value := sl.Event{Kind: "agentic.child.progress", SessionID: "parent", Origin: &sl.EventOrigin{
+		SessionID: "child", ParentID: "parent", Agent: "research", Depth: 1, Turn: 2,
+	}}
+	events, err := mapEvent(value, staticOwner{}, nil)
+	if err != nil || len(events) != 1 || events[0].SessionID != "child" || events[0].ParentID != "parent" ||
+		events[0].Agent != "research" || events[0].Depth != 1 || events[0].Turn != 2 || events[0].Entry != nil {
+		t.Fatalf("child routing = %#v, %v", events, err)
+	}
+}
+
 func TestMapEventTable(t *testing.T) {
 	t.Parallel()
 	presenter := uit.ToolPresenterFunc(func(tool uit.Tool) uit.ToolPresentation {
