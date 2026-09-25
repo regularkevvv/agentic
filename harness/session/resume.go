@@ -58,7 +58,7 @@ func (s *Session[O]) prepareResume(
 	request ResumeRequest,
 	runParent context.Context,
 ) (*acceptedResume[O], error) {
-	return s.prepareResumeWithCommand(acceptCtx, request, runParent, nil)
+	return s.prepareResumeWithCommand(acceptCtx, request, runParent, nil, nil)
 }
 
 func (s *Session[O]) prepareResumeWithCommand(
@@ -66,6 +66,7 @@ func (s *Session[O]) prepareResumeWithCommand(
 	request ResumeRequest,
 	runParent context.Context,
 	command *loopCommandAcceptedPayload,
+	onAccepted func(string, store.Commit),
 ) (*acceptedResume[O], error) {
 	s.mu.Lock()
 	if err := s.resumeErrorLocked(request); err != nil {
@@ -75,7 +76,7 @@ func (s *Session[O]) prepareResumeWithCommand(
 	suspension := cloneSuspension(s.suspension)
 	if suspension.Kind == "harness.recovery.indeterminate" {
 		s.mu.Unlock()
-		return s.prepareResumeIndeterminateWithCommand(acceptCtx, suspension, request, runParent, command)
+		return s.prepareResumeIndeterminateWithCommand(acceptCtx, suspension, request, runParent, command, onAccepted)
 	}
 	history := append(cloneMessages(s.run.history), cloneMessages(s.run.expected)...)
 	limits := cloneLimitsPointer(s.run.limits)
@@ -123,6 +124,9 @@ func (s *Session[O]) prepareResumeWithCommand(
 	s.run.publicNewStart = len(s.run.expected)
 	s.cursor = commit.Cursor
 	s.transitionLocked(Running)
+	if onAccepted != nil {
+		onAccepted(runID, commit)
+	}
 	s.mu.Unlock()
 	s.publishOwn(commit.Entries, agentic.EventAuthoritative)
 
@@ -226,7 +230,7 @@ func (s *Session[O]) prepareResumeIndeterminate(
 	request ResumeRequest,
 	runParent context.Context,
 ) (*acceptedResume[O], error) {
-	return s.prepareResumeIndeterminateWithCommand(acceptCtx, suspension, request, runParent, nil)
+	return s.prepareResumeIndeterminateWithCommand(acceptCtx, suspension, request, runParent, nil, nil)
 }
 
 func (s *Session[O]) prepareResumeIndeterminateWithCommand(
@@ -235,6 +239,7 @@ func (s *Session[O]) prepareResumeIndeterminateWithCommand(
 	request ResumeRequest,
 	runParent context.Context,
 	command *loopCommandAcceptedPayload,
+	onAccepted func(string, store.Commit),
 ) (*acceptedResume[O], error) {
 	var payload recoverySuspensionPayload
 	if err := json.Unmarshal(suspension.Payload, &payload); err != nil || payload.Version != 1 {
@@ -396,6 +401,9 @@ func (s *Session[O]) prepareResumeIndeterminateWithCommand(
 	s.suspension = nil
 	s.cursor = commit.Cursor
 	s.transitionLocked(Running)
+	if onAccepted != nil {
+		onAccepted(runID, commit)
+	}
 	s.mu.Unlock()
 	s.publishOwnByKind(commit.Entries)
 	return &acceptedResume[O]{

@@ -47,6 +47,11 @@ type LoopConfig[O any] struct {
 // at projection time from the view's maps. Keyed command attribution is
 // restored from journaled acceptance across reopen; unkeyed attribution and
 // application-projected structured output remain live-handle knowledge.
+// Acceptance installs attribution under inner.mu, before queued input can be
+// consumed or committed events published. Projection lookups take inner.mu
+// before v.mu too, so reading the journal during Append cannot expose an entry
+// before its attribution is installed. The private onAccepted callbacks only
+// update view metadata; they must not perform I/O or re-enter the inner session.
 type LoopView[O any] struct {
 	inner     *Session[O]
 	closeRoot func(context.Context) error
@@ -450,15 +455,16 @@ func (v *LoopView[O]) dispatchStart(
 	if err != nil {
 		return sessionloop.Receipt{}, err
 	}
-	accepted, err := v.inner.prepareStartWithCommand(ctx, message, v.lifetime, marker)
+	done := make(chan struct{})
+	accepted, err := v.inner.prepareStartWithCommand(ctx, message, v.lifetime, marker, func(runID string, _ store.Commit) {
+		v.mu.Lock()
+		v.runCommands[runID] = commandID
+		v.runDone[runID] = done
+		v.mu.Unlock()
+	})
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
-	done := make(chan struct{})
-	v.mu.Lock()
-	v.runCommands[accepted.runID] = commandID
-	v.runDone[accepted.runID] = done
-	v.mu.Unlock()
 	if ctx.Err() != nil {
 		// The dispatch context was canceled after durable acceptance: finish
 		// the handshake deterministically (plan 8.4). The accepted run is
@@ -507,13 +513,14 @@ func (v *LoopView[O]) dispatchQueue(
 	if kind != QueueNextTurn {
 		targetRunID = string(command.RunID)
 	}
-	receipt, cursor, err := v.inner.acceptWithCursorCommand(ctx, kind, message, targetRunID, marker)
+	receipt, cursor, err := v.inner.acceptWithCursorCommand(ctx, kind, message, targetRunID, marker, func(queueID string, _ store.Commit) {
+		v.mu.Lock()
+		v.queueCommands[queueID] = commandID
+		v.mu.Unlock()
+	})
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
-	v.mu.Lock()
-	v.queueCommands[receipt.ID] = commandID
-	v.mu.Unlock()
 	result := sessionloop.Receipt{
 		CommandID: commandID,
 		SessionID: v.ID(),
@@ -569,22 +576,23 @@ func (v *LoopView[O]) dispatchResolve(
 	if err != nil {
 		return sessionloop.Receipt{}, err
 	}
-	accepted, err := v.inner.prepareResumeWithCommand(ctx, request, v.lifetime, marker)
+	done := make(chan struct{})
+	accepted, err := v.inner.prepareResumeWithCommand(ctx, request, v.lifetime, marker, func(runID string, commit store.Commit) {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		if _, known := v.runCommands[runID]; !known {
+			v.runCommands[runID] = commandID
+		}
+		for _, entry := range commit.Entries {
+			if entry.Kind == kindResolutionAccepted {
+				v.resolutionCommands[entry.Seq] = commandID
+			}
+		}
+		v.runDone[runID] = done
+	})
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
-	done := make(chan struct{})
-	v.mu.Lock()
-	if _, known := v.runCommands[accepted.runID]; !known {
-		v.runCommands[accepted.runID] = commandID
-	}
-	for _, entry := range accepted.commit.Entries {
-		if entry.Kind == kindResolutionAccepted {
-			v.resolutionCommands[entry.Seq] = commandID
-		}
-	}
-	v.runDone[accepted.runID] = done
-	v.mu.Unlock()
 	v.wg.Add(1)
 	go func() {
 		defer v.wg.Done()
@@ -717,18 +725,24 @@ func (v *LoopView[O]) awaitRunFinalized(ctx context.Context, runID string) error
 }
 
 func (v *LoopView[O]) commandForRun(runID string) sessionloop.CommandID {
+	v.inner.mu.Lock()
+	defer v.inner.mu.Unlock()
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.runCommands[runID]
 }
 
 func (v *LoopView[O]) commandForQueue(queueID string) sessionloop.CommandID {
+	v.inner.mu.Lock()
+	defer v.inner.mu.Unlock()
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.queueCommands[queueID]
 }
 
 func (v *LoopView[O]) commandForResolution(seq uint64) sessionloop.CommandID {
+	v.inner.mu.Lock()
+	defer v.inner.mu.Unlock()
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	return v.resolutionCommands[seq]

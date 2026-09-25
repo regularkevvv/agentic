@@ -355,7 +355,7 @@ func (s *Session[O]) accept(ctx context.Context, kind QueueKind, message agentic
 // errStaleRunTarget instead of leaking into a successor run. The legacy
 // queue methods pass "" and keep their exact historical behavior.
 func (s *Session[O]) acceptWithCursor(ctx context.Context, kind QueueKind, message agentic.Message, targetRunID string) (QueueReceipt, store.Cursor, error) {
-	return s.acceptWithCursorCommand(ctx, kind, message, targetRunID, nil)
+	return s.acceptWithCursorCommand(ctx, kind, message, targetRunID, nil, nil)
 }
 
 func (s *Session[O]) acceptWithCursorCommand(
@@ -364,6 +364,7 @@ func (s *Session[O]) acceptWithCursorCommand(
 	message agentic.Message,
 	targetRunID string,
 	command *loopCommandAcceptedPayload,
+	onAccepted func(string, store.Commit),
 ) (QueueReceipt, store.Cursor, error) {
 	if message.Role != agentic.RoleUser {
 		return QueueReceipt{}, store.Cursor{}, ErrInvalidMessage
@@ -416,6 +417,9 @@ func (s *Session[O]) acceptWithCursorCommand(
 	}
 	s.queue = append(s.queue, entry)
 	s.cursor = commit.Cursor
+	if onAccepted != nil {
+		onAccepted(id, commit)
+	}
 	s.mu.Unlock()
 	s.publishOwn(commit.Entries, agentic.EventAuthoritative)
 	return QueueReceipt{ID: id, Kind: kind, Cursor: commit.Cursor.Seq}, commit.Cursor, nil
