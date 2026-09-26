@@ -701,13 +701,12 @@ func TestCharacterizationPreviewLossAndSubscriberLag(t *testing.T) {
 	}
 }
 
-// Scenario 9: an append failure on write-ahead queue acceptance returns the
-// error without faulting, while an append failure on a mid-run durable emit
-// faults the session permanently for every subsequent public call.
+// Scenario 9: acceptance and mid-run append failures both fault the session.
+// An Append error does not establish rollback; recovery needs a new handle.
 func TestCharacterizationJournalAppendConflictFaults(t *testing.T) {
 	writeErr := errors.New("characterization append failure")
 
-	t.Run("QueueAcceptanceFailureDoesNotFault", func(t *testing.T) {
+	t.Run("QueueAcceptanceFailureRequiresRecovery", func(t *testing.T) {
 		repository := &failingRepository{base: storememory.New()}
 		driver := &countingDriver{}
 		config := characterizationConfig(t, driver, repository)
@@ -716,18 +715,21 @@ func TestCharacterizationJournalAppendConflictFaults(t *testing.T) {
 			t.Fatal(err)
 		}
 		repository.fail(kindQueueAccepted, writeErr)
-		if _, err := session.NextTurn(context.Background(), agentic.NewTextMessage(agentic.RoleUser, "rejected")); !errors.Is(err, writeErr) || errors.Is(err, ErrSessionFaulted) {
+		if _, err := session.NextTurn(context.Background(), agentic.NewTextMessage(agentic.RoleUser, "rejected")); !errors.Is(err, writeErr) || !errors.Is(err, ErrSessionFaulted) {
 			t.Fatalf("queue acceptance error = %v", err)
 		}
-		snapshot, err := session.Snapshot(context.Background())
+		if _, err := session.Snapshot(context.Background()); !errors.Is(err, ErrSessionFaulted) {
+			t.Fatalf("failed acceptance left readable state: %v", err)
+		}
+		if err := session.Close(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		session, err = Recover(context.Background(), config)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if snapshot.State != Idle || len(snapshot.Pending) != 0 {
-			t.Fatalf("failed acceptance mutated state: %#v", snapshot)
-		}
-		// The session stays usable; the failed attempt consumed queue_c1, so
-		// the next acceptance carries queue_c2.
+		// This fixture failed before commit; reconstruction permits a new
+		// acceptance. The failed attempt already consumed queue_c1.
 		receipt, err := session.NextTurn(context.Background(), agentic.NewTextMessage(agentic.RoleUser, "accepted"))
 		if err != nil || receipt.ID != "queue_c2" {
 			t.Fatalf("post-failure receipt = %#v, %v", receipt, err)

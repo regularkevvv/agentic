@@ -4,11 +4,17 @@ on:
   push:
     branches: [main, develop]
     paths:
-      - harness/sessionloop/actor/spec/**
+      - harness/session/**
+      - harness/sessionloop/**
+      - harness/hosts/postgres/**
+      - e2e/sessionloop/**
       - .github/workflows/session-contract.yml
   pull_request:
     paths:
-      - harness/sessionloop/actor/spec/**
+      - harness/session/**
+      - harness/sessionloop/**
+      - harness/hosts/postgres/**
+      - e2e/sessionloop/**
       - .github/workflows/session-contract.yml
   workflow_dispatch:
 

@@ -47,6 +47,11 @@ type LoopConfig[O any] struct {
 // at projection time from the view's maps. Keyed command attribution is
 // restored from journaled acceptance across reopen; unkeyed attribution and
 // application-projected structured output remain live-handle knowledge.
+// Acceptance installs attribution under inner.mu, before queued input can be
+// consumed or committed events published. Projection lookups take inner.mu
+// before v.mu too, so reading the journal during Append cannot expose an entry
+// before its attribution is installed. The private onAccepted callbacks only
+// update view metadata; they must not perform I/O or re-enter the inner session.
 type LoopView[O any] struct {
 	inner     *Session[O]
 	closeRoot func(context.Context) error
@@ -145,6 +150,10 @@ func NewLoopView[O any](inner *Session[O], config LoopConfig[O]) (*LoopView[O], 
 		idempotency:        make(map[string]durableCommandAcceptance),
 		idempotencyClaims:  make(map[string]chan struct{}),
 	}
+	if _, err := view.availability(); err != nil {
+		cancel()
+		return nil, err
+	}
 	if caps.Supports(sessionloop.CapabilityIdempotentDispatch) {
 		if err := view.restoreCommandAcceptances(context.Background()); err != nil {
 			cancel()
@@ -207,8 +216,8 @@ func (v *LoopView[O]) Dispatch(ctx context.Context, command sessionloop.Command)
 	}
 	v.lifecycleMu.RLock()
 	defer v.lifecycleMu.RUnlock()
-	if v.isClosed() {
-		return sessionloop.Receipt{}, loopClosedError()
+	if _, err := v.availability(); err != nil {
+		return sessionloop.Receipt{}, err
 	}
 	commandID := command.ID
 	if commandID == "" {
@@ -302,6 +311,9 @@ func (v *LoopView[O]) claimIdempotencyKey(
 	ctx context.Context, key, digest string,
 ) (sessionloop.Receipt, bool, chan struct{}, error) {
 	for {
+		if _, err := v.availability(); err != nil {
+			return sessionloop.Receipt{}, false, nil, err
+		}
 		v.mu.Lock()
 		if accepted, exists := v.idempotency[key]; exists {
 			v.mu.Unlock()
@@ -450,15 +462,16 @@ func (v *LoopView[O]) dispatchStart(
 	if err != nil {
 		return sessionloop.Receipt{}, err
 	}
-	accepted, err := v.inner.prepareStartWithCommand(ctx, message, v.lifetime, marker)
+	done := make(chan struct{})
+	accepted, err := v.inner.prepareStartWithCommand(ctx, message, v.lifetime, marker, func(runID string, _ store.Commit) {
+		v.mu.Lock()
+		v.runCommands[runID] = commandID
+		v.runDone[runID] = done
+		v.mu.Unlock()
+	})
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
-	done := make(chan struct{})
-	v.mu.Lock()
-	v.runCommands[accepted.runID] = commandID
-	v.runDone[accepted.runID] = done
-	v.mu.Unlock()
 	if ctx.Err() != nil {
 		// The dispatch context was canceled after durable acceptance: finish
 		// the handshake deterministically (plan 8.4). The accepted run is
@@ -507,13 +520,14 @@ func (v *LoopView[O]) dispatchQueue(
 	if kind != QueueNextTurn {
 		targetRunID = string(command.RunID)
 	}
-	receipt, cursor, err := v.inner.acceptWithCursorCommand(ctx, kind, message, targetRunID, marker)
+	receipt, cursor, err := v.inner.acceptWithCursorCommand(ctx, kind, message, targetRunID, marker, func(queueID string, _ store.Commit) {
+		v.mu.Lock()
+		v.queueCommands[queueID] = commandID
+		v.mu.Unlock()
+	})
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
-	v.mu.Lock()
-	v.queueCommands[receipt.ID] = commandID
-	v.mu.Unlock()
 	result := sessionloop.Receipt{
 		CommandID: commandID,
 		SessionID: v.ID(),
@@ -569,22 +583,23 @@ func (v *LoopView[O]) dispatchResolve(
 	if err != nil {
 		return sessionloop.Receipt{}, err
 	}
-	accepted, err := v.inner.prepareResumeWithCommand(ctx, request, v.lifetime, marker)
+	done := make(chan struct{})
+	accepted, err := v.inner.prepareResumeWithCommand(ctx, request, v.lifetime, marker, func(runID string, commit store.Commit) {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		if _, known := v.runCommands[runID]; !known {
+			v.runCommands[runID] = commandID
+		}
+		for _, entry := range commit.Entries {
+			if entry.Kind == kindResolutionAccepted {
+				v.resolutionCommands[entry.Seq] = commandID
+			}
+		}
+		v.runDone[runID] = done
+	})
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
-	done := make(chan struct{})
-	v.mu.Lock()
-	if _, known := v.runCommands[accepted.runID]; !known {
-		v.runCommands[accepted.runID] = commandID
-	}
-	for _, entry := range accepted.commit.Entries {
-		if entry.Kind == kindResolutionAccepted {
-			v.resolutionCommands[entry.Seq] = commandID
-		}
-	}
-	v.runDone[accepted.runID] = done
-	v.mu.Unlock()
 	v.wg.Add(1)
 	go func() {
 		defer v.wg.Done()
@@ -716,22 +731,37 @@ func (v *LoopView[O]) awaitRunFinalized(ctx context.Context, runID string) error
 	return nil
 }
 
-func (v *LoopView[O]) commandForRun(runID string) sessionloop.CommandID {
+func (v *LoopView[O]) commandForRun(runID string) (sessionloop.CommandID, error) {
+	v.inner.mu.Lock()
+	defer v.inner.mu.Unlock()
+	if err := v.inner.acceptanceFaultLocked(); err != nil {
+		return "", mapLoopError(err)
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.runCommands[runID]
+	return v.runCommands[runID], nil
 }
 
-func (v *LoopView[O]) commandForQueue(queueID string) sessionloop.CommandID {
+func (v *LoopView[O]) commandForQueue(queueID string) (sessionloop.CommandID, error) {
+	v.inner.mu.Lock()
+	defer v.inner.mu.Unlock()
+	if err := v.inner.acceptanceFaultLocked(); err != nil {
+		return "", mapLoopError(err)
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.queueCommands[queueID]
+	return v.queueCommands[queueID], nil
 }
 
-func (v *LoopView[O]) commandForResolution(seq uint64) sessionloop.CommandID {
+func (v *LoopView[O]) commandForResolution(seq uint64) (sessionloop.CommandID, error) {
+	v.inner.mu.Lock()
+	defer v.inner.mu.Unlock()
+	if err := v.inner.acceptanceFaultLocked(); err != nil {
+		return "", mapLoopError(err)
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.resolutionCommands[seq]
+	return v.resolutionCommands[seq], nil
 }
 
 func (v *LoopView[O]) newProjector(live bool) *loopProjector {
@@ -739,6 +769,7 @@ func (v *LoopView[O]) newProjector(live bool) *loopProjector {
 	projector.commandForRun = v.commandForRun
 	projector.commandForQueue = v.commandForQueue
 	projector.commandForResolution = v.commandForResolution
+	projector.availability = v.projectionAvailability
 	projector.summarize = v.inner.ToolSummary
 	if live {
 		projector.awaitRunFinalized = v.awaitRunFinalized
@@ -752,8 +783,8 @@ func (v *LoopView[O]) newProjector(live bool) *loopProjector {
 // Live view state (session state, pending queue, suspension, usage) comes
 // from the inner session's authoritative snapshot.
 func (v *LoopView[O]) Snapshot(ctx context.Context) (sessionloop.Snapshot, error) {
-	if v.isClosed() {
-		return sessionloop.Snapshot{}, loopClosedError()
+	if _, err := v.availability(); err != nil {
+		return sessionloop.Snapshot{}, err
 	}
 	loaded, err := v.inner.journalRef().Load(ctx)
 	if err != nil {
@@ -791,7 +822,10 @@ func (v *LoopView[O]) Snapshot(ctx context.Context) (sessionloop.Snapshot, error
 	}
 	for _, pending := range inner.Pending {
 		queued := projector.fold.queuedInput(pending.ID)
-		queued.CommandID = v.commandForQueue(pending.ID)
+		queued.CommandID, err = v.commandForQueue(pending.ID)
+		if err != nil {
+			return sessionloop.Snapshot{}, err
+		}
 		snapshot.Pending = append(snapshot.Pending, queued)
 	}
 	if inner.Suspension != nil {
@@ -805,8 +839,8 @@ func (v *LoopView[O]) Snapshot(ctx context.Context) (sessionloop.Snapshot, error
 }
 
 func (v *LoopView[O]) Subscribe(ctx context.Context, options sessionloop.SubscribeOptions) (sessionloop.Stream, error) {
-	if v.isClosed() {
-		return nil, loopClosedError()
+	if _, err := v.availability(); err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -892,6 +926,10 @@ func (s *loopStream) inject(event sessionloop.Event) {
 
 func (s *loopStream) Next(ctx context.Context) (sessionloop.Event, error) {
 	for {
+		changed, err := s.projector.available()
+		if err != nil {
+			return sessionloop.Event{}, err
+		}
 		s.mu.Lock()
 		if len(s.queue) > 0 {
 			next := s.queue[0]
@@ -912,6 +950,8 @@ func (s *loopStream) Next(ctx context.Context) (sessionloop.Event, error) {
 		select {
 		case <-ctx.Done():
 			return sessionloop.Event{}, ctx.Err()
+		case <-changed:
+			// Includes an acceptance fault without a published journal event.
 		case <-s.wake:
 			// An injected live event (or Close) is waiting; re-check the queue.
 		case record, ok := <-s.subscription.Events:

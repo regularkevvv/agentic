@@ -35,6 +35,7 @@ Receive  = poll pending input OR unfinished execution; no repair cron/broker
 | [fixture_test.go](fixture_test.go) | Actual native Harness + independent shared worker assembly |
 | [worker_test.go](worker_test.go) | Conversation, real file tool, steering, restart, request-prefix continuity and pooling |
 | [crash_test.go](crash_test.go) | Kill real worker processes at storage/execution boundaries |
+| [acceptance_failure_test.go](acceptance_failure_test.go) | Real SQL append error before/after commit; autonomous recovery, stable attribution, one acceptance and mailbox cleanup |
 
 The important assembly is small:
 

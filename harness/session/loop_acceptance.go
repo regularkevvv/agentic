@@ -26,8 +26,8 @@ func (v *LoopView[O]) Acceptance(ctx context.Context, command sessionloop.Comman
 	}
 	v.lifecycleMu.RLock()
 	defer v.lifecycleMu.RUnlock()
-	if v.isClosed() {
-		return sessionloop.Receipt{}, false, loopClosedError()
+	if _, err := v.availability(); err != nil {
+		return sessionloop.Receipt{}, false, err
 	}
 	digest, err := loopCommandDigest(command)
 	if err != nil {
@@ -61,8 +61,8 @@ func (v *LoopView[O]) Reject(ctx context.Context, command sessionloop.Command, r
 	}
 	v.lifecycleMu.RLock()
 	defer v.lifecycleMu.RUnlock()
-	if v.isClosed() {
-		return sessionloop.Receipt{}, loopClosedError()
+	if _, err := v.availability(); err != nil {
+		return sessionloop.Receipt{}, err
 	}
 	digest, err := loopCommandDigest(command)
 	if err != nil {
@@ -90,7 +90,7 @@ func (v *LoopView[O]) Reject(ctx context.Context, command sessionloop.Command, r
 		v.inner.mu.Unlock()
 		return sessionloop.Receipt{}, sessionloop.ErrSessionFaulted
 	}
-	commit, err := v.inner.journal.Append(ctx, v.inner.cursor, entry)
+	commit, err := v.inner.appendAcceptanceLocked(ctx, entry)
 	if err == nil {
 		v.inner.cursor = commit.Cursor
 	}

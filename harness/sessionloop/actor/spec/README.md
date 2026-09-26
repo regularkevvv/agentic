@@ -1,7 +1,8 @@
 # Proved session-delivery contract
 
 Status: an executable Lean specification, checked protocol proofs, a receive-based
-**Lean reference flavor**, and a proved **PostgreSQL transaction model**.
+**Lean reference flavor**, a proved **PostgreSQL transaction model**, and a
+**command-publication ordering model**.
 The Go ports, shared Worker and local
 memory adapter implement the derived contract and have separate conformance,
 race and integration tests. They are **not formally proved Go code**. Persistent
@@ -18,6 +19,9 @@ SessionContract/Model.lean          state and atomic operations
                Recovery.lean       continuation exists after crashes
                Progress.lean       fair scheduling reaches resolution + cleanup
                Isolation.lean      sessions do not modify one another
+               Publication.lean    attribution ordering, replay and crash rebuild
+               PublicationExamples.lean old-order counterexamples + fixed trace
+               RecoveryStartup.lean early-interrupt responsibility and settlement
                Adapter.lean        adapter state/operation/reply obligations
                Flavors/Receive.lean  receive-based reference adapter
                Flavors/Postgres.lean PostgreSQL transaction proof root
@@ -74,12 +78,21 @@ proof build cannot pass. GitHub Actions runs the same script.
 | A crash at any SQL phase has a concrete transaction recovery path | `Flavors.Postgres.crash_at_every_sql_phase_recoverable` |
 | Visible success replies retain durable backing through later actions | `Flavors.Postgres.success_response_has_durable_submission`, `Flavors.Postgres.acceptance_response_has_durable_journal` |
 | Steps in one session leave other sessions unchanged | `other_session_unchanged`, `world_step_safe` |
+| Publication microsteps preserve the existing protocol | `Publication.history_linearizes`, `Publication.reachable_safe` |
+| Observed keyed-command IDs agree with durable replay through subsequent steps | `Publication.live_equals_replay` |
+| Committed attribution can be rebuilt and observed after a crash at any phase | `Publication.crash_at_every_phase_replayable` |
+| The fixed ordering can actually publish, while the old ordering has a counterexample | `Publication.committed_can_publish`, `Publication.Examples.old_order_breaks_agreement` |
+| Append errors before/after commit preserve safety and require reconstruction before observing | `Publication.append_failure_preserves_safety`, `Publication.offline_until_reconstruction`, `Publication.invalidated_cannot_observe` |
+| Reconstruction recovers committed attribution or permits an uncommitted retry | `Publication.append_error_reconstruction`, `Publication.uncommitted_error_retry` |
+| An early recovery interrupt retains a responsible callback and a settlement continuation | `RecoveryStartup.reachable_owned`, `RecoveryStartup.interrupted_can_settle` |
 
-These are symbolic proofs. The parameter `n` is arbitrary, not a test size.
+The delivery/publication proofs are symbolic. The parameter `n` is arbitrary, not a test size.
 The command identity domain is `Fin n`: any finite history can be represented
 with a sufficiently large domain. Lease generations and history length are
 not bounded. `Examples.lean` adds small kernel-checked examples; it does not
 replace the general proofs.
+`RecoveryStartup` is a separate finite-state component model for one recovered
+run's startup/interrupt handoff, including arbitrary repeated permitted steps.
 
 ## Counterexamples kept with the proofs
 
@@ -126,8 +139,11 @@ worker acknowledges durably accepted input before advancing it to settlement,
 and also cleans up an entry if settlement happened before acknowledgment.
 `settled` means the execution obligation has a durable resolution: completed,
 failed explicitly, or safely parked pending external input. The detailed
-outcome, suspension protocol, output projection and LLM transcript are outside
-this model. No proof here permits silently dropping a failed command.
+outcome, suspension protocol, general output projection and LLM transcript are
+outside this model. The separate publication extension proves only keyed-command
+attribution consistency, not equality of complete projected events; see
+[PUBLICATION.md](PUBLICATION.md). No proof here permits silently dropping a failed
+command.
 
 The trusted storage abstraction does not lose committed durable data. Permanent
 loss of every durable copy is outside this failure model. So are Byzantine

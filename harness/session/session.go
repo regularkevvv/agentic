@@ -80,21 +80,22 @@ type Session[O any] struct {
 	closingHookDone   bool
 	closedHookDone    bool
 
-	mu             sync.Mutex
-	state          State
-	stateChange    chan struct{}
-	fault          error
-	cursor         store.Cursor
-	messages       []agentic.Message
-	contextMarkers []contextMarker
-	queue          []QueueEntry
-	usage          agentic.Usage
-	budget         *agentic.UsageLimits
-	drainAll       bool
-	suspension     *agentic.Suspension
-	run            *activeRun
-	runCancel      context.CancelFunc
-	recoveryInputs []QueueEntry
+	mu              sync.Mutex
+	state           State
+	stateChange     chan struct{}
+	fault           error
+	acceptanceFault error // sticky until close/recover; the old view must not guess rollback
+	cursor          store.Cursor
+	messages        []agentic.Message
+	contextMarkers  []contextMarker
+	queue           []QueueEntry
+	usage           agentic.Usage
+	budget          *agentic.UsageLimits
+	drainAll        bool
+	suspension      *agentic.Suspension
+	run             *activeRun
+	runCancel       context.CancelFunc
+	recoveryInputs  []QueueEntry
 }
 
 func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session[O], error) {
@@ -279,6 +280,9 @@ func (s *Session[O]) Snapshot(ctx context.Context) (Snapshot, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.acceptanceFaultLocked(); err != nil {
+		return Snapshot{}, err
+	}
 	pending := make([]QueueEntry, len(s.queue))
 	for i, entry := range s.queue {
 		pending[i] = entry
@@ -355,7 +359,7 @@ func (s *Session[O]) accept(ctx context.Context, kind QueueKind, message agentic
 // errStaleRunTarget instead of leaking into a successor run. The legacy
 // queue methods pass "" and keep their exact historical behavior.
 func (s *Session[O]) acceptWithCursor(ctx context.Context, kind QueueKind, message agentic.Message, targetRunID string) (QueueReceipt, store.Cursor, error) {
-	return s.acceptWithCursorCommand(ctx, kind, message, targetRunID, nil)
+	return s.acceptWithCursorCommand(ctx, kind, message, targetRunID, nil, nil)
 }
 
 func (s *Session[O]) acceptWithCursorCommand(
@@ -364,6 +368,7 @@ func (s *Session[O]) acceptWithCursorCommand(
 	message agentic.Message,
 	targetRunID string,
 	command *loopCommandAcceptedPayload,
+	onAccepted func(string, store.Commit),
 ) (QueueReceipt, store.Cursor, error) {
 	if message.Role != agentic.RoleUser {
 		return QueueReceipt{}, store.Cursor{}, ErrInvalidMessage
@@ -407,15 +412,18 @@ func (s *Session[O]) acceptWithCursorCommand(
 		s.mu.Unlock()
 		return QueueReceipt{}, store.Cursor{}, err
 	}
-	commit, appendErr := s.journal.Append(ctx, s.cursor, pendingEntries...)
+	commit, appendErr := s.appendAcceptanceLocked(ctx, pendingEntries...)
 	if appendErr != nil {
-		// Acceptance is write-ahead. No in-memory queue mutation occurred, so
-		// this isolated failure does not fault the session.
+		// The append may have committed. The old view is now unusable even
+		// though no in-memory queue mutation occurred.
 		s.mu.Unlock()
 		return QueueReceipt{}, store.Cursor{}, appendErr
 	}
 	s.queue = append(s.queue, entry)
 	s.cursor = commit.Cursor
+	if onAccepted != nil {
+		onAccepted(id, commit)
+	}
 	s.mu.Unlock()
 	s.publishOwn(commit.Entries, agentic.EventAuthoritative)
 	return QueueReceipt{ID: id, Kind: kind, Cursor: commit.Cursor.Seq}, commit.Cursor, nil

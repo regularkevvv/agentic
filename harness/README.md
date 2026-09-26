@@ -43,6 +43,13 @@ Agentic `v0.7.0`. It currently provides:
 - a generic deterministic eval runner, built-in evaluators, JSON reporting,
   and a fresh-session harness subject adapter.
 
+If a journal append for command acceptance returns an error, the native session
+and its SessionLoop view fail closed with `ErrSessionFaulted`. An error may mean
+the commit succeeded but its reply was lost. Close and reopen the same session
+under valid ownership, then check the original idempotency key before retrying;
+do not retry on the old handle. The shared actor Worker performs this recovery.
+See [the publication and recovery proof](sessionloop/actor/spec/PUBLICATION.md).
+
 The runtime and session core import only ports. `harness.NewRuntime` remains
 the policy-neutral constructor; `harness.New(...).Build()` layers an immutable
 capability plan over the same explicit substrate:

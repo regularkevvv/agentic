@@ -51,7 +51,7 @@ func (s *Session[O]) prepareStart(
 	prompt agentic.Message,
 	runParent context.Context,
 ) (*acceptedStart[O], error) {
-	return s.prepareStartWithCommand(acceptCtx, prompt, runParent, nil)
+	return s.prepareStartWithCommand(acceptCtx, prompt, runParent, nil, nil)
 }
 
 func (s *Session[O]) prepareStartWithCommand(
@@ -59,6 +59,7 @@ func (s *Session[O]) prepareStartWithCommand(
 	prompt agentic.Message,
 	runParent context.Context,
 	command *loopCommandAcceptedPayload,
+	onAccepted func(string, store.Commit),
 ) (*acceptedStart[O], error) {
 	if prompt.Role != agentic.RoleUser {
 		return nil, ErrInvalidMessage
@@ -113,7 +114,7 @@ func (s *Session[O]) prepareStartWithCommand(
 		s.mu.Unlock()
 		return nil, encodeErr
 	}
-	commit, appendErr := s.journal.Append(acceptCtx, s.cursor, pendingEntries...)
+	commit, appendErr := s.appendAcceptanceLocked(acceptCtx, pendingEntries...)
 	if appendErr != nil {
 		s.mu.Unlock()
 		return nil, appendErr
@@ -137,6 +138,9 @@ func (s *Session[O]) prepareStartWithCommand(
 		instructions:       instructions,
 	}
 	s.transitionLocked(Running)
+	if onAccepted != nil {
+		onAccepted(runID, commit)
+	}
 	s.mu.Unlock()
 	s.publishOwn(commit.Entries, agentic.EventAuthoritative)
 	return &acceptedStart[O]{
