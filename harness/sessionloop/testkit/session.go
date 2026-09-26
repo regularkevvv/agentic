@@ -382,6 +382,26 @@ func (s *session) Close(context.Context) error {
 	return nil
 }
 
+// Abandon disconnects a handle from the host-owned reference engine. This
+// in-memory test engine survives handle loss: it is neither restarted nor
+// duplicated, and its accepted queue stays with that one engine. Native
+// process-owned drivers instead stop and reconstruct from their journal.
+func (s *session) Abandon(context.Context) error {
+	state := s.state
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	s.closed = true
+	state.handleOpen = false
+	for subscriber := range state.subs {
+		subscriber.end()
+	}
+	state.subs = make(map[*stream]struct{})
+	return nil
+}
+
 func (st *sessionState) nextPositionLocked() sessionloop.Position {
 	return sessionloop.Position{Sequence: st.seq + 1, Token: positionToken(st.seq + 1)}
 }

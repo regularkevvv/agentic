@@ -128,7 +128,13 @@ func (w *worker) runActor(ctx context.Context, id ActorID) (result error) {
 		cleanup, finish := context.WithTimeout(context.Background(), w.cfg.CleanupTimeout)
 		defer finish()
 		if session != nil {
-			result = errors.Join(result, session.Close(cleanup))
+			if result != nil || context.Cause(runCtx) != nil {
+				// Loss of a worker/transport is not a command to interrupt the
+				// user's run. Teardown must preserve accepted unfinished work.
+				result = errors.Join(result, session.Abandon(cleanup))
+			} else {
+				result = errors.Join(result, session.Close(cleanup))
+			}
 		}
 		// Keep renewal alive through normal Close; then join it before release.
 		cause := context.Cause(runCtx)
@@ -232,8 +238,11 @@ func (w *worker) drive(ctx context.Context, lease Lease, session Session) error 
 		if err != nil {
 			return err
 		}
-		if snapshot.State == sessionloop.StateFaulted || snapshot.State == sessionloop.StateClosed {
-			return fmt.Errorf("session actor: session cannot progress in state %s", snapshot.State)
+		if snapshot.State == sessionloop.StateFaulted {
+			return fmt.Errorf("session actor: session cannot progress in state %s: %w", snapshot.State, sessionloop.ErrSessionFaulted)
+		}
+		if snapshot.State == sessionloop.StateClosed {
+			return fmt.Errorf("session actor: session cannot progress in state %s: %w", snapshot.State, sessionloop.ErrSessionClosed)
 		}
 		pending, err := w.cfg.Adapter.Pending(ctx, lease, after, w.cfg.BatchSize)
 		if err != nil {

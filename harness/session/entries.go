@@ -10,6 +10,7 @@ import (
 const (
 	kindSessionCreated     = "session.created"
 	kindRunOpened          = "run.opened"
+	kindRunRecovered       = "run.recovered"
 	kindRunClosed          = "run.closed"
 	kindMessage            = "message"
 	kindSystemMessage      = "message.system"

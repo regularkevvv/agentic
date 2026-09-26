@@ -88,10 +88,12 @@ func host(config harness.DefaultConfig, model agentic.Model, repo store.Reposito
 }
 
 type fixture struct {
-	store  *Store
-	config harness.DefaultConfig
-	model  *model
-	id     actor.ActorID
+	store         *Store
+	config        harness.DefaultConfig
+	model         *model
+	id            actor.ActorID
+	repository    func(actor.Lease, store.Repository) store.Repository
+	onWorkerError func(error)
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -159,7 +161,11 @@ func (a *observer) Release(ctx context.Context, lease actor.Lease) error {
 func (f *fixture) worker(t *testing.T, s *Store, a actor.Adapter) func() {
 	t.Helper()
 	opener := actor.SessionOpenerFunc(func(ctx context.Context, lease actor.Lease) (actor.Session, error) {
-		h, err := host(f.config, f.model, s.Repository(lease))
+		repo := s.Repository(lease)
+		if f.repository != nil {
+			repo = f.repository(lease, repo)
+		}
+		h, err := host(f.config, f.model, repo)
 		if err != nil {
 			return nil, err
 		}
@@ -171,7 +177,13 @@ func (f *fixture) worker(t *testing.T, s *Store, a actor.Adapter) func() {
 	})
 	w, err := actor.NewWorker(actor.Config{Owner: uuid.NewString(), Adapter: a, SessionOpener: opener,
 		LeaseTTL: time.Second, PollInterval: 5 * time.Millisecond, RetryInterval: 10 * time.Millisecond,
-		MaxActors: 8, BatchSize: 1, OnError: func(_ actor.ActorID, err error) { t.Errorf("worker: %v", err) }})
+		MaxActors: 8, BatchSize: 1, OnError: func(_ actor.ActorID, err error) {
+			if f.onWorkerError != nil {
+				f.onWorkerError(err)
+				return
+			}
+			t.Errorf("worker: %v", err)
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,11 +290,21 @@ func (m *model) Request(ctx context.Context, req *agentic.ChatRequest) (*agentic
 		case <-m.gate:
 		}
 	}
-	if m.readFile && n == 1 {
+	// Request attempts are not committed turns: a lost worker can issue the
+	// same history again. Derive the scripted response from that history.
+	hasCall := false
+	for _, message := range req.Messages {
+		for _, call := range message.GetToolUses() {
+			if call.ID == "read-fixture" {
+				hasCall = true
+			}
+		}
+	}
+	if m.readFile && !hasCall {
 		return &agentic.ChatResponse{Model: m.Name(), FinishReason: agentic.FinishReasonToolCalls,
 			Message: agentic.NewToolUseMessage(agentic.ToolUse{ID: "read-fixture", Name: "read_file", Input: map[string]any{"path": "fixture.txt"}})}, nil
 	}
-	if m.readFile && n == 2 {
+	if m.readFile && hasCall {
 		found := false
 		for _, message := range req.Messages {
 			for _, result := range message.GetToolResults() {

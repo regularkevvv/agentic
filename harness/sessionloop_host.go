@@ -158,6 +158,7 @@ func (h *sessionLoopHost[O]) view(root *Session[O]) (sessionloop.Session, error)
 		SuspensionProjector: h.options.suspensionProjector,
 	})
 	if err != nil {
+		_ = root.Abandon(context.Background())
 		_ = root.Close(context.Background())
 		return nil, err
 	}

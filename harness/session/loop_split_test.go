@@ -2,7 +2,7 @@ package session
 
 // Tests for the private acceptance/execution split (plan S3): single-use
 // accepted values, cancellation before durable acceptance, deterministic
-// interrupted settlement after acceptance-time cancellation, and the
+// preservation of execution after acceptance-time cancellation, and the
 // cannot-outlive-Close guarantee.
 
 import (
@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	agentic "github.com/regularkevvv/agentic"
+	"github.com/regularkevvv/agentic/harness/sessionloop"
 
 	artifactmemory "github.com/regularkevvv/agentic/harness/artifact/memory"
 	"github.com/regularkevvv/agentic/harness/artifact/spill"
@@ -194,11 +195,9 @@ func TestPrepareStartCanceledBeforeAcceptance(t *testing.T) {
 	}
 }
 
-// TestDispatchCancelAfterAcceptanceSettlesInterrupted uses a journal barrier
-// to cancel the dispatch context exactly after the durable acceptance append
-// succeeds: the accepted run must settle interrupted deterministically, the
-// driver must never run, and no unowned run may survive (plan 8.4).
-func TestDispatchCancelAfterAcceptanceSettlesInterrupted(t *testing.T) {
+// A cancellation after the commit cannot revoke accepted work (law L4).
+// The same journal barrier previously caused a fabricated interruption.
+func TestDispatchCancelAfterAcceptancePreservesExecution(t *testing.T) {
 	driver := &countingDriver{}
 	repository := newHookRepository()
 	config := sessionConfig(t, driver, repository, artifactmemory.New(), spill.Config{})
@@ -217,9 +216,9 @@ func TestDispatchCancelAfterAcceptanceSettlesInterrupted(t *testing.T) {
 			cancel()
 		}
 	})
-	_, err = view.Dispatch(dispatchCtx, sessionloopStartCommand("canceled after acceptance"))
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("dispatch err = %v, want context.Canceled", err)
+	receipt, err := view.Dispatch(dispatchCtx, sessionloopStartCommand("canceled after acceptance"))
+	if err != nil || receipt.Guarantee != sessionloop.AcceptanceDurable {
+		t.Fatalf("committed acceptance = %+v, %v", receipt, err)
 	}
 	if err := session.WaitForIdle(context.Background()); err != nil {
 		t.Fatalf("WaitForIdle after handshake = %v", err)
@@ -232,11 +231,11 @@ func TestDispatchCancelAfterAcceptanceSettlesInterrupted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if closed.Status != agentic.ExecutionInterrupted {
-		t.Fatalf("run settled %v, want interrupted", closed.Status)
+	if closed.Status != agentic.ExecutionCompleted {
+		t.Fatalf("run settled %v, want completed", closed.Status)
 	}
-	if driver.Count() != 0 {
-		t.Fatalf("driver ran %d times for a canceled dispatch", driver.Count())
+	if driver.Count() != 1 {
+		t.Fatalf("driver ran %d times for an accepted dispatch", driver.Count())
 	}
 	if err := view.Close(context.Background()); err != nil {
 		t.Fatalf("Close = %v", err)

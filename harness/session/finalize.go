@@ -23,8 +23,8 @@ func (s *Session[O]) finishExecution(execution *agentic.Execution[O], runErr err
 		return execution, fault
 	}
 	interrupted := s.state == Interrupting || (execution != nil && execution.Status == agentic.ExecutionInterrupted)
-	s.mu.Unlock()
 	if interrupted {
+		s.mu.Unlock()
 		if err := s.finishInterrupt(execution); err != nil {
 			return execution, err
 		}
@@ -34,7 +34,9 @@ func (s *Session[O]) finishExecution(execution *agentic.Execution[O], runErr err
 		return execution, runErr
 	}
 
-	s.mu.Lock()
+	// Keep the fault check and the final commit in one critical section.
+	// Dropping/reacquiring here would let Abandon fault the handle between
+	// validation and commit, then allow this stale finalizer to write anyway.
 	if s.run == nil {
 		s.mu.Unlock()
 		return execution, errors.New("driver returned without an active session run")
