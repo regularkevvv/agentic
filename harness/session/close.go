@@ -7,6 +7,48 @@ import (
 	harnessruntime "github.com/regularkevvv/agentic/harness/runtime"
 )
 
+var errExecutionAbandoned = errors.New("session execution abandoned for recovery")
+
+// abandonRun invalidates volatile execution under the same mutex used by every
+// journal-emitting path. Unlike Interrupt it writes no cancellation or closure.
+func (s *Session[O]) abandonRun() {
+	s.mu.Lock()
+	if s.state == Closed {
+		s.mu.Unlock()
+		return
+	}
+	cancel := s.faultLocked(errExecutionAbandoned)
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+func (s *Session[O]) joinRecovery(ctx context.Context) error {
+	s.mu.Lock()
+	done := s.recoveryDone
+	s.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// Abandon is recovery cleanup for an unexposed native handle. SessionLoop also
+// joins its dispatch goroutines before calling the owning root closer.
+func (s *Session[O]) Abandon(ctx context.Context) error {
+	s.abandonRun()
+	if err := s.joinRecovery(ctx); err != nil {
+		return err
+	}
+	return s.Close(ctx)
+}
+
 // Close releases the session's journal lease, event hub, and environment.
 // Durable state is untouched and may later be reopened through ResumeSession.
 func (s *Session[O]) Close(ctx context.Context) error {

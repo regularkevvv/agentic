@@ -22,6 +22,8 @@ SessionContract/Model.lean          state and atomic operations
                Publication.lean    attribution ordering, replay and crash rebuild
                PublicationExamples.lean old-order counterexamples + fixed trace
                RecoveryStartup.lean early-interrupt responsibility and settlement
+               RecoveryFrontier.lean committed candidates, steering and stable runs
+               Cleanup.lean        failure cleanup versus explicit interruption
                Adapter.lean        adapter state/operation/reply obligations
                Flavors/Receive.lean  receive-based reference adapter
                Flavors/Postgres.lean PostgreSQL transaction proof root
@@ -85,6 +87,8 @@ proof build cannot pass. GitHub Actions runs the same script.
 | Append errors before/after commit preserve safety and require reconstruction before observing | `Publication.append_failure_preserves_safety`, `Publication.offline_until_reconstruction`, `Publication.invalidated_cannot_observe` |
 | Reconstruction recovers committed attribution or permits an uncommitted retry | `Publication.append_error_reconstruction`, `Publication.uncommitted_error_retry` |
 | An early recovery interrupt retains a responsible callback and a settlement continuation | `RecoveryStartup.reachable_owned`, `RecoveryStartup.interrupted_can_settle` |
+| Native recovery preserves run identity and acknowledged steering at every modeled prefix | `RecoveryFrontier.reachable_identity`, `RecoveryFrontier.acknowledged_steering_not_lost`, `RecoveryFrontier.every_prefix_recoverable` |
+| Failure cleanup cannot manufacture user cancellation and pending input remains recoverable | `Cleanup.reachable_safe`, `Cleanup.abandon_preserves_durable`, `Cleanup.worker_loss_can_recover` |
 
 The delivery/publication proofs are symbolic. The parameter `n` is arbitrary, not a test size.
 The command identity domain is `Fin n`: any finite history can be represented
@@ -93,6 +97,8 @@ not bounded. `Examples.lean` adds small kernel-checked examples; it does not
 replace the general proofs.
 `RecoveryStartup` is a separate finite-state component model for one recovered
 run's startup/interrupt handoff, including arbitrary repeated permitted steps.
+The additional native frontier and cleanup component models, implementation
+mapping, executable counterexamples and limits are documented in [RECOVERY.md](RECOVERY.md).
 
 ## Counterexamples kept with the proofs
 

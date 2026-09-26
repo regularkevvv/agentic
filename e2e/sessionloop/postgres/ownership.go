@@ -16,15 +16,16 @@ import (
 )
 
 func (s *Store) Receive(ctx context.Context) (actor.ActorID, error) {
+	// Discovery is advisory; Acquire revalidates under the row lock. A single
+	// schema-qualified read needs no explicit transaction or SET LOCAL calls.
+	query := `SELECT id FROM ` + pgx.Identifier{s.schema, "sessions"}.Sanitize() + ` s
+		WHERE (owner IS NULL OR expires_at <= clock_timestamp())
+		AND (needs_execution OR EXISTS (SELECT 1 FROM ` + pgx.Identifier{s.schema, "commands"}.Sanitize() + ` c
+			WHERE c.session_id=s.id AND c.accepted_at_seq IS NULL))
+		ORDER BY last_claimed_at NULLS FIRST, id LIMIT 1`
 	for {
 		var id actor.ActorID
-		err := s.transaction(ctx, func(tx pgx.Tx) error {
-			return tx.QueryRow(ctx, `SELECT id FROM sessions s
-				WHERE (owner IS NULL OR expires_at <= clock_timestamp())
-				AND (needs_execution OR EXISTS (SELECT 1 FROM commands c
-					WHERE c.session_id=s.id AND c.accepted_at_seq IS NULL))
-				ORDER BY last_claimed_at NULLS FIRST, id LIMIT 1`).Scan(&id)
-		})
+		err := s.pool.QueryRow(ctx, query).Scan(&id)
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return id, err
 		}

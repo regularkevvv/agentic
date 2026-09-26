@@ -11,6 +11,7 @@ package session
 //
 //	session.created             IGNORED: session assembly options/scope are host-internal configuration.
 //	run.opened                  EventRunStarted (+State running; RunID from the payload).
+//	run.recovered               EventSessionState (running, SAME logical RunID; no command is reaccepted).
 //	run.closed                  EventRunSettled (Completed->completed, Interrupted->interrupted, Failed/Stopped/other->failed; Failure carries finishExecution's persisted error text VERBATIM — host-supplied operator-facing text whose wording is not a contract; Output attached only live when the host captured a projected output for that run — never during replay).
 //	message                     EventEntryCommitted (Source prompt -> origin start; next_turn -> origin next_turn; initial_history -> origin start with empty RunID; recovery_resolution/resume_prompt -> origin start, run attribution from the surrounding batch's run.opened; system-role content is privacy-excluded).
 //	message.system              IGNORED: driver/system instructions are privacy-excluded from the default projection (plan §8.5/§13).
@@ -354,6 +355,19 @@ func (p *loopProjector) applyAgentic(ctx context.Context, record event.Record) (
 
 func (p *loopProjector) applyHarness(ctx context.Context, record event.Record) ([]sessionloop.Event, error) {
 	switch record.Name {
+	case kindRunRecovered:
+		payload, err := codec.Decode[runOpenedPayload](p.codec, record.Payload)
+		if err != nil {
+			return nil, err
+		}
+		if p.fold.currentRunID != payload.ID {
+			return nil, store.ErrCorruptLog
+		}
+		commandID, err := p.runCommand(payload.ID)
+		if err != nil {
+			return nil, err
+		}
+		return []sessionloop.Event{{Position: sessionloop.Position{Sequence: record.Cursor}, Nature: sessionloop.EventAuthoritative, Kind: sessionloop.EventSessionState, SessionID: sessionloop.SessionID(p.sessionID), RunID: sessionloop.RunID(payload.ID), CommandID: commandID, State: sessionloop.StateRunning}}, nil
 	case kindRunOpened:
 		payload, err := codec.Decode[runOpenedPayload](p.codec, record.Payload)
 		if err != nil {

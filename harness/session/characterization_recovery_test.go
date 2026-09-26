@@ -157,8 +157,8 @@ func recoverCrashFixture(t *testing.T, fixture string, driver agentic.Driver[str
 	return session, config
 }
 
-// Scenario 7: process loss after run.opened. The repairable variant closes
-// the abandoned run and continues on a new recovery run with exactly one
+// Scenario 7: process loss after run.opened. The repairable variant preserves
+// the accepted logical run and continues with exactly one
 // DriveContinue; the indeterminate variant suspends durably with zero drives.
 func TestCharacterizationProcessLossAfterRunOpened(t *testing.T) {
 	if *updateCharacterization {
@@ -182,7 +182,7 @@ func TestCharacterizationProcessLossAfterRunOpened(t *testing.T) {
 		entries := loadJournalEntries(t, session)
 		wantKinds := []string{
 			kindSessionCreated, kindRunOpened, kindMessage,
-			kindRecovered, kindRunClosed, kindRunOpened, kindRunClosed,
+			kindRecovered, kindRunRecovered, kindRunClosed,
 		}
 		if fmtKinds(journalKinds(entries)) != fmtKinds(wantKinds) {
 			t.Fatalf("recovered journal kinds = %v, want %v", journalKinds(entries), wantKinds)
@@ -194,26 +194,18 @@ func TestCharacterizationProcessLossAfterRunOpened(t *testing.T) {
 		if recovered.State != "continue" {
 			t.Fatalf("session.recovered payload = %#v", recovered)
 		}
-		abandoned, err := decodePayload[runClosedPayload](config.Codec, entries[4])
+		reopened, err := decodePayload[runOpenedPayload](config.Codec, entries[4])
 		if err != nil {
 			t.Fatal(err)
 		}
-		if abandoned.ID != "run_c1" || abandoned.Status != agentic.ExecutionInterrupted ||
-			abandoned.Error != "process stopped before run termination" {
-			t.Fatalf("abandoned run.closed payload = %#v", abandoned)
-		}
-		reopened, err := decodePayload[runOpenedPayload](config.Codec, entries[5])
-		if err != nil {
-			t.Fatal(err)
-		}
-		if reopened.ID != "run_r1" || reopened.Mode != "continue" || !reopened.Recovery {
+		if reopened.ID != "run_c1" || reopened.Mode != "continue" || !reopened.Recovery {
 			t.Fatalf("recovery run.opened payload = %#v", reopened)
 		}
-		completed, err := decodePayload[runClosedPayload](config.Codec, entries[6])
+		completed, err := decodePayload[runClosedPayload](config.Codec, entries[5])
 		if err != nil {
 			t.Fatal(err)
 		}
-		if completed.ID != "run_r1" || completed.Status != agentic.ExecutionCompleted {
+		if completed.ID != "run_c1" || completed.Status != agentic.ExecutionCompleted {
 			t.Fatalf("recovery run.closed payload = %#v", completed)
 		}
 		if err := session.Close(context.Background()); err != nil {

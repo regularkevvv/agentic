@@ -52,6 +52,7 @@ type Session interface {
 	sessionloop.Session
 	sessionloop.AcceptanceReader
 	sessionloop.RejectionRecorder
+	sessionloop.RecoveryCloser
 }
 
 // SessionOpener restores the SAME session under the grant. Assembly persists

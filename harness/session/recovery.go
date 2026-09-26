@@ -171,6 +171,15 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 	if session.state == Faulted {
 		session.state = Running
 	}
+	if session.run != nil && folded.completed {
+		// The driver already committed completion. Only the native closure is
+		// missing; do not rerun a model, validator or turn hook after that fact.
+		if _, err := session.finishExecution(&agentic.Execution[O]{Status: agentic.ExecutionCompleted}, nil); err != nil {
+			return nil, err
+		}
+		cleanupJournal, cleanupBus, cleanupEnvironment = false, false, false
+		return session, nil
+	}
 	if session.run == nil {
 		session.state = Idle
 		entry, encodeErr := pending(session.codec, kindRecovered, struct{ State string }{State: Idle.String()})
@@ -204,6 +213,7 @@ func Recover[O any](ctx context.Context, config Config[O]) (*Session[O], error) 
 }
 
 type foldedState struct {
+	completed             bool
 	state                 State
 	cursor                store.Cursor
 	messages              []agentic.Message
@@ -280,10 +290,13 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 				copy := cloneLimits(*payload.Options.Budget)
 				state.budget = &copy
 			}
-		case kindRunOpened:
+		case kindRunOpened, kindRunRecovered:
 			payload, err := decodePayload[runOpenedPayload](payloadCodec, entry)
 			if err != nil {
 				return foldedState{}, nil, err
+			}
+			if entry.Kind == kindRunRecovered && (state.run == nil || state.run.id != payload.ID) {
+				return foldedState{}, nil, fmt.Errorf("%w: recovery changed the active run identity", store.ErrCorruptLog)
 			}
 			mode := agentic.DriveStart
 			if payload.Mode == "continue" {
@@ -297,6 +310,7 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 				limits:             cloneLimitsPointer(payload.Limits),
 				instructions:       payload.Instructions,
 			}
+			state.completed = false
 			state.state = Running
 			state.suspension = nil
 		case kindRunClosed:
@@ -459,6 +473,8 @@ func fold(payloadCodec codec.Codec, entries []store.Entry) (foldedState, []event
 
 func applyRecoveredEvent(payloadCodec codec.Codec, state *foldedState, record event.Record) error {
 	switch record.Type {
+	case agentic.EventTypeRunCompleted:
+		state.completed = state.run != nil
 	case agentic.EventTypeAssistantCommitted:
 		payload, err := event.Decode[event.AssistantPayload](payloadCodec, record)
 		if err != nil {
@@ -648,13 +664,8 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 		return fmt.Errorf("%w: recovery repair rewrote committed messages", ErrCommitProjectionMismatch)
 	}
 	added := repaired[len(s.messages):]
-	oldRunID := s.run.id
+	runID := s.run.id
 	instructions := s.run.instructions
-	newRunID, idErr := s.ids.New("run")
-	if idErr != nil {
-		s.mu.Unlock()
-		return idErr
-	}
 	var limits *agentic.UsageLimits
 	if s.budget != nil {
 		remaining, remainingErr := remainingLimits(*s.budget, s.usage)
@@ -666,12 +677,13 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 	}
 	batch := newEntryBatch(s.codec, len(added)+3)
 	batch.Add(kindRecovered, struct{ State string }{State: "continue"})
-	batch.Add(kindRunClosed, runClosedPayload{ID: oldRunID, Status: agentic.ExecutionInterrupted, Error: "process stopped before run termination"})
 	for _, message := range added {
 		batch.Add(kindRepair, messagePayload{Message: message, Source: "recovery_repair"})
 	}
-	batch.Add(kindRunOpened, runOpenedPayload{
-		ID:           newRunID,
+	// Process/lease loss is not a user interruption or a new logical run.
+	// Keep the accepted run identity and establish a new driver history base.
+	batch.Add(kindRunRecovered, runOpenedPayload{
+		ID:           runID,
 		Mode:         "continue",
 		Recovery:     true,
 		Limits:       cloneLimitsPointer(limits),
@@ -690,7 +702,7 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 	s.messages = repaired
 	s.cursor = commit.Cursor
 	s.run = &activeRun{
-		id:                 newRunID,
+		id:                 runID,
 		mode:               agentic.DriveContinue,
 		history:            providerHistory(repaired, s.contextMarkers),
 		contextMarkerCount: len(s.contextMarkers),
@@ -698,10 +710,12 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 		instructions:       instructions,
 	}
 	s.suspension = nil
+	done := make(chan struct{})
+	s.recoveryDone = done
 	s.transitionLocked(Running)
 	s.mu.Unlock()
 	s.publishOwnByKind(commit.Entries)
-	go s.continueRecovered()
+	go func() { defer close(done); s.continueRecovered() }()
 	return nil
 }
 
@@ -735,7 +749,11 @@ func (s *Session[O]) continueRecovered() {
 	s.runCancel = cancel
 	s.mu.Unlock()
 	runCtx = s.withToolRuntime(runCtx)
-	execution, err := s.driver.Drive(runCtx, agentic.DriveInput{Mode: agentic.DriveContinue, History: history}, s.runOptions(runID, limits)...)
+	mode := agentic.DriveContinue
+	if len(history) > 0 && history[len(history)-1].Role == agentic.RoleAssistant {
+		mode = agentic.DriveRecover
+	}
+	execution, err := s.driver.Drive(runCtx, agentic.DriveInput{Mode: mode, History: history}, s.runOptions(runID, limits)...)
 	_, _ = s.finishExecution(execution, err)
 }
 
@@ -754,7 +772,7 @@ func isAgenticKind(kind string) bool {
 
 func ownNature(kind string) agentic.EventNature {
 	switch kind {
-	case kindSessionCreated, kindRunOpened, kindRunClosed,
+	case kindSessionCreated, kindRunOpened, kindRunRecovered, kindRunClosed,
 		kindInterruptMarker, kindRecoverySuspension, kindRecovered,
 		kindFault:
 		return agentic.EventLifecycle

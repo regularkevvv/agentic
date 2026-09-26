@@ -291,6 +291,27 @@ func (s *observedSession) Close(ctx context.Context) error {
 	return refreshErr
 }
 
+// Failed ownership cannot perform a final projection read. The next owner
+// repairs this observation cache from the unchanged journal.
+func (s *observedSession) Abandon(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil
+	}
+	if err := s.journalSession.Abandon(ctx); err != nil {
+		return err
+	}
+	s.closed = true
+	s.host.mu.Lock()
+	if state := s.host.sessions[s.ID()]; state.current == s {
+		state.current = nil
+		state.signal()
+	}
+	s.host.mu.Unlock()
+	return nil
+}
+
 func (s *observedSession) Subscribe(ctx context.Context, options sessionloop.SubscribeOptions) (sessionloop.Stream, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

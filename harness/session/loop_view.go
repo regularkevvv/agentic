@@ -472,19 +472,9 @@ func (v *LoopView[O]) dispatchStart(
 	if err != nil {
 		return sessionloop.Receipt{}, mapLoopError(err)
 	}
-	if ctx.Err() != nil {
-		// The dispatch context was canceled after durable acceptance: finish
-		// the handshake deterministically (plan 8.4). The accepted run is
-		// consumed unwound — never driven — and settled as interrupted on
-		// this goroutine, so no unowned run survives.
-		_ = accepted.consume()
-		if _, interruptErr := v.inner.requestInterrupt(v.lifetime, ""); interruptErr == nil {
-			_ = v.inner.finishInterrupt(&agentic.Execution[O]{Status: agentic.ExecutionInterrupted})
-		}
-		close(done)
-		_ = v.inner.WaitForIdle(v.lifetime)
-		return sessionloop.Receipt{}, ctx.Err()
-	}
+	// Acceptance has committed. A late caller cancellation cannot turn it into
+	// a user interrupt. The registered drive belongs to the view's lifetime;
+	// actor failure cleanup can Abandon it for recovery without settling it.
 	v.wg.Add(1)
 	go func() {
 		defer v.wg.Done()
@@ -1008,6 +998,16 @@ func (s *loopStream) Close() error {
 // once-guarded: repeat calls return the memoized result. A wait canceled by
 // ctx returns the context error without memoizing so Close can be retried.
 func (v *LoopView[O]) Close(ctx context.Context) error {
+	return v.close(ctx, false)
+}
+
+// Abandon discards only the live execution. User cancellation remains an
+// explicit Interrupt command; worker failures must never manufacture one.
+func (v *LoopView[O]) Abandon(ctx context.Context) error {
+	return v.close(ctx, true)
+}
+
+func (v *LoopView[O]) close(ctx context.Context, abandon bool) error {
 	v.closeMu.Lock()
 	defer v.closeMu.Unlock()
 	if v.closeDone {
@@ -1021,6 +1021,9 @@ func (v *LoopView[O]) Close(ctx context.Context) error {
 	v.mu.Lock()
 	v.closed = true
 	v.mu.Unlock()
+	if abandon {
+		v.inner.abandonRun()
+	}
 	switch v.inner.State() {
 	case Running, Closing, Interrupting:
 		// Suspended is deliberately NOT in this switch: a suspension is a
@@ -1042,9 +1045,18 @@ func (v *LoopView[O]) Close(ctx context.Context) error {
 	// Join every view goroutine BEFORE releasing the root: a drive settling a
 	// fault must never race the closing journal.
 	v.cancelLifetime()
-	v.wg.Wait()
+	done := make(chan struct{})
+	go func() { v.wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if err := v.inner.joinRecovery(ctx); err != nil {
+		return err
+	}
 	err := mapLoopError(v.closeRoot(ctx))
-	v.closeDone = true
+	v.closeDone = err == nil // resource-close failures remain retryable
 	v.closeErr = err
 	return err
 }

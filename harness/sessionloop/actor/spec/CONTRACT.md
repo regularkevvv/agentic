@@ -78,6 +78,7 @@ Go methods or twelve database tables:
 | Acknowledge | Remove the exact delivered mailbox item only with durable acceptance evidence |
 | Settle | Record the harness's durable resolution, not a Worker guess that processing probably ended |
 | Close | End the live handle and outstanding work under it |
+| Abandon | Stop a failed owner's handle without recording interruption, cancellation, or settlement; preserve accepted unfinished work |
 | Release | Clear execution-needed state only after durable quiescence and closing; never discard pending input |
 | Expire/take over | Revoke old authority while preserving pending and unfinished work; advance the generation on the next grant |
 
@@ -110,6 +111,22 @@ through the harness's RejectionRecorder before acknowledgment. Its one journal
 append maps to `accept; settle`; AdapterStep.batch preserves safety for such
 atomic groups. Busy/suspended work is deferred. Storage, identity conflicts and
 unknown errors are not guessed to be terminal; they preserve pending delivery.
+
+`actor.Session` therefore requires `sessionloop.RecoveryCloser.Abandon`.
+A successful quiescent worker uses normal `Close`;
+failed ownership, I/O, observation, or worker shutdown uses `Abandon` and never
+releases unfinished execution. An explicit interrupt is a separate command.
+Cancellation of the request context after acceptance committed cannot revoke
+that acceptance. The native handle first faults under its session mutex, then
+cancels and joins its drivers; late finalizers cannot write cancellation facts.
+An independently owned engine may instead remain live behind a disconnected
+handle, as in the volatile reference host, provided it is not duplicated.
+
+Native recovery also preserves the original logical run ID. A committed
+assistant candidate resumes validation/turn handling, not a second model
+request; committed completion only needs its missing closure. Accepted steering
+and drained-but-unapplied input remain recoverable. See [RECOVERY.md](RECOVERY.md)
+for the component proofs, executable counterexamples and implementation mapping.
 
 ## Ownership laws
 

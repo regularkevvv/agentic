@@ -253,6 +253,12 @@ func (s *Session[O]) projectHarnessObservation(result observe.Event, record even
 		}
 		result.Kind = observe.KindRunSuspended
 		result.Suspension = &observe.Suspension{ID: payload.Suspension.ID, Kind: payload.Suspension.Kind}
+	case kindRunRecovered:
+		_, err := event.Decode[runOpenedPayload](s.codec, record)
+		if err != nil {
+			return observe.Event{}, err
+		}
+		result.Kind, result.State = observe.KindSessionRecovered, Running.String()
 	case kindRecovered:
 		payload, err := event.Decode[struct{ State string }](s.codec, record)
 		if err != nil {

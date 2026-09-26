@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -318,14 +317,14 @@ func TestLoopRaceDispatchCancelAroundDurableAppend(t *testing.T) {
 				cancel()
 			}
 		})
-		if _, err := view.Dispatch(dispatchCtx, sessionloopStartCommand("canceled late")); !errors.Is(err, context.Canceled) {
+		if _, err := view.Dispatch(dispatchCtx, sessionloopStartCommand("canceled late")); err != nil {
 			t.Fatalf("dispatch err = %v", err)
 		}
 		if err := session.WaitForIdle(loopTestContext(t)); err != nil {
 			t.Fatal(err)
 		}
 		entries := loadJournalEntries(t, session)
-		if countEntries(entries, kindRunClosed) != 1 || driver.Count() != 0 {
+		if countEntries(entries, kindRunClosed) != 1 || driver.Count() != 1 {
 			t.Fatalf("kinds=%v drives=%d", journalKinds(entries), driver.Count())
 		}
 	})
@@ -629,8 +628,8 @@ func TestLoopRaceReopenAfterFault(t *testing.T) {
 		t.Fatalf("state after close = %s", session.State())
 	}
 
-	// The durable session reopens: recovery closes the torn run and drives a
-	// continuation with a fresh journal (the hook is not re-armed).
+	// The durable session reopens: recovery continues the same logical run
+	// with a fresh journal handle (the hook is not re-armed).
 	recoveredConfig := sessionConfig(t, agentic.NewAgent("", model), repository, artifactmemory.New(), spill.Config{})
 	recoveredConfig.ID = config.ID
 	recovered, err := Recover(context.Background(), recoveredConfig)
@@ -640,13 +639,12 @@ func TestLoopRaceReopenAfterFault(t *testing.T) {
 	if err := recovered.WaitForIdle(loopTestContext(t)); err != nil {
 		t.Fatalf("recovered WaitForIdle = %v", err)
 	}
-	// The recovered session settled back to idle: the torn run is durably
-	// closed as interrupted and the recovery continuation completed.
+	// Recovery settles the accepted run once; process loss is not interruption.
 	if state := recovered.State(); state != Idle {
 		t.Fatalf("recovered state = %s, want idle", state)
 	}
 	entries := loadJournalEntries(t, recovered)
-	if countEntries(entries, kindRunClosed) != 2 {
+	if countEntries(entries, kindRunClosed) != 1 {
 		t.Fatalf("recovered journal run.closed count = %d in %v",
 			countEntries(entries, kindRunClosed), journalKinds(entries))
 	}
@@ -654,8 +652,7 @@ func TestLoopRaceReopenAfterFault(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if torn.Status != agentic.ExecutionInterrupted ||
-		!strings.Contains(torn.Error, "process stopped before run termination") {
+	if torn.Status != agentic.ExecutionCompleted || torn.Error != "" {
 		t.Fatalf("torn run.closed payload = %#v", torn)
 	}
 	lastClosed := -1

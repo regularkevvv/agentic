@@ -335,6 +335,7 @@ type stubSession struct {
 	actor.Session
 	snapshot                         sessionloop.Snapshot
 	snapshotErr, replayErr, closeErr error
+	abandonErr                       error
 }
 
 func (s *stubSession) ID() sessionloop.SessionID { return "stub" }
@@ -344,7 +345,42 @@ func (s *stubSession) Snapshot(context.Context) (sessionloop.Snapshot, error) {
 func (s *stubSession) Replay(context.Context, sessionloop.Position, sessionloop.Position) ([]sessionloop.Event, error) {
 	return nil, s.replayErr
 }
-func (s *stubSession) Close(context.Context) error { return s.closeErr }
+func (s *stubSession) Close(context.Context) error   { return s.closeErr }
+func (s *stubSession) Abandon(context.Context) error { return s.abandonErr }
+
+func TestObservedAbandonRetriesAndPreservesReplacement(t *testing.T) {
+	for _, replaced := range []bool{false, true} {
+		stub := &stubSession{abandonErr: context.DeadlineExceeded}
+		st := &state{changed: make(chan struct{})}
+		h := &Host{sessions: map[sessionloop.SessionID]*state{"stub": st}}
+		owned := &observedSession{journalSession: stub, host: h}
+		st.current = owned
+		if replaced {
+			st.current = &observedSession{journalSession: &stubSession{}, host: h}
+		}
+		current, changed := st.current, st.changed
+		if err := owned.Abandon(t.Context()); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal(err)
+		}
+		if owned.closed || st.current != current || st.changed != changed {
+			t.Fatal("failed cleanup discarded observation handle")
+		}
+		stub.abandonErr = nil
+		if err := owned.Abandon(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if err := owned.Abandon(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if replaced {
+			if st.current != current || st.changed != changed {
+				t.Fatal("stale cleanup removed replacement handle")
+			}
+		} else if st.current != nil || st.changed == changed {
+			t.Fatal("cleanup did not release/wake observation")
+		}
+	}
+}
 
 type plainSession struct{ sessionloop.Session }
 

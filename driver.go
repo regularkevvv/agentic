@@ -26,13 +26,20 @@ type DriveMode uint8
 const (
 	DriveStart DriveMode = iota
 	DriveContinue
+	// DriveRecover resumes a committed, fully paired frontier. Unlike
+	// DriveContinue it also accepts a final assistant message without tool calls:
+	// that candidate is re-evaluated and passed through the turn hook, without
+	// another model request or duplicate assistant commit. Validators may rerun.
+	// Open tool frontiers still require explicit repair or suspension resolution.
+	DriveRecover
 )
 
 // DriveInput is the explicit input to a driver execution.
 //
 // DriveStart requires Prompt to be a user message. DriveContinue forbids a
-// prompt and continues directly from History. History is copied before any
-// model or tool work begins.
+// prompt and continues directly from History. DriveRecover additionally accepts
+// a fully paired final assistant candidate, without requesting it again.
+// History is copied before any model or tool work begins.
 type DriveInput struct {
 	Mode    DriveMode
 	History []Message

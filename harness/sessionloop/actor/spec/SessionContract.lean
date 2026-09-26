@@ -10,6 +10,8 @@ import SessionContract.Isolation
 import SessionContract.Publication
 import SessionContract.PublicationExamples
 import SessionContract.RecoveryStartup
+import SessionContract.RecoveryFrontier
+import SessionContract.Cleanup
 
 /-! # Session delivery contract
 The verification root imports the executable model, universal proofs, adapter
