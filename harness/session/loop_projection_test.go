@@ -345,7 +345,7 @@ func TestLoopProjectionRejectsMalformedPayloads(t *testing.T) {
 	payloadCodec := jsoncodec.New()
 	malformed := []byte("{")
 	harnessKinds := []string{
-		kindRunOpened, kindRunClosed, kindMessage, kindQueueAccepted, kindQueueDrained,
+		kindRunOpened, kindRunRecovered, kindRunClosed, kindMessage, kindQueueAccepted, kindQueueDrained,
 		kindQueueCancelled, kindUsageCommitted, kindChildUsage, kindResolutionAccepted,
 		kindRecoverySuspension, kindRecovered, kindFault,
 	}

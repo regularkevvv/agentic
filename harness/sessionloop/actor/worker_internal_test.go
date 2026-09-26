@@ -95,6 +95,7 @@ type sessionStub struct {
 	subscribeErr, closeErr error
 	stream                 sessionloop.Stream
 	closed                 bool
+	abandoned              bool
 }
 
 func (s *sessionStub) Reject(_ context.Context, _ sessionloop.Command, reason sessionloop.Rejection) (sessionloop.Receipt, error) {
@@ -137,6 +138,10 @@ func (s *sessionStub) Subscribe(context.Context, sessionloop.SubscribeOptions) (
 	return &blockedStream{}, s.subscribeErr
 }
 func (s *sessionStub) Close(context.Context) error { s.closed = true; return s.closeErr }
+func (s *sessionStub) Abandon(context.Context) error {
+	s.closed, s.abandoned = true, true
+	return s.closeErr
+}
 
 type blockedStream struct {
 	err   error
@@ -420,7 +425,7 @@ func TestRenewalLossCancelsSessionAndRetainsRecovery(t *testing.T) {
 		return sessionloop.Snapshot{State: sessionloop.StateRunning}, nil
 	}}
 	w := fixture(a, s)
-	if err := w.runActor(t.Context(), "a"); !errors.Is(err, ErrLeaseLost) || !errors.Is(err, errInjected) || !s.closed || a.releases.Load() != 0 {
+	if err := w.runActor(t.Context(), "a"); !errors.Is(err, ErrLeaseLost) || !errors.Is(err, errInjected) || !s.abandoned || a.releases.Load() != 0 {
 		t.Fatalf("err=%v closed=%v releases=%d", err, s.closed, a.releases.Load())
 	}
 }

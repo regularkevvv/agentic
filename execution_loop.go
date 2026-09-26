@@ -20,7 +20,7 @@ func validateDriveInput(input DriveInput, history []Message) error {
 		if len(frontier) != 0 {
 			return fmt.Errorf("%w: DriveStart history has an open tool frontier", ErrTranscriptInvalid)
 		}
-	case DriveContinue:
+	case DriveContinue, DriveRecover:
 		if input.Prompt != nil {
 			return fmt.Errorf("%w: DriveContinue forbids a prompt", ErrDriveInput)
 		}
@@ -31,7 +31,7 @@ func validateDriveInput(input DriveInput, history []Message) error {
 			return fmt.Errorf("%w: DriveContinue history has an open tool frontier", ErrTranscriptInvalid)
 		}
 		last := history[len(history)-1]
-		if last.Role != RoleUser && last.Role != RoleTool {
+		if last.Role != RoleUser && last.Role != RoleTool && !(input.Mode == DriveRecover && last.Role == RoleAssistant && len(last.GetToolUses()) == 0) {
 			return fmt.Errorf("%w: DriveContinue history must end in a user or tool-result message", ErrDriveInput)
 		}
 	default:
@@ -63,10 +63,13 @@ func driveWithEvaluator[O any](
 		return nil, err
 	}
 	mode := AgentInvocationStart
-	if input.Mode == DriveContinue {
+	if input.Mode == DriveContinue || input.Mode == DriveRecover {
 		mode = AgentInvocationContinue
 	}
 	return observeAgentExecution(c, ls, mode, func() (*Execution[O], error) {
+		if input.Mode == DriveRecover && ls.messages[len(ls.messages)-1].Role == RoleAssistant {
+			return driveLoop(c, ls, evaluator, &resumeTurn[O]{assistant: ls.messages[len(ls.messages)-1]}, nil)
+		}
 		return driveLoop(c, ls, evaluator, nil, nil)
 	})
 }

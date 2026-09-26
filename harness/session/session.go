@@ -96,6 +96,7 @@ type Session[O any] struct {
 	run             *activeRun
 	runCancel       context.CancelFunc
 	recoveryInputs  []QueueEntry
+	recoveryDone    chan struct{}
 }
 
 func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session[O], error) {

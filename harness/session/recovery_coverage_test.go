@@ -593,12 +593,6 @@ func TestRecoverOpenRunFailureBoundaries(t *testing.T) {
 	}
 
 	session = bareRecoverySession(t)
-	session.ids = idsFunc(func(string) (string, error) { return "", boom })
-	if err := session.recoverOpenRun(context.Background()); !errors.Is(err, boom) {
-		t.Fatalf("recovery run ID error = %v", err)
-	}
-
-	session = bareRecoverySession(t)
 	zero := 0
 	session.budget = &agentic.UsageLimits{MaxRequests: &zero}
 	if err := session.recoverOpenRun(context.Background()); !errors.Is(err, ErrBudgetExceeded) {

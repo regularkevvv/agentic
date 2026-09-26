@@ -123,6 +123,9 @@ func (h *Host) OpenSession(ctx context.Context, id sessionloop.SessionID) (sessi
 		// reopening restores the Suspended state and the same suspension.
 		state.state = sessionloop.StateSuspended
 		state.appendLocked(sessionloop.Event{Kind: sessionloop.EventSessionState, RunID: state.run.id})
+	} else if state.run != nil {
+		// Abandon disconnected the old handle, not the host-owned engine.
+		state.appendLocked(sessionloop.Event{Kind: sessionloop.EventSessionState, RunID: state.run.id})
 	} else {
 		state.state = sessionloop.StateIdle
 		state.appendLocked(sessionloop.Event{Kind: sessionloop.EventSessionState})
