@@ -90,6 +90,9 @@ type Repository interface {
 type Journal interface {
 	SessionID() string
 	Load(context.Context) (Snapshot, error)
+	// Append commits the whole batch or none of it. A returned error does not
+	// certify rollback: the commit may be durable even if its reply was lost.
+	// Callers must reconstruct durable truth before retrying an uncertain write.
 	Append(context.Context, Cursor, ...PendingEntry) (Commit, error)
 	// Close releases this handle, never a successor's authority. It is
 	// idempotent so cleanup can be retried after cancellation or I/O failure.

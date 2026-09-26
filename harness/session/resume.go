@@ -111,7 +111,7 @@ func (s *Session[O]) prepareResumeWithCommand(
 		s.mu.Unlock()
 		return nil, fmt.Errorf("%w: suspension changed", ErrInvalidResumeRequest)
 	}
-	commit, appendErr := s.journal.Append(acceptCtx, s.cursor, pendingEntries...)
+	commit, appendErr := s.appendAcceptanceLocked(acceptCtx, pendingEntries...)
 	if appendErr != nil {
 		s.mu.Unlock()
 		return nil, appendErr
@@ -378,7 +378,7 @@ func (s *Session[O]) prepareResumeIndeterminateWithCommand(
 		s.mu.Unlock()
 		return nil, encodeErr
 	}
-	commit, appendErr := s.journal.Append(acceptCtx, s.cursor, pendingEntries...)
+	commit, appendErr := s.appendAcceptanceLocked(acceptCtx, pendingEntries...)
 	if appendErr != nil {
 		s.mu.Unlock()
 		return nil, appendErr

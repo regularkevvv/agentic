@@ -21,6 +21,7 @@ SessionContract/Model.lean          state and atomic operations
                Isolation.lean      sessions do not modify one another
                Publication.lean    attribution ordering, replay and crash rebuild
                PublicationExamples.lean old-order counterexamples + fixed trace
+               RecoveryStartup.lean early-interrupt responsibility and settlement
                Adapter.lean        adapter state/operation/reply obligations
                Flavors/Receive.lean  receive-based reference adapter
                Flavors/Postgres.lean PostgreSQL transaction proof root
@@ -81,12 +82,17 @@ proof build cannot pass. GitHub Actions runs the same script.
 | Observed keyed-command IDs agree with durable replay through subsequent steps | `Publication.live_equals_replay` |
 | Committed attribution can be rebuilt and observed after a crash at any phase | `Publication.crash_at_every_phase_replayable` |
 | The fixed ordering can actually publish, while the old ordering has a counterexample | `Publication.committed_can_publish`, `Publication.Examples.old_order_breaks_agreement` |
+| Append errors before/after commit preserve safety and require reconstruction before observing | `Publication.append_failure_preserves_safety`, `Publication.offline_until_reconstruction`, `Publication.invalidated_cannot_observe` |
+| Reconstruction recovers committed attribution or permits an uncommitted retry | `Publication.append_error_reconstruction`, `Publication.uncommitted_error_retry` |
+| An early recovery interrupt retains a responsible callback and a settlement continuation | `RecoveryStartup.reachable_owned`, `RecoveryStartup.interrupted_can_settle` |
 
-These are symbolic proofs. The parameter `n` is arbitrary, not a test size.
+The delivery/publication proofs are symbolic. The parameter `n` is arbitrary, not a test size.
 The command identity domain is `Fin n`: any finite history can be represented
 with a sufficiently large domain. Lease generations and history length are
 not bounded. `Examples.lean` adds small kernel-checked examples; it does not
 replace the general proofs.
+`RecoveryStartup` is a separate finite-state component model for one recovered
+run's startup/interrupt handoff, including arbitrary repeated permitted steps.
 
 ## Counterexamples kept with the proofs
 

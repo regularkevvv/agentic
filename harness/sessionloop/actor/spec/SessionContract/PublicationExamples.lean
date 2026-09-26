@@ -79,4 +79,30 @@ theorem crash_before_append_keeps_pending :
     (crash accepting 1).core.journal 0 = none ∧
     (crash accepting 1).durable 42 = none := by decide
 
+/-- Lost success and actual rollback produce the same unavailable view, but
+different durable facts. Never infer rollback from the returned error. -/
+theorem unknown_result_after_commit : Steps initialView (invalidate committed) :=
+  .next committed_reachable (.appendError _ ⟨request, Or.inr rfl⟩)
+
+theorem unknown_result_keeps_acceptance :
+    (invalidate committed).core.journal 0 = some 7 ∧
+    (invalidate committed).durable 42 = some 0 ∧
+    (invalidate committed).online = false := by decide
+
+theorem unknown_result_replays_after_rebuild :
+    Steps (invalidate committed) (observe (restore (invalidate committed)) 42) ∧
+    (observe (restore (invalidate committed)) 42).observations.head? = some ⟨42, some 0⟩ :=
+  append_error_reconstruction committed rfl
+
+theorem precommit_error_does_not_invent_acceptance :
+    Step accepting (invalidate accepting) ∧
+    (invalidate accepting).core.mailbox 0 = true ∧
+    (invalidate accepting).core.journal 0 = none :=
+  ⟨.appendError _ ⟨request, Or.inl rfl⟩, by decide, by decide⟩
+
+theorem precommit_error_can_retry :
+    Steps (invalidate accepting)
+      (commit (begin (restore (invalidate accepting)) request) request) :=
+  uncommitted_error_retry accepting request (fun _ _ => Or.inl rfl) (by decide)
+
 end SessionContract.Publication.Examples

@@ -427,8 +427,8 @@ func TestLoopViewResolveTargetsSuspendedRunAfterLegacyStart(t *testing.T) {
 	if err := session.WaitForIdle(loopTestContext(t)); err != nil {
 		t.Fatal(err)
 	}
-	if view.commandForRun(string(receipt.RunID)) != "cmd-late-resolve" {
-		t.Fatalf("resolve attribution = %q", view.commandForRun(string(receipt.RunID)))
+	if got, err := view.commandForRun(string(receipt.RunID)); err != nil || got != "cmd-late-resolve" {
+		t.Fatalf("resolve attribution = %q, %v", got, err)
 	}
 }
 

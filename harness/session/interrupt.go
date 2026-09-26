@@ -75,7 +75,7 @@ func (s *Session[O]) requestInterruptCommand(
 			s.mu.Unlock()
 			return "", err
 		}
-		commit, err := s.journal.Append(ctx, s.cursor, entry)
+		commit, err := s.appendAcceptanceLocked(ctx, entry)
 		if err != nil {
 			s.mu.Unlock()
 			return "", err

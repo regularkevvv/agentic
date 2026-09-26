@@ -110,9 +110,10 @@ type loopProjector struct {
 	suspend   SuspensionProjector
 	summarize func(agentic.ToolUse) string
 
-	commandForRun        func(runID string) sessionloop.CommandID
-	commandForQueue      func(queueID string) sessionloop.CommandID
-	commandForResolution func(seq uint64) sessionloop.CommandID
+	commandForRun        func(runID string) (sessionloop.CommandID, error)
+	commandForQueue      func(queueID string) (sessionloop.CommandID, error)
+	commandForResolution func(seq uint64) (sessionloop.CommandID, error)
+	availability         func() (<-chan struct{}, error)
 	awaitRunFinalized    func(ctx context.Context, runID string) error
 	outputFor            func(ctx context.Context, runID string) json.RawMessage
 
@@ -126,16 +127,23 @@ func newLoopProjector(sessionID string, payloadCodec codec.Codec, suspend Suspen
 	return &loopProjector{sessionID: sessionID, codec: payloadCodec, suspend: suspend, fold: newLoopFold()}
 }
 
-func (p *loopProjector) runCommand(runID string) sessionloop.CommandID {
+func (p *loopProjector) available() (<-chan struct{}, error) {
+	if p.availability == nil {
+		return nil, nil
+	}
+	return p.availability()
+}
+
+func (p *loopProjector) runCommand(runID string) (sessionloop.CommandID, error) {
 	if p.commandForRun == nil || runID == "" {
-		return ""
+		return "", nil
 	}
 	return p.commandForRun(runID)
 }
 
-func (p *loopProjector) queueCommand(queueID string) sessionloop.CommandID {
+func (p *loopProjector) queueCommand(queueID string) (sessionloop.CommandID, error) {
 	if p.commandForQueue == nil || queueID == "" {
-		return ""
+		return "", nil
 	}
 	return p.commandForQueue(queueID)
 }
@@ -144,6 +152,9 @@ func (p *loopProjector) queueCommand(queueID string) sessionloop.CommandID {
 // fold. ctx bounds live-only waits (structured-output capture); replay
 // callers pass a background context.
 func (p *loopProjector) apply(ctx context.Context, record event.Record) ([]sessionloop.Event, error) {
+	if _, err := p.available(); err != nil {
+		return nil, err
+	}
 	p.fold.pendingDropped += record.Dropped.Preview
 	if record.SessionID != "" && record.SessionID != p.sessionID {
 		if record.ParentID == p.sessionID && record.Nature != agentic.EventPreview {
@@ -267,8 +278,12 @@ func (p *loopProjector) applyAgentic(ctx context.Context, record event.Record) (
 		if err != nil {
 			return nil, err
 		}
+		commandID, err := p.runCommand(p.fold.currentRunID)
+		if err != nil {
+			return nil, err
+		}
 		entry := p.entry(record.Cursor, 0, sessionloop.RoleAssistant, sessionloop.OriginAssistant,
-			p.fold.currentRunID, p.runCommand(p.fold.currentRunID), projectMessageToEntryBlocks(payload.Message, p.summarize))
+			p.fold.currentRunID, commandID, projectMessageToEntryBlocks(payload.Message, p.summarize))
 		return []sessionloop.Event{p.entryEvent(record.Cursor, entry)}, nil
 	case agentic.EventTypeToolResultCommitted:
 		payload, err := event.Decode[event.ToolResultPayload](p.codec, record)
@@ -287,8 +302,12 @@ func (p *loopProjector) applyAgentic(ctx context.Context, record event.Record) (
 		if content := []byte(payload.Content); len(content) > 0 && json.Valid(content) {
 			block.Data = json.RawMessage(append([]byte(nil), content...))
 		}
+		commandID, err := p.runCommand(p.fold.currentRunID)
+		if err != nil {
+			return nil, err
+		}
 		entry := p.entry(record.Cursor, 0, sessionloop.RoleTool, sessionloop.OriginTool,
-			p.fold.currentRunID, p.runCommand(p.fold.currentRunID), []sessionloop.EntryBlock{block})
+			p.fold.currentRunID, commandID, []sessionloop.EntryBlock{block})
 		return []sessionloop.Event{p.entryEvent(record.Cursor, entry)}, nil
 	case agentic.EventTypeTurnMessagesInjected:
 		payload, err := event.Decode[event.MessagesPayload](p.codec, record)
@@ -301,8 +320,12 @@ func (p *loopProjector) applyAgentic(ctx context.Context, record event.Record) (
 			if index < len(payload.QueueIDs) {
 				queueID = payload.QueueIDs[index]
 			}
+			commandID, err := p.queueCommand(queueID)
+			if err != nil {
+				return nil, err
+			}
 			entry := p.entry(record.Cursor, index, sessionloop.RoleUser, p.fold.injectedOrigin(queueID),
-				p.fold.currentRunID, p.queueCommand(queueID), projectMessageToEntryBlocks(message))
+				p.fold.currentRunID, commandID, projectMessageToEntryBlocks(message))
 			events = append(events, p.entryEvent(record.Cursor, entry))
 		}
 		return events, nil
@@ -337,11 +360,15 @@ func (p *loopProjector) applyHarness(ctx context.Context, record event.Record) (
 			return nil, err
 		}
 		p.fold.currentRunID = payload.ID
+		commandID, err := p.runCommand(payload.ID)
+		if err != nil {
+			return nil, err
+		}
 		events := make([]sessionloop.Event, 0, 1+len(p.fold.pendingRunEntries))
 		for _, pending := range p.fold.pendingRunEntries {
 			entry := pending
 			entry.RunID = sessionloop.RunID(payload.ID)
-			entry.CommandID = p.runCommand(payload.ID)
+			entry.CommandID = commandID
 			events = append(events, p.entryEvent(entry.Position.Sequence, entry))
 		}
 		p.fold.pendingRunEntries = nil
@@ -351,7 +378,7 @@ func (p *loopProjector) applyHarness(ctx context.Context, record event.Record) (
 			Kind:      sessionloop.EventRunStarted,
 			SessionID: sessionloop.SessionID(p.sessionID),
 			RunID:     sessionloop.RunID(payload.ID),
-			CommandID: p.runCommand(payload.ID),
+			CommandID: commandID,
 			State:     sessionloop.StateRunning,
 		})
 		return events, nil
@@ -369,13 +396,17 @@ func (p *loopProjector) applyHarness(ctx context.Context, record event.Record) (
 		if outcome.Kind == sessionloop.RunCompleted && p.outputFor != nil {
 			outcome.Output = p.outputFor(ctx, payload.ID)
 		}
+		commandID, err := p.runCommand(payload.ID)
+		if err != nil {
+			return nil, err
+		}
 		return []sessionloop.Event{{
 			Position:  sessionloop.Position{Sequence: record.Cursor},
 			Nature:    sessionloop.EventAuthoritative,
 			Kind:      sessionloop.EventRunSettled,
 			SessionID: sessionloop.SessionID(p.sessionID),
 			RunID:     sessionloop.RunID(payload.ID),
-			CommandID: p.runCommand(payload.ID),
+			CommandID: commandID,
 			Outcome:   &outcome,
 		}}, nil
 	case kindMessage:
@@ -394,19 +425,19 @@ func (p *loopProjector) applyHarness(ctx context.Context, record event.Record) (
 		}
 		position := sessionloop.Position{Sequence: record.Cursor}
 		p.fold.rememberQueue(payload.ID, payload.Entry.Kind, projectMessageToInputBlocks(payload.Entry.Message), position)
-		return p.queueEvent(sessionloop.EventQueueAccepted, record.Cursor, payload.ID), nil
+		return p.queueEvent(sessionloop.EventQueueAccepted, record.Cursor, payload.ID)
 	case kindQueueDrained:
 		payload, err := codec.Decode[queueMutationPayload](p.codec, record.Payload)
 		if err != nil {
 			return nil, err
 		}
-		return p.queueEvent(sessionloop.EventQueueDrained, record.Cursor, payload.ID), nil
+		return p.queueEvent(sessionloop.EventQueueDrained, record.Cursor, payload.ID)
 	case kindQueueCancelled:
 		payload, err := codec.Decode[queueMutationPayload](p.codec, record.Payload)
 		if err != nil {
 			return nil, err
 		}
-		return p.queueEvent(sessionloop.EventQueueCancelled, record.Cursor, payload.ID), nil
+		return p.queueEvent(sessionloop.EventQueueCancelled, record.Cursor, payload.ID)
 	case kindUsageCommitted:
 		payload, err := codec.Decode[usagePayload](p.codec, record.Payload)
 		if err != nil {
@@ -441,7 +472,11 @@ func (p *loopProjector) applyHarness(ctx context.Context, record event.Record) (
 		}
 		commandID := sessionloop.CommandID("")
 		if p.commandForResolution != nil {
-			commandID = p.commandForResolution(record.Cursor)
+			var err error
+			commandID, err = p.commandForResolution(record.Cursor)
+			if err != nil {
+				return nil, err
+			}
 		}
 		return []sessionloop.Event{{
 			Position:  sessionloop.Position{Sequence: record.Cursor},
@@ -495,12 +530,20 @@ func (p *loopProjector) messageEvents(seq uint64, payload messagePayload) ([]ses
 	blocks := projectMessageToEntryBlocks(payload.Message)
 	switch payload.Source {
 	case "prompt":
+		commandID, err := p.runCommand(p.fold.currentRunID)
+		if err != nil {
+			return nil, err
+		}
 		entry := p.entry(seq, 0, role, sessionloop.OriginStart, p.fold.currentRunID,
-			p.runCommand(p.fold.currentRunID), blocks)
+			commandID, blocks)
 		return []sessionloop.Event{p.entryEvent(seq, entry)}, nil
 	case string(QueueNextTurn):
+		commandID, err := p.queueCommand(payload.QueueID)
+		if err != nil {
+			return nil, err
+		}
 		entry := p.entry(seq, 0, role, sessionloop.OriginNextTurn, p.fold.currentRunID,
-			p.queueCommand(payload.QueueID), blocks)
+			commandID, blocks)
 		return []sessionloop.Event{p.entryEvent(seq, entry)}, nil
 	case "initial_history":
 		entry := p.entry(seq, 0, role, sessionloop.OriginStart, "", "", blocks)
@@ -511,8 +554,12 @@ func (p *loopProjector) messageEvents(seq uint64, payload messagePayload) ([]ses
 			p.entry(seq, 0, role, sessionloop.OriginStart, "", "", blocks))
 		return nil, nil
 	default:
+		commandID, err := p.runCommand(p.fold.currentRunID)
+		if err != nil {
+			return nil, err
+		}
 		entry := p.entry(seq, 0, role, sessionloop.OriginStart, p.fold.currentRunID,
-			p.runCommand(p.fold.currentRunID), blocks)
+			commandID, blocks)
 		return []sessionloop.Event{p.entryEvent(seq, entry)}, nil
 	}
 }
@@ -522,21 +569,29 @@ func (p *loopProjector) suspendedEvent(seq uint64, suspension agentic.Suspension
 	if err != nil {
 		return nil, err
 	}
+	commandID, err := p.runCommand(p.fold.currentRunID)
+	if err != nil {
+		return nil, err
+	}
 	return []sessionloop.Event{{
 		Position:   sessionloop.Position{Sequence: seq},
 		Nature:     sessionloop.EventAuthoritative,
 		Kind:       sessionloop.EventRunSuspended,
 		SessionID:  sessionloop.SessionID(p.sessionID),
 		RunID:      sessionloop.RunID(p.fold.currentRunID),
-		CommandID:  p.runCommand(p.fold.currentRunID),
+		CommandID:  commandID,
 		State:      sessionloop.StateSuspended,
 		Suspension: &safe,
 	}}, nil
 }
 
-func (p *loopProjector) queueEvent(kind sessionloop.EventKind, seq uint64, queueID string) []sessionloop.Event {
+func (p *loopProjector) queueEvent(kind sessionloop.EventKind, seq uint64, queueID string) ([]sessionloop.Event, error) {
 	queued := p.fold.queuedInput(queueID)
-	queued.CommandID = p.queueCommand(queueID)
+	var err error
+	queued.CommandID, err = p.queueCommand(queueID)
+	if err != nil {
+		return nil, err
+	}
 	return []sessionloop.Event{{
 		Position:  sessionloop.Position{Sequence: seq},
 		Nature:    sessionloop.EventAuthoritative,
@@ -545,7 +600,7 @@ func (p *loopProjector) queueEvent(kind sessionloop.EventKind, seq uint64, queue
 		RunID:     sessionloop.RunID(p.fold.currentRunID),
 		CommandID: queued.CommandID,
 		Queue:     &queued,
-	}}
+	}}, nil
 }
 
 func (p *loopProjector) stateEvent(seq uint64, state sessionloop.State) sessionloop.Event {

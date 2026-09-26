@@ -303,7 +303,7 @@ func TestLoopRaceDispatchCancelAroundDurableAppend(t *testing.T) {
 			t.Fatalf("dispatch err = %v", err)
 		}
 		repository.journal().set(nil, nil)
-		if session.State() != Idle || driver.Count() != 0 {
+		if session.State() != Faulted || driver.Count() != 0 {
 			t.Fatalf("state=%s drives=%d", session.State(), driver.Count())
 		}
 	})

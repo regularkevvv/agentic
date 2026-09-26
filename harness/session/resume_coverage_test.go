@@ -177,7 +177,7 @@ func TestResumeEncodingSecondCheckSuspensionChangeAndAppendFailures(t *testing.T
 		return store.Commit{}, boom
 	}}
 	if _, err := session.Resume(context.Background(), request); !errors.Is(err, boom) ||
-		session.State() != Suspended {
+		session.State() != Faulted {
 		t.Fatalf("resolution append error = %v, state=%s", err, session.State())
 	}
 }

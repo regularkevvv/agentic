@@ -114,7 +114,7 @@ func (s *Session[O]) prepareStartWithCommand(
 		s.mu.Unlock()
 		return nil, encodeErr
 	}
-	commit, appendErr := s.journal.Append(acceptCtx, s.cursor, pendingEntries...)
+	commit, appendErr := s.appendAcceptanceLocked(acceptCtx, pendingEntries...)
 	if appendErr != nil {
 		s.mu.Unlock()
 		return nil, appendErr

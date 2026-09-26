@@ -14,6 +14,7 @@ acceptance:  acquire -> journal commit -> install  -> unlock -> publish
                                        ID maps
 reader:      load journal -> acquire same mutex -> read ID -> release
 crash:       discard volatile maps -> rebuild from journal -> expose new view
+append error: invalidate view while mutex held -> unlock -> close/reconstruct
 ```
 
 A reader can load committed bytes before `Append` returns. Moving installation
@@ -37,6 +38,12 @@ For arbitrary finite histories and arbitrary command/key domains, Lean proves:
 - `crash_at_every_phase_replayable`: at any phase, each committed binding has an
   explicit crash/rebuild/read continuation. Before commit, the original mailbox
   recovery rules still apply; no acceptance is invented.
+- `append_failure_preserves_safety`: an error before or after commit disables
+  observation without changing durable state or violating protocol safety.
+- `offline_until_reconstruction`, `invalidated_cannot_observe`: an invalidated
+  view cannot become observable again without reconstruction.
+- `append_error_reconstruction`, `uncommitted_error_retry`: a committed command
+  remains replayable; an uncommitted command can retry after reconstruction.
 - `committed_can_publish`: install/unlock/read is an enabled finite continuation.
   Safety is not obtained by prohibiting all observations.
 
@@ -57,6 +64,8 @@ that the old and new examples have identical underlying delivery-protocol state.
 | Commit, then install, then unlock | `prepareStartWithCommand`, `acceptWithCursorCommand`, `prepareResumeWithCommand`, `prepareResumeIndeterminateWithCommand` call the private `onAccepted` callback after successful append and before releasing `s.mu`. |
 | All affected bindings installed together | `dispatchStart`, `dispatchQueue`, `dispatchResolve` callbacks update the appropriate `runCommands`, `queueCommands`, `resolutionCommands` under `v.mu`; a resolution keeps an existing run's original attribution. |
 | Readers cannot cross the commit/install gap | `commandForRun`, `commandForQueue`, `commandForResolution` acquire `inner.mu` before `v.mu`, including readers projecting directly from journal loads. Queue consumption also takes the session mutex. |
+| An append error disables observation before unlock | `appendAcceptanceLocked` stores a sticky fault, faults/cancels the run and returns `ErrSessionFaulted`. Attribution getters check this fault under the same mutex. Snapshot, Replay, streams and command operations reject the invalid view. |
+| No missed wakeup when an error publishes no event | `projectionAvailability` reads the fault and state-change channel under one mutex; a waiting stream wakes on that channel. This channel wiring has a deterministic Go test, not a separate channel-level Lean proof. |
 | Rebuild before exposing a reopened view | `NewLoopView` completes `restoreCommandAcceptances` before returning a view with idempotent-dispatch capability. A decoding error fails construction. |
 | Identity does not change after publication | Model `Compatible` requires native keys to be fresh or already bound to the same command. Run/queue identity generation, unique journal sequences and resolve's preserve-existing-run rule are implementation obligations. |
 | Real-code regression evidence | `loop_publication_test.go` blocks publication before `Dispatch` returns, exercises live reads, finite replay, concurrent queue consumption and keyed reopen for start and recovery-resolution paths. |
@@ -85,42 +94,63 @@ Implementation sources: [view and attribution](../../../session/loop_view.go),
 - Finite recovery continuations do not prove scheduler fairness, eventual I/O
   success, deadlock freedom of the entire Go program or provider progress.
 
-The fix also moves volatile `runDone` registration into the same callback. It
-still occurs before launching the drive goroutine; channel completion and
-goroutine joining are unchanged. That lifecycle plumbing is not represented by
-the attribution theorem and remains covered by the separate Go lifecycle/race
-tests. The module-version alignment is build metadata, not a protocol change.
+The fix also moves volatile `runDone` registration into the same callback, before
+launching the drive goroutine. Channel completion and goroutine joining are not
+represented by the attribution theorem; separate Go lifecycle/race tests cover
+that wiring. The recovery startup decision has its own model below.
 
-## Confirmed implementation gap: ambiguous append result
+## Ambiguous append result: fail closed, reconstruct
 
-**The current Go implementation does not satisfy this model for every storage
-failure.** A fault-injection diagnostic on the fixed implementation committed a
-keyed append and then returned an error instead of its receipt. The observed
-sequence was:
+The original successful-append fix still had a gap when storage committed and
+then returned an error. An error does not prove rollback. The old live view could
+return an empty command ID while replay after reopening returned the real ID.
+That gap is now covered by both a model transition and the Go implementation:
 
 ```text
-journal commits -> Append returns error -> callback skipped -> session unlocks
-Snapshot: CommandID=""
-close/reopen -> reconstruct journal attribution
-Snapshot: CommandID="cmd-unknown"
+Append returns error (before OR after commit)
+  -> invalidate old view before unlocking
+  -> reads/writes return ErrSessionFaulted
+  -> close and reopen under the existing ownership contract
+       committed: return the existing durable receipt, no second acceptance
+       not committed: normal retry remains possible
 ```
 
-Atomic storage does not mean an error proves rollback. The `Journal` interface
-does not provide that stronger guarantee. The preexisting Go error path unlocks
-without installing attribution or invalidating the live view. This corresponds
-to the same bad commit/unlock/read ordering used by `old_order_breaks_agreement`.
-The corrected model deliberately has **no** transition that unlocks a committed
-acceptance without first installing its metadata; a crash instead disables the
-view until reconstruction. Therefore the diagnostic is a concrete Go-to-model
-correspondence gap, not a failure of the Lean theorem.
+This deliberately changes error semantics: even a pre-commit storage error
+requires reopening, because the portable Journal interface cannot certify
+rollback. Cancellation detected **before calling storage** leaves the handle
+usable. Rewrapping the same invalid Session is not reconstruction and fails.
+No new public interface, table, lock or background reconciliation mechanism is
+introduced. The worker already retains work and reopens after a session fault.
 
-The new ordering fixes successful append paths. Its crash theorem covers a
-stopped process followed by reconstruction. It does **not** prove safety when an
-ambiguous append error leaves the old view observable. To extend the guarantee,
-the implementation must reconcile the journal or invalidate/reopen that view
-before allowing observations. That behavior has not been changed by this proof
-addition and needs its own implementation and regression tests. Green CI must
-not be interpreted as closing this gap.
+`acceptance_failure_test.go` injects both outcomes for start, next-turn, steer,
+follow-up, normal/recovery resolve, interrupt and rejection. It checks every
+read/write surface, concurrent direct journal reads, waiting streams, restored
+receipts and retry deduplication. The PostgreSQL e2e test injects errors around a
+real SQL commit and waits for autonomous worker recovery and mailbox cleanup,
+both directly and through PgBouncer transaction pooling. Inspection occurs only
+after the worker has recovered and retired; it cannot rescue the test.
+
+These tests cover concrete paths beyond the model's keyed-attribution scope;
+they do not formally verify the journal decoder or every possible runtime I/O.
+
+## Recovery interrupted before driver startup
+
+Repeated failure/reopen testing found a second edge: Close can set a recovered
+run to Interrupting before `continueRecovered` starts. Previously its guard
+returned without starting a driver or finalizing interruption, leaving no
+goroutine responsible for settlement.
+
+`RecoveryStartup.lean` tracks pending-startup and active-driver responsibility
+separately from status. It proves every reachable running/interrupting state
+has a responsible callback, and proves finite settlement paths for both mutex
+orders. A failed settlement faults explicitly; it does not pretend to commit.
+The old guard's lost-responsibility counterexample is retained.
+
+The Go startup now calls `finishInterrupt` if interruption already won. The
+deterministic `TestRecoveryStartupInterruptedBeforeDriver` checks successful
+durable closure and a failed closure, without starting a model in either case.
+This is a separate component algorithm proof: callbacks must be scheduled and
+I/O must return. It is not a formal Go scheduler or settlement-code proof.
 
 ## Verification
 
@@ -130,9 +160,13 @@ bash verify.sh
 
 # From harness
 go test -race ./session -run 'TestLoopRace.*AttributionBeforePublication' -count=100
+go test -race ./session -run 'TestLoopRace|TestRecoveryStartup' -count=100
+
+# From e2e/sessionloop/postgres: isolated PostgreSQL + transaction pooling
+bash run.sh
 ```
 
-The proof root imports both new modules. The audit requires the principal new
+The proof root imports the new modules. The audit requires the principal new
 theorems and rejects admitted proofs/custom axioms; `leanchecker` rechecks proof
 terms. CI now runs that verification for changes to the embedded session,
 SessionLoop and PostgreSQL host, not only changes to Lean files. These checks

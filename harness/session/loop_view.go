@@ -150,6 +150,10 @@ func NewLoopView[O any](inner *Session[O], config LoopConfig[O]) (*LoopView[O], 
 		idempotency:        make(map[string]durableCommandAcceptance),
 		idempotencyClaims:  make(map[string]chan struct{}),
 	}
+	if _, err := view.availability(); err != nil {
+		cancel()
+		return nil, err
+	}
 	if caps.Supports(sessionloop.CapabilityIdempotentDispatch) {
 		if err := view.restoreCommandAcceptances(context.Background()); err != nil {
 			cancel()
@@ -212,8 +216,8 @@ func (v *LoopView[O]) Dispatch(ctx context.Context, command sessionloop.Command)
 	}
 	v.lifecycleMu.RLock()
 	defer v.lifecycleMu.RUnlock()
-	if v.isClosed() {
-		return sessionloop.Receipt{}, loopClosedError()
+	if _, err := v.availability(); err != nil {
+		return sessionloop.Receipt{}, err
 	}
 	commandID := command.ID
 	if commandID == "" {
@@ -307,6 +311,9 @@ func (v *LoopView[O]) claimIdempotencyKey(
 	ctx context.Context, key, digest string,
 ) (sessionloop.Receipt, bool, chan struct{}, error) {
 	for {
+		if _, err := v.availability(); err != nil {
+			return sessionloop.Receipt{}, false, nil, err
+		}
 		v.mu.Lock()
 		if accepted, exists := v.idempotency[key]; exists {
 			v.mu.Unlock()
@@ -724,28 +731,37 @@ func (v *LoopView[O]) awaitRunFinalized(ctx context.Context, runID string) error
 	return nil
 }
 
-func (v *LoopView[O]) commandForRun(runID string) sessionloop.CommandID {
+func (v *LoopView[O]) commandForRun(runID string) (sessionloop.CommandID, error) {
 	v.inner.mu.Lock()
 	defer v.inner.mu.Unlock()
+	if err := v.inner.acceptanceFaultLocked(); err != nil {
+		return "", mapLoopError(err)
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.runCommands[runID]
+	return v.runCommands[runID], nil
 }
 
-func (v *LoopView[O]) commandForQueue(queueID string) sessionloop.CommandID {
+func (v *LoopView[O]) commandForQueue(queueID string) (sessionloop.CommandID, error) {
 	v.inner.mu.Lock()
 	defer v.inner.mu.Unlock()
+	if err := v.inner.acceptanceFaultLocked(); err != nil {
+		return "", mapLoopError(err)
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.queueCommands[queueID]
+	return v.queueCommands[queueID], nil
 }
 
-func (v *LoopView[O]) commandForResolution(seq uint64) sessionloop.CommandID {
+func (v *LoopView[O]) commandForResolution(seq uint64) (sessionloop.CommandID, error) {
 	v.inner.mu.Lock()
 	defer v.inner.mu.Unlock()
+	if err := v.inner.acceptanceFaultLocked(); err != nil {
+		return "", mapLoopError(err)
+	}
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	return v.resolutionCommands[seq]
+	return v.resolutionCommands[seq], nil
 }
 
 func (v *LoopView[O]) newProjector(live bool) *loopProjector {
@@ -753,6 +769,7 @@ func (v *LoopView[O]) newProjector(live bool) *loopProjector {
 	projector.commandForRun = v.commandForRun
 	projector.commandForQueue = v.commandForQueue
 	projector.commandForResolution = v.commandForResolution
+	projector.availability = v.projectionAvailability
 	projector.summarize = v.inner.ToolSummary
 	if live {
 		projector.awaitRunFinalized = v.awaitRunFinalized
@@ -766,8 +783,8 @@ func (v *LoopView[O]) newProjector(live bool) *loopProjector {
 // Live view state (session state, pending queue, suspension, usage) comes
 // from the inner session's authoritative snapshot.
 func (v *LoopView[O]) Snapshot(ctx context.Context) (sessionloop.Snapshot, error) {
-	if v.isClosed() {
-		return sessionloop.Snapshot{}, loopClosedError()
+	if _, err := v.availability(); err != nil {
+		return sessionloop.Snapshot{}, err
 	}
 	loaded, err := v.inner.journalRef().Load(ctx)
 	if err != nil {
@@ -805,7 +822,10 @@ func (v *LoopView[O]) Snapshot(ctx context.Context) (sessionloop.Snapshot, error
 	}
 	for _, pending := range inner.Pending {
 		queued := projector.fold.queuedInput(pending.ID)
-		queued.CommandID = v.commandForQueue(pending.ID)
+		queued.CommandID, err = v.commandForQueue(pending.ID)
+		if err != nil {
+			return sessionloop.Snapshot{}, err
+		}
 		snapshot.Pending = append(snapshot.Pending, queued)
 	}
 	if inner.Suspension != nil {
@@ -819,8 +839,8 @@ func (v *LoopView[O]) Snapshot(ctx context.Context) (sessionloop.Snapshot, error
 }
 
 func (v *LoopView[O]) Subscribe(ctx context.Context, options sessionloop.SubscribeOptions) (sessionloop.Stream, error) {
-	if v.isClosed() {
-		return nil, loopClosedError()
+	if _, err := v.availability(); err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -906,6 +926,10 @@ func (s *loopStream) inject(event sessionloop.Event) {
 
 func (s *loopStream) Next(ctx context.Context) (sessionloop.Event, error) {
 	for {
+		changed, err := s.projector.available()
+		if err != nil {
+			return sessionloop.Event{}, err
+		}
 		s.mu.Lock()
 		if len(s.queue) > 0 {
 			next := s.queue[0]
@@ -926,6 +950,8 @@ func (s *loopStream) Next(ctx context.Context) (sessionloop.Event, error) {
 		select {
 		case <-ctx.Done():
 			return sessionloop.Event{}, ctx.Err()
+		case <-changed:
+			// Includes an acceptance fault without a published journal event.
 		case <-s.wake:
 			// An injected live event (or Close) is waiting; re-check the queue.
 		case record, ok := <-s.subscription.Events:

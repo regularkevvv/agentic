@@ -80,21 +80,22 @@ type Session[O any] struct {
 	closingHookDone   bool
 	closedHookDone    bool
 
-	mu             sync.Mutex
-	state          State
-	stateChange    chan struct{}
-	fault          error
-	cursor         store.Cursor
-	messages       []agentic.Message
-	contextMarkers []contextMarker
-	queue          []QueueEntry
-	usage          agentic.Usage
-	budget         *agentic.UsageLimits
-	drainAll       bool
-	suspension     *agentic.Suspension
-	run            *activeRun
-	runCancel      context.CancelFunc
-	recoveryInputs []QueueEntry
+	mu              sync.Mutex
+	state           State
+	stateChange     chan struct{}
+	fault           error
+	acceptanceFault error // sticky until close/recover; the old view must not guess rollback
+	cursor          store.Cursor
+	messages        []agentic.Message
+	contextMarkers  []contextMarker
+	queue           []QueueEntry
+	usage           agentic.Usage
+	budget          *agentic.UsageLimits
+	drainAll        bool
+	suspension      *agentic.Suspension
+	run             *activeRun
+	runCancel       context.CancelFunc
+	recoveryInputs  []QueueEntry
 }
 
 func New[O any](ctx context.Context, config Config[O], opts ...Option) (*Session[O], error) {
@@ -279,6 +280,9 @@ func (s *Session[O]) Snapshot(ctx context.Context) (Snapshot, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.acceptanceFaultLocked(); err != nil {
+		return Snapshot{}, err
+	}
 	pending := make([]QueueEntry, len(s.queue))
 	for i, entry := range s.queue {
 		pending[i] = entry
@@ -408,10 +412,10 @@ func (s *Session[O]) acceptWithCursorCommand(
 		s.mu.Unlock()
 		return QueueReceipt{}, store.Cursor{}, err
 	}
-	commit, appendErr := s.journal.Append(ctx, s.cursor, pendingEntries...)
+	commit, appendErr := s.appendAcceptanceLocked(ctx, pendingEntries...)
 	if appendErr != nil {
-		// Acceptance is write-ahead. No in-memory queue mutation occurred, so
-		// this isolated failure does not fault the session.
+		// The append may have committed. The old view is now unusable even
+		// though no in-memory queue mutation occurred.
 		s.mu.Unlock()
 		return QueueReceipt{}, store.Cursor{}, appendErr
 	}

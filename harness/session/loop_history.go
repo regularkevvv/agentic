@@ -12,8 +12,8 @@ import (
 // the existing journal; it neither dispatches commands nor changes ownership.
 // The caller obtains through from Snapshot. Live-only observations are excluded.
 func (v *LoopView[O]) Replay(ctx context.Context, after, through sessionloop.Position) ([]sessionloop.Event, error) {
-	if v.isClosed() {
-		return nil, loopClosedError()
+	if _, err := v.availability(); err != nil {
+		return nil, err
 	}
 	loaded, err := v.inner.journalRef().Load(ctx)
 	if err != nil {

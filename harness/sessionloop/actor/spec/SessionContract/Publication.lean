@@ -78,6 +78,15 @@ def crash (s : View n) (g : Lease) : View n :=
   { s with core := step s.core (.crash g), cache := fun _ => none
            phase := .unlocked, online := false }
 
+/-- An error response does not reveal whether append committed. Disable the
+live view BEFORE unlocking in both cases; do not invent rollback or acceptance.
+The cache may remain stale, but cannot be observed until reconstruction. -/
+def invalidate (s : View n) : View n :=
+  { s with phase := .unlocked, online := false }
+
+def AppendInFlight (s : View n) : Prop :=
+  ∃ r, s.phase = .accepting r ∨ s.phase = .committed r
+
 /-- Reconstruction finishes before the new view becomes observable. -/
 def restore (s : View n) : View n :=
   { s with cache := s.durable, phase := .unlocked, online := true }
@@ -98,6 +107,9 @@ def Compatible (s : View n) (r : Request n) : Prop :=
 inductive Step : View n → View n → Prop where
   | begin (s) (r) (online : s.online = true) (free : s.phase = .unlocked) :
       Step s (begin s r)
+  /-- Cancellation/validation before storage is invoked has a known no-effect
+  outcome. This rule is NOT available after the journal commit. -/
+  | abortBeforeAppend (s) (r) (held : s.phase = .accepting r) : Step s (unlock s)
   | commit (s) (r) (held : s.phase = .accepting r) (key : Compatible s r)
       (accepted : (execute s.core (.accept r.lease r.command r.payload)).2 = .accepted) :
       Step s (commit s r)
@@ -109,6 +121,7 @@ inductive Step : View n → View n → Prop where
   | observe (s) (key) (online : s.online = true) (free : s.phase = .unlocked)
       (present : s.durable key ≠ none) : Step s (observe s key)
   | crash (s) (g) : Step s (crash s g)
+  | appendError (s) (inFlight : AppendInFlight s) : Step s (invalidate s)
   | restore (s) (offline : s.online = false) : Step s (restore s)
   | protocol (s) (a) (other : ProtocolOnly a) : Step s (protocol s a)
 
@@ -148,6 +161,7 @@ theorem binding_persistent (h : Step s t) (bound : s.durable k = some c) :
 theorem step_synchronized (h : Step s t) (sync : Synchronized s) : Synchronized t := by
   cases h with
   | begin r online free => simpa [Synchronized, begin, free] using sync
+  | abortBeforeAppend r held => simpa [Synchronized, unlock, held] using sync
   | commit r held key accepted =>
       intro online
       have eq := sync online
@@ -160,6 +174,7 @@ theorem step_synchronized (h : Step s t) (sync : Synchronized s) : Synchronized 
   | reject r held failed => simpa [Synchronized, reject, held] using sync
   | observe key online free present => exact sync
   | crash g => simp [Synchronized, crash]
+  | appendError inFlight => simp [Synchronized, invalidate]
   | restore offline => simp [Synchronized, restore]
   | protocol a other => exact sync
 
@@ -252,6 +267,47 @@ theorem live_equals_replay (history : Steps (initialView : View n) t)
     (seen : o ∈ t.observations) : o.command = t.durable o.key := by
   obtain ⟨c, bound, value⟩ := (reachable_safe history).2.agrees o seen
   exact value.trans bound.symm
+
+/-- Covers BOTH errors before commit and errors after commit but before the
+receipt reaches the caller. Neither branch can expose the unfinished cache. -/
+theorem append_failure_preserves_safety (history : Steps (initialView : View n) s)
+    (inFlight : AppendInFlight s) :
+    Safe (invalidate s).core ∧ Valid (invalidate s) ∧
+    (invalidate s).online = false ∧ (invalidate s).durable = s.durable := by
+  obtain ⟨safe, valid⟩ := reachable_safe (.next history (.appendError s inFlight))
+  exact ⟨safe, valid, rfl, rfl⟩
+
+/-- Ordinary protocol actions, more failures and crashes cannot resurrect the
+old view. Only successful reconstruction can make an offline view online. -/
+theorem offline_until_reconstruction (h : Step s t) (offline : s.online = false) :
+    t.online = false ∨ t = restore s := by
+  cases h <;> try exact Or.inl offline
+  case crash g => exact Or.inl rfl
+  case appendError inFlight => exact Or.inl rfl
+  case restore off => exact Or.inr rfl
+
+theorem invalidated_cannot_observe (s : View n) :
+    ¬ (invalidate s).online = true := by simp [invalidate]
+
+/-- A committed-but-unacknowledged binding survives and has a concrete
+rebuild/read continuation. Rebuild failure is not success: it leaves the view
+offline, just like any finite number of idle protocol steps. -/
+theorem append_error_reconstruction (s : View n) (bound : s.durable k = some c) :
+    Steps (invalidate s) (observe (restore (invalidate s)) k) ∧
+    (observe (restore (invalidate s)) k).observations.head? = some ⟨k, some c⟩ := by
+  constructor
+  · exact .next (.next (.refl _) (.restore _ rfl))
+      (.observe _ k rfl rfl (by simp [restore, invalidate, bound]))
+  · simp [observe, restore, invalidate, bound]
+
+/-- If append did NOT commit, an eventual healthy retry can still accept it.
+No new key, payload or invented journal acceptance is needed for recovery. -/
+theorem uncommitted_error_retry (s : View n) (r : Request n)
+    (compatible : Compatible s r)
+    (accepted : (execute s.core (.accept r.lease r.command r.payload)).2 = .accepted) :
+    Steps (invalidate s) (commit (begin (restore (invalidate s)) r) r) := by
+  exact .next (.next (.next (.refl _) (.restore _ rfl)) (.begin _ r rfl rfl))
+    (.commit _ r rfl compatible accepted)
 
 /-- A crash may erase any partly installed cache. Reconstruction restores all
 committed bindings, including one whose acceptance callback never ran. -/

@@ -139,8 +139,8 @@ func TestRejectionIsJournaledIdempotentAndSurvivesReopen(t *testing.T) {
 		t.Fatal("failed persistence accepted")
 	}
 	restore()
-	if _, found, err := v.Acceptance(t.Context(), changed); err != nil || found {
-		t.Fatalf("failed append became receipt=%v %v", found, err)
+	if _, found, err := v.Acceptance(t.Context(), changed); !errors.Is(err, sessionloop.ErrSessionFaulted) || found {
+		t.Fatalf("ambiguous append exposed lookup=%v %v", found, err)
 	}
 	v.inner.mu.Lock()
 	v.inner.state = Faulted

@@ -707,6 +707,13 @@ func (s *Session[O]) recoverOpenRun(ctx context.Context) error {
 
 func (s *Session[O]) continueRecovered() {
 	s.mu.Lock()
+	// Close/Interrupt may win before this goroutine starts. There is then no
+	// driver to observe cancellation and settle the run: recovery must do it.
+	if s.state == Interrupting && s.run != nil {
+		s.mu.Unlock()
+		_ = s.finishInterrupt(&agentic.Execution[O]{Status: agentic.ExecutionInterrupted})
+		return
+	}
 	if s.state != Running || s.run == nil {
 		s.mu.Unlock()
 		return

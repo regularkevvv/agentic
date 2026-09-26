@@ -7,12 +7,14 @@ on:
       - harness/session/**
       - harness/sessionloop/**
       - harness/hosts/postgres/**
+      - e2e/sessionloop/**
       - .github/workflows/session-contract.yml
   pull_request:
     paths:
       - harness/session/**
       - harness/sessionloop/**
       - harness/hosts/postgres/**
+      - e2e/sessionloop/**
       - .github/workflows/session-contract.yml
   workflow_dispatch:
 

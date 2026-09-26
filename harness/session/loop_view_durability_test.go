@@ -172,10 +172,10 @@ func TestLoopViewDurableAcceptancesRestoreAcrossReopen(t *testing.T) {
 		replayedNext.Guarantee != sessionloop.AcceptanceDurable {
 		t.Fatalf("restored next_turn receipt = %#v, want %#v", replayedNext, nextReceipt)
 	}
-	if got := reopened.commandForQueue("queue-steer"); got != "cmd-steer" {
+	if got, err := reopened.commandForQueue("queue-steer"); err != nil || got != "cmd-steer" {
 		t.Fatalf("restored steer queue command = %q", got)
 	}
-	if got := reopened.commandForRun("run-resolved"); got != "cmd-resolve" {
+	if got, err := reopened.commandForRun("run-resolved"); err != nil || got != "cmd-resolve" {
 		t.Fatalf("restored resolve run command = %q", got)
 	}
 	conflict := sessionloopStartCommand("other content")
@@ -268,7 +268,7 @@ func TestLoopViewKeyedInterruptReplaysReceipt(t *testing.T) {
 	model := &scriptedModel{steps: []modelStep{
 		{message: agentic.NewTextMessage(agentic.RoleAssistant, "blocked"), entered: entered, release: release},
 	}}
-	view, session := newLoopViewForTest(t, agentic.NewAgent("", model), storememory.New(), nil)
+	view, _ := newLoopViewForTest(t, agentic.NewAgent("", model), storememory.New(), nil)
 	receipt := loopDispatch(t, view, sessionloopStartCommand("interrupt me"))
 	awaitSignal(t, entered, "model entered")
 
@@ -282,18 +282,8 @@ func TestLoopViewKeyedInterruptReplaysReceipt(t *testing.T) {
 		t.Fatalf("keyed follow-up receipt = %#v", followUpReceipt)
 	}
 
-	// While the run is live, a broken journal must fail the durable interrupt
-	// acceptance itself instead of interrupting without the marker.
-	restore := failJournal(session, nil, errors.New("append failed"))
-	broken := sessionloop.Command{
-		Kind:           sessionloop.CommandInterrupt,
-		RunID:          receipt.RunID,
-		IdempotencyKey: "durable-interrupt-broken",
-	}
-	if _, err := view.Dispatch(loopTestContext(t), broken); err == nil || !strings.Contains(err.Error(), "append failed") {
-		t.Fatalf("keyed interrupt with broken journal err = %v", err)
-	}
-	restore()
+	// Acceptance-error recovery (including interrupt) is exercised separately
+	// by TestLoopRaceAcceptanceErrorRequiresReconstruction.
 
 	interrupt := sessionloop.Command{
 		Kind:           sessionloop.CommandInterrupt,
@@ -348,7 +338,7 @@ func newSuspendedGateView(t *testing.T, mutate func(*Config[string], *LoopConfig
 }
 
 func TestLoopViewKeyedResolveJournalsAndReplays(t *testing.T) {
-	view, session := newSuspendedGateView(t, nil)
+	view, _ := newSuspendedGateView(t, nil)
 	stream := loopSubscribe(t, view, sessionloop.SubscribeOptions{Buffer: 256})
 
 	receipt := loopDispatch(t, view, sessionloopStartCommand("begin"))
@@ -371,22 +361,7 @@ func TestLoopViewKeyedResolveJournalsAndReplays(t *testing.T) {
 	if _, err := view.Dispatch(loopTestContext(t), unsupported); err == nil {
 		t.Fatal("data-block resolution prompt was accepted")
 	}
-	// A broken journal must fail the durable resolve acceptance itself.
-	restoreJournal := failJournal(session, nil, errors.New("append failed"))
-	brokenResolve := sessionloop.Command{
-		Kind:           sessionloop.CommandResolve,
-		RunID:          receipt.RunID,
-		IdempotencyKey: "durable-resolve-broken",
-		Resolution: &sessionloop.Resolution{
-			SuspensionID: suspended.Suspension.ID,
-			Decisions:    []sessionloop.ResolutionDecision{{ID: "gate-1", Action: sessionloop.ResolutionApprove}},
-		},
-	}
-	if _, err := view.Dispatch(loopTestContext(t), brokenResolve); err == nil ||
-		!strings.Contains(err.Error(), "append failed") {
-		t.Fatalf("keyed resolve with broken journal err = %v", err)
-	}
-	restoreJournal()
+	// Both ambiguous append outcomes are covered by the reconstruction matrix.
 	invalid := sessionloop.Command{
 		Kind:  sessionloop.CommandResolve,
 		RunID: receipt.RunID,
