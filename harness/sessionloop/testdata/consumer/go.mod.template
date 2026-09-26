@@ -2,4 +2,4 @@ module example.com/agentic-sessionloop-consumer
 
 go 1.25.4
 
-require github.com/regularkevvv/agentic/harness/sessionloop v0.3.0
+require github.com/regularkevvv/agentic/harness/sessionloop v0.4.0

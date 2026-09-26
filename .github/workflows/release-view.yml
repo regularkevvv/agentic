@@ -214,7 +214,7 @@ jobs:
           # public VCS tag; all of its dependencies remain checksummed.
           GOWORK=off GOPROXY=direct GONOSUMDB=github.com/regularkevvv/agentic/harness/sessionloop go run -mod=mod .
           test -z "$(GOWORK=off go list -m -f '{{if .Replace}}{{.Path}}{{end}}' all)"
-          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/harness/sessionloop)" = "v0.3.0"
+          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/harness/sessionloop)" = "v0.4.0"
           ! (GOWORK=off go mod graph | grep -E 'agentic($|[@ ])|agentic/harness($|[@ ])|bubbletea|lipgloss|openai|anthropic|gomonty')
 
   onnx:

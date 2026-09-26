@@ -1,8 +1,8 @@
 // Command main is the fresh no-replace consumer proof for the sessionloop
 // release view: a standard-library-only program that dispatches a start
 // command against the testkit reference host, observes the receipt, ordered
-// authoritative events, and the reconciling snapshot, then exits 0. Its
-// It also typechecks the public mailbox adapter and acceptance contracts. Its
+// authoritative events, and the reconciling snapshot, then exits 0.
+// It also typechecks the public local-channel adapter and acceptance contracts. Its
 // module graph must contain nothing beyond the sessionloop module itself —
 // no Agentic, Harness, TUI, provider SDK, or terminal dependency.
 package main
@@ -14,7 +14,7 @@ import (
 
 	"github.com/regularkevvv/agentic/harness/sessionloop"
 	"github.com/regularkevvv/agentic/harness/sessionloop/actor"
-	"github.com/regularkevvv/agentic/harness/sessionloop/actor/memory"
+	"github.com/regularkevvv/agentic/harness/sessionloop/actor/localchannel"
 	"github.com/regularkevvv/agentic/harness/sessionloop/testkit"
 )
 
@@ -75,6 +75,6 @@ func main() {
 }
 
 var _ sessionloop.Host = (*testkit.Host)(nil)
-var _ actor.Adapter = (*memory.Store)(nil)
+var _ actor.Adapter = (*localchannel.Store)(nil)
 var _ sessionloop.AcceptanceReader = actor.Session(nil)
 var _ sessionloop.RejectionRecorder = actor.Session(nil)
