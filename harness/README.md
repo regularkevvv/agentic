@@ -1,6 +1,6 @@
 # Agentic Harness (experimental)
 
-This nested module contains the experimental `v0.6` harness surface for
+This nested module contains the experimental `v0.7` harness surface for
 Agentic `v0.7.0`. It currently provides:
 
 - write-ahead `Harness`/`Session` execution with steering, follow-up,

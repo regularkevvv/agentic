@@ -134,9 +134,9 @@ jobs:
           GOWORK=off GONOSUMDB=github.com/regularkevvv/agentic/harness GOPROXY=direct go run -mod=mod .
           GOWORK=off GONOSUMDB=github.com/regularkevvv/agentic/harness GOPROXY=direct go test -mod=mod -race -count=1 -timeout 60s ./sessionloop
           test -z "$(GOWORK=off go list -m -f '{{if .Replace}}{{.Path}}{{end}}' all)"
-          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/harness)" = "v0.6.0"
+          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/harness)" = "v0.7.0"
           test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic)" = "v0.7.0"
-          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/harness/sessionloop)" = "v0.3.0"
+          test "$(GOWORK=off go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/harness/sessionloop)" = "v0.4.0"
 
   gomonty:
     if: ${{ (github.event_name == 'workflow_dispatch' && inputs.module == 'gomonty') || startsWith(github.ref, 'refs/tags/harness/codemode/gomonty/v') }}
