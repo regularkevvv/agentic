@@ -69,6 +69,7 @@ func TestFoldRejectsEveryMalformedPayloadKind(t *testing.T) {
 	payloadCodec := jsoncodec.New()
 	kinds := []string{
 		kindRunOpened,
+		kindRunRecovered,
 		kindMessage,
 		kindSystemMessage,
 		kindRepair,
@@ -111,6 +112,18 @@ func TestFoldRejectsEveryMalformedPayloadKind(t *testing.T) {
 	}
 	if _, _, err := fold(payloadCodec, entries); !errors.Is(err, store.ErrCorruptLog) {
 		t.Fatalf("invalid marker position = %v", err)
+	}
+}
+
+func TestFoldRejectsChangedRecoveryIdentity(t *testing.T) {
+	c := jsoncodec.New()
+	entries := []store.Entry{
+		createdEntry(t, c),
+		encodedEntry(t, c, 2, kindRunOpened, runOpenedPayload{ID: "accepted"}),
+		encodedEntry(t, c, 3, kindRunRecovered, runOpenedPayload{ID: "replacement"}),
+	}
+	if _, _, err := fold(c, entries); !errors.Is(err, store.ErrCorruptLog) {
+		t.Fatalf("recovery identity mutation was accepted: %v", err)
 	}
 }
 

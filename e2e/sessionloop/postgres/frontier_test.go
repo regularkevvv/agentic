@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
 	"github.com/regularkevvv/agentic/harness/sessionloop"
 	"github.com/regularkevvv/agentic/harness/sessionloop/actor"
 	"github.com/regularkevvv/agentic/harness/store"
@@ -130,7 +131,8 @@ func TestAcceptedSteeringSurvivesEveryLeaseLossBoundary(t *testing.T) {
 				}}
 			}
 			f.onWorkerError = func(err error) {
-				if !errors.Is(err, actor.ErrLeaseLost) && !(injected.Load() && errors.Is(err, sessionloop.ErrSessionFaulted)) {
+				expectedFault := injected.Load() && errors.Is(err, sessionloop.ErrSessionFaulted)
+				if !errors.Is(err, actor.ErrLeaseLost) && !expectedFault {
 					t.Errorf("unexpected worker error: %v", err)
 				}
 			}

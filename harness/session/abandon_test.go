@@ -151,3 +151,28 @@ func TestAbandonRetriesRootCleanupFailure(t *testing.T) {
 		t.Fatalf("root cleanup calls=%d, expected one retry then memoization", calls)
 	}
 }
+
+func TestNativeAbandonDeadlineAndClosedRetry(t *testing.T) {
+	cfg := sessionConfig(t, &countingDriver{}, storememory.New(), artifactmemory.New(), spill.Config{})
+	s, err := New(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	s.recoveryDone = done
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := s.Abandon(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("join=%v", err)
+	}
+	close(done)
+	if err := s.Abandon(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Abandon(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if s.State() != Closed {
+		t.Fatal("closed session reopened by cleanup retry")
+	}
+}

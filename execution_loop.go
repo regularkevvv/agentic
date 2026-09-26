@@ -31,7 +31,8 @@ func validateDriveInput(input DriveInput, history []Message) error {
 			return fmt.Errorf("%w: DriveContinue history has an open tool frontier", ErrTranscriptInvalid)
 		}
 		last := history[len(history)-1]
-		if last.Role != RoleUser && last.Role != RoleTool && !(input.Mode == DriveRecover && last.Role == RoleAssistant && len(last.GetToolUses()) == 0) {
+		recoverCandidate := input.Mode == DriveRecover && last.Role == RoleAssistant && len(last.GetToolUses()) == 0
+		if last.Role != RoleUser && last.Role != RoleTool && !recoverCandidate {
 			return fmt.Errorf("%w: DriveContinue history must end in a user or tool-result message", ErrDriveInput)
 		}
 	default:
