@@ -91,6 +91,37 @@ goroutine joining are unchanged. That lifecycle plumbing is not represented by
 the attribution theorem and remains covered by the separate Go lifecycle/race
 tests. The module-version alignment is build metadata, not a protocol change.
 
+## Confirmed implementation gap: ambiguous append result
+
+**The current Go implementation does not satisfy this model for every storage
+failure.** A fault-injection diagnostic on the fixed implementation committed a
+keyed append and then returned an error instead of its receipt. The observed
+sequence was:
+
+```text
+journal commits -> Append returns error -> callback skipped -> session unlocks
+Snapshot: CommandID=""
+close/reopen -> reconstruct journal attribution
+Snapshot: CommandID="cmd-unknown"
+```
+
+Atomic storage does not mean an error proves rollback. The `Journal` interface
+does not provide that stronger guarantee. The preexisting Go error path unlocks
+without installing attribution or invalidating the live view. This corresponds
+to the same bad commit/unlock/read ordering used by `old_order_breaks_agreement`.
+The corrected model deliberately has **no** transition that unlocks a committed
+acceptance without first installing its metadata; a crash instead disables the
+view until reconstruction. Therefore the diagnostic is a concrete Go-to-model
+correspondence gap, not a failure of the Lean theorem.
+
+The new ordering fixes successful append paths. Its crash theorem covers a
+stopped process followed by reconstruction. It does **not** prove safety when an
+ambiguous append error leaves the old view observable. To extend the guarantee,
+the implementation must reconcile the journal or invalidate/reopen that view
+before allowing observations. That behavior has not been changed by this proof
+addition and needs its own implementation and regression tests. Green CI must
+not be interpreted as closing this gap.
+
 ## Verification
 
 ```sh
