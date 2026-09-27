@@ -5,6 +5,36 @@ All notable changes to this project are documented here.
 This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 While the major version is 0, breaking changes may appear in minor releases.
 
+## [0.8.0] — 2026-09-26
+
+### Changed
+
+- Production network providers are separate Go modules. Import paths remain
+  unchanged; select provider modules explicitly rather than expecting the root
+  module to supply their SDKs.
+- Actor sessions require recovery-only `Abandon` cleanup. Infrastructure failure
+  and late caller cancellation must not interrupt durably accepted work.
+- Recovery retains the logical run ID. The new `run.recovered` journal event
+  requires upgrading all native journal readers and workers together; mixed
+  old/new workers are not qualified. Existing journals remain readable.
+
+### Fixed
+
+- Recover committed assistant candidates without regenerating them; finish a
+  durably completed run by recording only its missing closure.
+- Preserve accepted steering across failed-owner cleanup, queue replay and
+  takeover. Check fault state and finalization under one critical section.
+- Make advisory PostgreSQL discovery a single query while retaining transactional
+  fenced acquisition and writes in the executable reference flavor.
+
+### Verification
+
+- Recovery-frontier and cleanup component proofs include checked counterexamples
+  of the old behavior. They are not a formal verification of the Go implementation.
+- Native journal-boundary, renewal-I/O and cleanup-race regressions remain part
+  of the release gates. Fresh consumers resolve the tag being published with
+  workspace mode disabled and no module replacements.
+
 ## [0.6.0] — 2026-08-08
 
 Adds multi-representation inference: a batch-first `RepresentationEncoder`
