@@ -1,7 +1,7 @@
 github.com/openai/openai-go v1.12.0 h1:NBQCnXzqOTv5wsgNC36PrFEiskGfO5wccfCWDo9S1U0=
 github.com/openai/openai-go v1.12.0/go.mod h1:g461MYGXEXBVdV5SaR/5tNzNbSfwTBBefwc+LlDCK0Y=
-github.com/regularkevvv/agentic v0.7.1-0.20260819064845-de07df93c87a h1:7oD2WLtrEuMC6/fIISRgvOuEuog0EWJQPuL0qqVBAYU=
-github.com/regularkevvv/agentic v0.7.1-0.20260819064845-de07df93c87a/go.mod h1:VlSjtEyiW2khYXzQXFMKSs/WvqcqFiy+muhgmSGB3hc=
+github.com/regularkevvv/agentic v0.8.0 h1:KbT3e17PBI2WEHcECs5eTHgLGHzWJfzhbXgwuZyVW0o=
+github.com/regularkevvv/agentic v0.8.0/go.mod h1:zOc6arMo4zXmA8+I9G8Fd8RGFIQxcyIir/nf/jywsM0=
 github.com/tidwall/gjson v1.14.2/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=
 github.com/tidwall/gjson v1.14.4 h1:uo0p8EbA09J7RQaflQ1aBRffTR7xedD2bcIVSYxLnkM=
 github.com/tidwall/gjson v1.14.4/go.mod h1:/wbyibRr2FHMks5tjHJ5F8dMZh3AcwJEMf5vlfC0lxk=

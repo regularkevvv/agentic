@@ -1,10 +1,10 @@
 module github.com/regularkevvv/agentic/provider/openrouter
 
-go 1.25.4
+go 1.25.5
 
 require (
 	github.com/openai/openai-go v1.12.0
-	github.com/regularkevvv/agentic v0.7.1-0.20260819064845-de07df93c87a
+	github.com/regularkevvv/agentic v0.8.0
 )
 
 require (

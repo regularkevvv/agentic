@@ -682,6 +682,9 @@ func TestMarkdownLinksResolve(t *testing.T) {
 // and this test is what stops it being optional. A new provider that forgets it
 // fails here rather than being discovered by reading its source.
 func TestEveryProviderDeclaresItsCapabilities(t *testing.T) {
+	// Provider implementations belong to independent module archives. Only a
+	// repository checkout contains the sources this topology check inspects.
+	requireRepositoryCheckout(t)
 	t.Parallel()
 	providerRoot := filepath.Join(repoRoot(t), "provider")
 
