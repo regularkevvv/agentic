@@ -7,6 +7,10 @@ While the major version is 0, breaking changes may appear in minor releases.
 
 ## [0.8.0] — 2026-09-26
 
+Coordinated module releases: `harness/sessionloop/v0.5.0`, `harness/v0.8.0`,
+and initial `v0.1.0` tags for `provider/openai`, `provider/openrouter`, and
+`provider/voyageai`. The dependent modules pin the published root/protocol tags.
+
 ### Changed
 
 - Production network providers are separate Go modules. Import paths remain

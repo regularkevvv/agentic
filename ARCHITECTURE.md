@@ -101,7 +101,7 @@ is what `go get github.com/regularkevvv/agentic` should pull.
 | Module | In `go.work` | Resolves the root as | Exists because |
 |---|:-:|---|---|
 | `.` | ✓ | — | The library |
-| `harness/` | ✓ | **Agentic `v0.7.0`** | Experimental; its dependencies and its API churn should not be the library's |
+| `harness/` | ✓ | **Agentic `v0.8.0`, SessionLoop `v0.5.0`** | Experimental; its dependencies and its API churn should not be the library's |
 | `harness/sessionloop/` | ✓ | — (depends on nothing) | The provider-neutral session protocol must stay importable without Agentic, Harness, TUI, or provider SDKs in the consumer's module graph |
 | `harness/codemode/gomonty/` | ✓ | **Harness `v0.3.0`, GoMonty `v0.0.15`** | Optional native-backed Code Mode execution must not enter the core Harness graph |
 | `otel/` | ✓ | **Agentic `v0.7.0`** | Agentic-specific OTel integration and Development-status GenAI conventions remain opt-in; release root first |

@@ -1,7 +1,7 @@
 # Agentic Harness (experimental)
 
-This nested module contains the experimental `v0.7` harness surface for
-Agentic `v0.7.0`. It currently provides:
+This nested module contains the experimental `v0.8` harness surface for
+Agentic `v0.8.0`. It currently provides:
 
 - write-ahead `Harness`/`Session` execution with steering, follow-up,
   next-turn queues, interruption, snapshots, budgets, and crash recovery;
@@ -107,13 +107,19 @@ Concrete execution flavors are listed in [`hosts/`](hosts/README.md).
 `hosts/localchannel` connects the local mailbox and independent worker to the
 native Harness and is the CLI's standard path. `Default` remains the native
 runtime assembly, not an implicit worker starter. The PostgreSQL flavor has a
-separate, explicitly unimplemented [transaction-pooling design](hosts/postgres/DESIGN.md).
+separate [transaction-pooling design](hosts/postgres/DESIGN.md) and an executable
+[reference adapter and e2e suite](../e2e/sessionloop/postgres/README.md), not a
+database dependency bundled into the core Harness.
 
-Harness v0.6.0 pins Sessionloop v0.3.0, whose actor API separates mailbox
+Harness v0.8.0 pins Sessionloop v0.5.0, whose actor API separates mailbox
 submission from independently scheduled workers. See the
 [actor migration guide](sessionloop/actor/README.md) before upgrading an existing
 actor assembly. Journal acceptance lookup and mutation-authority adapters are
 provided by the Harness; persistent mailbox adapters remain separately supplied.
+Actor sessions must implement recovery-only `Abandon` cleanup. Upgrade native
+journal readers and workers together before writing `run.recovered` entries;
+mixed old/new workers are not qualified. See the
+[recovery contract](sessionloop/actor/spec/RECOVERY.md).
 
 The same core accepts other conforming adapters without modification. Reusable
 conformance suites live in `store/storetest`, `event/eventtest`, `env/envtest`,
@@ -247,7 +253,7 @@ standard CLI now live in the separate `../tui` module described in
 The module requires the released root module:
 
 ```text
-github.com/regularkevvv/agentic v0.7.0
+github.com/regularkevvv/agentic v0.8.0
 ```
 
 The separately released optional GoMonty adapter pins:
