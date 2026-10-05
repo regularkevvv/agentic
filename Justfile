@@ -9,7 +9,7 @@ coverage_threshold := "97.0"
 coverage_packages := `go list ./... | grep -vE '/(internal/testutil|provider/test/conformance)($|/)' | tr '\n' ' '`
 provider_modules := "anthropic azure bedrock cohere deepinfra endpoint gemini grok huggingface ollama openai openrouter pinecone sagemaker together voyageai"
 provider_packages := "./provider/anthropic/... ./provider/azure/... ./provider/bedrock/... ./provider/cohere/... ./provider/deepinfra/... ./provider/endpoint/... ./provider/gemini/... ./provider/grok/... ./provider/huggingface/... ./provider/ollama/... ./provider/openai/... ./provider/openrouter/... ./provider/pinecone/... ./provider/sagemaker/... ./provider/together/... ./provider/voyageai/..."
-workspace_packages := "./... " + provider_packages + " ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./otel/... ./tui/... ./e2e/..."
+workspace_packages := "./... " + provider_packages + " ./harness/... ./harness/codemode/gomonty/... ./harness/sessionloop/... ./otel/... ./tui/... ./realtime/... ./e2e/..."
 
 # Harness module recipes
 [group("modules")]
@@ -30,6 +30,10 @@ mod otel
 # TUI module recipes
 [group("modules")]
 mod tui
+
+# Realtime voice frontend module recipes
+[group("modules")]
+mod realtime
 
 # Collector-backed OpenTelemetry proof recipes
 [group("modules")]
@@ -100,6 +104,7 @@ coverage-all: coverage-check coverage-providers
     just sessionloop::coverage-check
     just otel::coverage-check
     just tui::coverage-check
+    just realtime::coverage-check
 
 # Lint every module that does not require a native toolchain.
 [group("quality")]
@@ -112,6 +117,7 @@ lint:
     (cd harness/sessionloop && {{ golangci_lint }} run ./...)
     (cd otel && {{ golangci_lint }} run ./...)
     (cd tui && {{ golangci_lint }} run ./...)
+    (cd realtime && {{ golangci_lint }} run ./...)
     (cd e2e && {{ golangci_lint }} run --build-tags=e2e ./...)
     for module in {{ provider_modules }}; do
       echo "lint provider/$module"

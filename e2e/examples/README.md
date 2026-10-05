@@ -16,6 +16,7 @@ The commands below are run from the repository root, where the committed
 | `sparse/` | What a learned sparse vector is, and what it costs |
 | `codemode/` | Full Harness session through Codemode, GoMonty, a Monty worker, and a nested Go tool |
 | `tui/` | Real Harness-to-TUI adapter with streaming thinking/tool events, child metadata, permission deny/approve, interruption, cache proof, and durable recovery |
+| `realtime/` | Live voice call (OpenAI Realtime over WebSocket or WebRTC + sideband, xAI Grok Voice over WebSocket) delegating to a Harness session through `realtime.Run` |
 | `otel/` | Credential-free nested agents, tools, suspension/resume, streaming, failures, embeddings, and evaluations exported through OTLP/gRPC |
 
 ## Setup
@@ -34,6 +35,8 @@ go run ./e2e/examples/retrieval  # needs DEEPINFRA_TOKEN
 go run ./e2e/examples/sparse     # needs DEEPINFRA_TOKEN
 go run ./e2e/examples/codemode   # no credential; explicitly downloads and verifies GoMonty
 go run ./e2e/examples/tui        # no credential; deterministic local acceptance flow
+go run ./e2e/examples/realtime -provider grok                      # needs GROK_API_KEY, OPENAI_API_KEY
+go run ./e2e/examples/realtime -provider openai -transport webrtc  # needs OPENAI_API_KEY
 just otel-e2e                     # no credential; example plus Collector-backed signal assertions
 ```
 

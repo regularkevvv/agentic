@@ -60,6 +60,7 @@ require (
 	github.com/charmbracelet/x/windows v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
+	github.com/coder/websocket v1.8.14
 	github.com/ebitengine/purego v0.10.0 // indirect
 	github.com/felixge/httpsnoop v1.0.4 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
@@ -83,6 +84,8 @@ require (
 	github.com/muesli/cancelreader v0.2.2 // indirect
 	github.com/openai/openai-go v1.12.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
+	github.com/pion/webrtc/v4 v4.2.22
+	github.com/regularkevvv/agentic/realtime v0.0.0
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/swaggest/jsonschema-go v0.3.79 // indirect
 	github.com/swaggest/refl v1.4.0 // indirect
@@ -124,3 +127,5 @@ replace github.com/regularkevvv/agentic/harness/codemode/gomonty => ../harness/c
 replace github.com/regularkevvv/agentic/otel => ../otel
 
 replace github.com/regularkevvv/agentic/tui => ../tui
+
+replace github.com/regularkevvv/agentic/realtime => ../realtime

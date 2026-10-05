@@ -41,6 +41,7 @@ agentic/                    the library — one import path for callers
       actor/                durable mailbox/lease supervisor contracts
   otel/                     nested module: optional OTel traces/logs/metrics
   tui/                      nested module: reusable terminal client
+  realtime/                 nested module: provider-neutral voice frontend
   e2e/                      nested module: live tests and runnable examples
     localinference/         nested module (CGO): the example that uses onnx
 
@@ -82,6 +83,7 @@ everything else is chat.
 | A test double for *this repo* | `internal/testutil/` | Not part of the API |
 | A contract suite a provider must pass | `provider/test/conformance/` | Beside the doubles, importable by an out-of-tree provider |
 | A runnable example | `e2e/examples/<name>/` | The `e2e` module, so a table writer never reaches a caller's binary |
+| A voice frontend contract or its session bridge | `realtime/` | Depends only on `harness/sessionloop`; concrete provider transports (WebRTC, WebSocket relay, SIP) belong to the assembling application or `e2e/examples/realtime/` |
 | A compatible-harness terminal client | `tui/` | Pure-Go client port, renderer, app, Harness adapter, and explicit standard assembly |
 | OpenTelemetry instrumentation | `otel/` | The Agentic OTel adapter and evolving GenAI conventions must not enter root source or its public API |
 | A session-protocol type, validation rule, or conformance case | `harness/sessionloop/` | The neutral protocol and its conformance suite stay in the zero-dependency module every host and bridge imports |
@@ -91,7 +93,7 @@ everything else is chat.
 | A record of why a decision was made | `docs/design/` | Not maintained afterwards; see `docs/README.md` |
 | A description of what exists | `docs/` | Maintained; wrong if the code moves and it doesn't |
 
-## The 25 modules
+## The 26 modules
 
 A nested module exists to keep something out of a dependency graph, and for no
 other reason. Depth means nothing to Go — `provider/local/onnx` is no more
@@ -105,6 +107,7 @@ is what `go get github.com/regularkevvv/agentic` should pull.
 | `harness/sessionloop/` | ✓ | — (depends on nothing) | The provider-neutral session protocol must stay importable without Agentic, Harness, TUI, or provider SDKs in the consumer's module graph |
 | `harness/codemode/gomonty/` | ✓ | **Harness `v0.3.0`, GoMonty `v0.0.15`** | Optional native-backed Code Mode execution must not enter the core Harness graph |
 | `otel/` | ✓ | **Agentic `v0.7.0`** | Agentic-specific OTel integration and Development-status GenAI conventions remain opt-in; release root first |
+| `realtime/` | ✓ | — (requires only SessionLoop) | A voice frontend must not pull Agentic, Harness, provider SDKs, or WebRTC stacks into the graph of an application that only bridges calls to a session |
 | `tui/` | ✓ | **Agentic `v0.6.0`, Harness `v0.3.0`** | Bubble Tea and terminal application dependencies must not enter either library graph |
 | `e2e/` | ✓ | this checkout | Live tests and examples need keys, table writers, and fixtures that no caller should inherit |
 | `provider/<vendor>/` (16 modules) | ✓ | a published Agentic revision | Installing one provider must not add every other provider SDK to the module graph |
@@ -116,11 +119,11 @@ The last two are absent from `go.work` on purpose: including them would make
 native ONNX Runtime. They are built, tested, and linted by the `onnx` CI job, so
 they are gated — just not by the commands you run every day. The GoMonty
 bindings are cgo-free and prepare their native runtime explicitly at execution,
-so that optional module remains in `go.work`. `just lint-all` covers all 25
+so that optional module remains in `go.work`. `just lint-all` covers all 26
 when you do have the ONNX libraries.
 
 **`harness/`, `harness/sessionloop/`,
-`harness/codemode/gomonty/`, `otel/`, `tui/`, every production provider module,
+`harness/codemode/gomonty/`, `otel/`, `tui/`, `realtime/`, every production provider module,
 and `provider/local/onnx/` have no
 `replace` directives, and that is deliberate.**
 They are released in dependency order: sessionloop, root Agentic, the network
@@ -151,6 +154,7 @@ Not by convention — by tests that fail.
 | Provider SDKs stay out of the root module graph and each provider owns one module | `architecture_test.go`, provider CI matrix |
 | TUI and the optional GoMonty adapter contain no replace or cross-import | their module `architecture_test.go` files |
 | `harness/sessionloop` has zero require/replace directives | `architecture_test.go` |
+| `realtime` requires only `harness/sessionloop` and imports nothing else outside the standard library | `realtime/architecture_test.go` |
 | Root source cannot import OTel APIs or the optional adapter; `otel` has no replace | `architecture_test.go` |
 | `internal/` holds only the four documented packages | `architecture_test.go` |
 | Every top-level directory is one this document names | `architecture_test.go` |
