@@ -5,11 +5,12 @@
 set -euo pipefail
 
 repo_dir=$(cd "$(dirname "$0")/../.." && pwd)
-kind=${1:?usage: verify-release.sh root|harness|sessionloop [revision]}
+kind=${1:?usage: verify-release.sh root|harness|sessionloop|realtime [revision]}
 case "$kind" in
   root) module=github.com/regularkevvv/agentic; prefix= ;;
   harness) module=github.com/regularkevvv/agentic/harness; prefix=harness/ ;;
   sessionloop) module=github.com/regularkevvv/agentic/harness/sessionloop; prefix=harness/sessionloop/ ;;
+  realtime) module=github.com/regularkevvv/agentic/realtime; prefix=realtime/ ;;
   *) printf 'Unsupported release module: %s\n' "$kind" >&2; exit 2 ;;
 esac
 
@@ -55,6 +56,14 @@ case "$kind" in
     cp "$repo_dir/harness/sessionloop/testdata/consumer/main.go" .
     go run -mod=mod .
     test "$(go list -m all | wc -l | tr -d ' ')" = 2
+    ;;
+  realtime)
+    cp "$repo_dir/realtime/testdata/consumer/main.go" .
+    go run -mod=mod .
+    # The consumer, realtime, and the protocol it declares: nothing else.
+    test "$(go list -m all | wc -l | tr -d ' ')" = 3
+    declared=$(go mod edit -json "$repo_dir/realtime/go.mod" | jq -r '.Require[] | select(.Path == "github.com/regularkevvv/agentic/harness/sessionloop") | .Version')
+    test "$(go list -m -f '{{.Version}}' github.com/regularkevvv/agentic/harness/sessionloop)" = "$declared"
     ;;
 esac
 

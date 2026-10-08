@@ -126,9 +126,10 @@ when you do have the ONNX libraries.
 `harness/codemode/gomonty/`, `otel/`, `tui/`, `realtime/`, every production provider module,
 and `provider/local/onnx/` have no
 `replace` directives, and that is deliberate.**
-They are released in dependency order: sessionloop, root Agentic, the network
-providers (OpenAI before Azure, Ollama, and Together), the native ONNX provider,
-Harness, the optional GoMonty adapter, the OTel adapter, then TUI. Their
+They are released in dependency order: sessionloop, the realtime frontend,
+root Agentic, the network providers (OpenAI before Azure, Ollama, and
+Together), the native ONNX provider, Harness, the optional GoMonty adapter, the
+OTel adapter, then TUI. Their
 `GOWORK=off` release checks rehearse what `go get` gives a user. Locally
 `go.work` supplies the modules being changed together, so the distinction is
 invisible day to day for the non-CGO modules. The tag-triggered
