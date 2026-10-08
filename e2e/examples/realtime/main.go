@@ -1,14 +1,15 @@
-// Example: a live voice call bridged to a durable Harness session.
+// Example: a WebRTC voice gateway in front of a durable Harness session.
 //
-// The voice model (OpenAI Realtime or xAI Grok Voice) holds the call and
-// delegates every request to a Harness session through realtime.Run. The
-// Harness runs its own text model and tools; the voice model only speaks the
-// committed result. One typed user turn stands in for microphone audio so the
-// proof runs headless.
+// The browser connects only to this server: an authenticated HTTPS POST of
+// its SDP offer, then a μ-law audio track each way and a control data
+// channel. The gateway relays audio to a voice provider (OpenAI Realtime or
+// xAI Grok Voice) over a server-held WebSocket, and realtime.Run bridges the
+// voice model's single delegate tool to the user's Harness session, which
+// runs its own model and tools.
 //
-//	go run ./e2e/examples/realtime -provider grok
-//	go run ./e2e/examples/realtime -provider openai
-//	go run ./e2e/examples/realtime -provider openai -transport webrtc
+//	go run ./e2e/examples/realtime -provider grok   -client headless
+//	go run ./e2e/examples/realtime -provider openai -client chrome
+//	go run ./e2e/examples/realtime -provider openai -client none   # open the printed URL
 package main
 
 import (
@@ -17,13 +18,15 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
+	"net/http"
 	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/pion/webrtc/v4"
-	"github.com/pion/webrtc/v4/pkg/media"
 
 	agentic "github.com/regularkevvv/agentic"
 	"github.com/regularkevvv/agentic/e2e/examples/internal/envutil"
@@ -40,6 +43,8 @@ import (
 	"github.com/regularkevvv/agentic/realtime"
 )
 
+const demoToken = "demo-token"
+
 // ForecastInput is the Harness tool. The voice model never sees it.
 type ForecastInput struct {
 	_    struct{} `tool:"Look up today's forecast for a city"`
@@ -54,146 +59,263 @@ func forecast(_ context.Context, input ForecastInput) (string, error) {
 }
 
 func main() {
-	provider := flag.String("provider", "grok", "voice provider: openai or grok")
-	transport := flag.String("transport", "ws", "ws, or webrtc (openai only)")
-	say := flag.String("say", "What's today's forecast for Lima? Do I need an umbrella?", "the user's turn")
+	provider := flag.String("provider", "grok", "voice provider behind the gateway: openai or grok")
+	client := flag.String("client", "headless", "headless, chrome, or none to serve the page for a person")
+	addr := flag.String("addr", "127.0.0.1:0", "gateway listen address")
+	say := flag.String("say", "What's today's forecast for Lima? Do I need an umbrella?", "the spoken question")
+	chrome := flag.String("chrome", "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "Chrome binary for -client chrome")
 	flag.Parse()
 	if err := envutil.LoadDotEnv(); err != nil {
 		log.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-	if err := run(ctx, *provider, *transport, *say); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	if *client != "none" {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 2*time.Minute)
+		defer cancel()
+	}
+	if err := run(ctx, *provider, *client, *addr, *say, *chrome); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(ctx context.Context, provider, transport, say string) error {
-	session, err := newSession(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = session.Close(context.Background()) }()
-
+func run(ctx context.Context, provider, client, addr, say, chrome string) error {
 	var (
-		conn   realtime.Conn
-		client *webrtcClient
-		voice  string
+		d     dialect
+		key   string
+		voice string
 	)
-	switch {
-	case provider == "grok" && transport == "ws":
-		voice = "eve"
-		conn, err = dial(ctx, "wss://api.x.ai/v1/realtime?model=grok-voice-latest", os.Getenv("GROK_API_KEY"), grokDialect)
-	case provider == "openai" && transport == "ws":
-		voice = "marin"
-		conn, err = dial(ctx, "wss://api.openai.com/v1/realtime?model=gpt-realtime-2.1", os.Getenv("OPENAI_API_KEY"), openAIDialect)
-	case provider == "openai" && transport == "webrtc":
-		voice = "marin"
-		client, conn, err = newWebRTCClient(ctx, openAISignaler{key: os.Getenv("OPENAI_API_KEY"), model: "gpt-realtime-2.1"})
+	switch provider {
+	case "openai":
+		d, key, voice = openAIDialect, os.Getenv("OPENAI_API_KEY"), "marin"
+	case "grok":
+		d, key, voice = grokDialect, os.Getenv("GROK_API_KEY"), "eve"
 	default:
-		return fmt.Errorf("unsupported provider/transport %s/%s", provider, transport)
+		return fmt.Errorf("unknown provider %q", provider)
 	}
+	host, err := newHost()
 	if err != nil {
 		return err
 	}
-	defer func() { _ = conn.Close() }()
-	if client != nil {
-		defer client.close()
+	life, cancel := context.WithCancel(ctx)
+	defer cancel()
+	gw, err := newGateway(life, d, key)
+	if err != nil {
+		return err
 	}
-
-	ready := make(chan struct{}, 1)
-	answered := make(chan string, 1)
-	delegated := false
-	observe := func(event realtime.Event) {
-		switch event.Kind {
-		case realtime.EventReady:
+	observed := make(chan realtime.Event, 256)
+	srv := &server{
+		gateway:  gw,
+		sessions: newSessions(host),
+		tokens:   map[string]string{demoToken: "demo-user"},
+		options: realtime.Options{Voice: voice, Observe: func(event realtime.Event) {
 			select {
-			case ready <- struct{}{}:
+			case observed <- event:
 			default:
 			}
-		case realtime.EventToolCall:
-			delegated = true
-			fmt.Printf("voice  -> %s(%s)\n", event.Call.Name, event.Call.Arguments)
-		case realtime.EventAssistantTranscript:
-			fmt.Printf("voice  <- %q\n", event.Text)
-			if delegated {
-				select {
-				case answered <- event.Text:
-				default:
+		}},
+	}
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	httpServer := &http.Server{Handler: srv.routes(), ReadHeaderTimeout: 10 * time.Second}
+	go func() { _ = httpServer.Serve(listener) }()
+	defer func() {
+		cancel()
+		_ = httpServer.Shutdown(context.Background())
+		srv.calls.Wait()
+	}()
+	base := "http://" + listener.Addr().String()
+	fmt.Printf("gateway  %s  (provider %s, server-side only)\n", base, provider)
+
+	switch client {
+	case "none":
+		fmt.Printf("open %s/ and press Start call (token %q)\n", base, demoToken)
+		<-ctx.Done()
+		return nil
+	case "headless":
+		return proveHeadless(ctx, base, say)
+	case "chrome":
+		return proveChrome(ctx, base, say, chrome, observed)
+	}
+	return fmt.Errorf("unknown client %q", client)
+}
+
+// proveHeadless drives the gateway the way the browser page does and checks
+// what the browser would receive.
+func proveHeadless(ctx context.Context, base, say string) error {
+	if _, status, err := postOffer(ctx, base+"/call", "", "v=0"); err != nil || status != http.StatusUnauthorized {
+		return fmt.Errorf("FAIL: unauthenticated offer got %d %v, want 401", status, err)
+	}
+	fmt.Println("auth     unauthenticated offer rejected with 401")
+
+	speech, err := synthesize(ctx, os.Getenv("OPENAI_API_KEY"), say)
+	if err != nil {
+		return err
+	}
+	c, err := callGateway(ctx, base+"/call", demoToken)
+	if err != nil {
+		return err
+	}
+	defer c.close()
+
+	var delegated bool
+	var heard, answer string
+	for answer == "" {
+		select {
+		case msg := <-c.messages:
+			fmt.Printf("browser  <- %-16s %s\n", msg.Type, msg.Text)
+			switch msg.Type {
+			case "ready":
+				fmt.Printf("browser  -> speaking %.1fs of audio: %q\n", float64(len(speech))/24000, say)
+				c.say(mulawFrames(speech))
+			case "transcript.user":
+				heard = msg.Text
+			case "delegating":
+				delegated = true
+			case "transcript.agent":
+				if delegated {
+					answer = msg.Text
 				}
 			}
-		case realtime.EventError:
-			fmt.Printf("voice  !! %s\n", event.Text)
+		case <-ctx.Done():
+			return errors.New("FAIL: timed out waiting for the spoken answer")
 		}
 	}
-	bridged := make(chan error, 1)
-	go func() {
-		bridged <- realtime.Run(ctx, conn, session, realtime.Options{Voice: voice, Observe: observe})
-	}()
-
-	select {
-	case <-ready:
-	case err := <-bridged:
-		return fmt.Errorf("bridge ended before the session was configured: %w", err)
+	// The gateway paces audio in real time, so playback trails the transcript.
+	deadline := time.Now().Add(10 * time.Second)
+	for c.packets.Load() < 100 && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
 	}
-	fmt.Printf("user   -> %q\n", say)
-	if client != nil {
-		// The browser's side of the call: the turn enters on the client's
-		// data channel; the server sees it only through the sideband.
-		err = client.say(say)
-	} else {
-		err = sendTurn(ctx, conn, say)
-	}
+	spokenMs, err := bargeIn(ctx, c)
 	if err != nil {
 		return err
 	}
 
-	var spoken string
-	select {
-	case spoken = <-answered:
-	case err := <-bridged:
-		return fmt.Errorf("bridge ended before an answer: %w", err)
-	case <-ctx.Done():
-		return errors.New("timed out waiting for the spoken answer")
-	}
-
-	snapshot, err := session.Snapshot(ctx)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("\nharness tool calls: %d\n", forecastCalls.Load())
-	fmt.Printf("session entries:    %d (state %s)\n", len(snapshot.Entries), snapshot.State)
-	if client != nil {
-		fmt.Printf("client audio:       %d RTP packets, %d bytes received directly from the provider\n",
-			client.packets.Load(), client.bytes.Load())
-	}
-	if forecastCalls.Load() == 0 || !strings.Contains(spoken, "17") {
+	fmt.Printf("\nprovider heard:      %q\n", heard)
+	fmt.Printf("harness tool calls:  %d\n", forecastCalls.Load())
+	fmt.Printf("browser audio:       %d RTP packets, %d bytes of μ-law from the gateway\n", c.packets.Load(), c.bytes.Load())
+	fmt.Printf("barge-in:            answer cut after %d ms; unplayed audio dropped at the gateway\n", spokenMs)
+	if forecastCalls.Load() == 0 || !strings.Contains(answer, "17") {
 		return errors.New("FAIL: the spoken answer did not come from the Harness tool")
 	}
-	if client != nil && client.packets.Load() == 0 {
-		return errors.New("FAIL: no audio reached the WebRTC client")
+	if c.packets.Load() == 0 {
+		return errors.New("FAIL: no agent audio reached the browser")
 	}
 	fmt.Println("PASS")
 	return nil
 }
 
-func sendTurn(ctx context.Context, conn realtime.Conn, text string) error {
-	if err := conn.Send(ctx, realtime.Action{Kind: realtime.ActionUserText, Text: text}); err != nil {
-		return err
+// bargeIn talks over the agent's answer while the gateway is still pacing it
+// out, and expects the gateway to cut playback without a provider error.
+func bargeIn(ctx context.Context, c *headlessClient) (int, error) {
+	interjection, err := synthesize(ctx, os.Getenv("OPENAI_API_KEY"), "Wait, stop. That's enough, thanks.")
+	if err != nil {
+		return 0, err
 	}
-	return conn.Send(ctx, realtime.Action{Kind: realtime.ActionRespond})
+	fmt.Println("browser  -> talking over the answer")
+	c.say(mulawFrames(interjection))
+	timeout := time.After(15 * time.Second)
+	for {
+		select {
+		case msg := <-c.messages:
+			fmt.Printf("browser  <- %-16s %s\n", msg.Type, msg.Text)
+			switch msg.Type {
+			case "error":
+				return 0, fmt.Errorf("FAIL: provider error during barge-in: %s", msg.Text)
+			case "interrupted":
+				// A rejected truncate would arrive as an error shortly after.
+				settle := time.After(2 * time.Second)
+				for {
+					select {
+					case late := <-c.messages:
+						if late.Type == "error" {
+							return 0, fmt.Errorf("FAIL: provider rejected the truncation: %s", late.Text)
+						}
+					case <-settle:
+						return msg.SpokenMs, nil
+					}
+				}
+			}
+		case <-timeout:
+			return 0, errors.New("FAIL: talking over the answer did not interrupt it")
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+	}
 }
 
-// newSession assembles an in-memory Harness with a text model and one tool,
+// proveChrome loads the real page in headless Chrome with the spoken question
+// as its microphone, and checks the call from the server's side.
+func proveChrome(ctx context.Context, base, say, chrome string, observed <-chan realtime.Event) error {
+	speech, err := synthesize(ctx, os.Getenv("OPENAI_API_KEY"), say)
+	if err != nil {
+		return err
+	}
+	dir, err := os.MkdirTemp("", "realtime-chrome-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	// Leading silence covers page load and call setup; trailing silence lets
+	// voice activity detection see the end of the turn.
+	padded := append(append(make([]int16, 24000*4), speech...), make([]int16, 24000*3)...)
+	wav := filepath.Join(dir, "question.wav")
+	if err := writeWAV(wav, padded, 24000); err != nil {
+		return err
+	}
+	browser := exec.CommandContext(ctx, chrome,
+		"--headless=new", "--no-first-run", "--no-default-browser-check", "--user-data-dir="+filepath.Join(dir, "profile"),
+		"--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream",
+		"--use-file-for-fake-audio-capture="+wav+"%noloop", "--autoplay-policy=no-user-gesture-required",
+		"--disable-features=WebRtcHideLocalIpsWithMdns,AudioServiceSandbox,AudioServiceOutOfProcess",
+		base+"/?autostart=1&token="+demoToken)
+	if err := browser.Start(); err != nil {
+		return fmt.Errorf("start Chrome: %w", err)
+	}
+	defer func() { _ = browser.Process.Kill(); _ = browser.Wait() }()
+	fmt.Println("chrome   page loaded with the spoken question as its microphone")
+
+	var delegated bool
+	for {
+		select {
+		case event := <-observed:
+			switch event.Kind {
+			case realtime.EventUserTranscript:
+				fmt.Printf("server   heard     %q\n", event.Text)
+			case realtime.EventToolCall:
+				delegated = true
+				fmt.Printf("server   delegate  %s\n", event.Call.Arguments)
+			case realtime.EventAssistantTranscript:
+				fmt.Printf("server   spoke     %q\n", event.Text)
+				if delegated {
+					fmt.Printf("\nharness tool calls:  %d\n", forecastCalls.Load())
+					if forecastCalls.Load() == 0 || !strings.Contains(event.Text, "17") {
+						return errors.New("FAIL: the spoken answer did not come from the Harness tool")
+					}
+					fmt.Println("PASS")
+					return nil
+				}
+			case realtime.EventError:
+				fmt.Printf("server   error     %s\n", event.Text)
+			}
+		case <-ctx.Done():
+			return errors.New("FAIL: timed out waiting for the browser call to be answered")
+		}
+	}
+}
+
+// newHost assembles an in-memory Harness with a text model and one tool,
 // exposed through the neutral session protocol.
-func newSession(ctx context.Context) (sessionloop.Session, error) {
+func newHost() (sessionloop.Host, error) {
 	model, err := openai.New("gpt-4o-mini")
 	if err != nil {
 		return nil, err
 	}
 	agent := agentic.NewAgent("You are a concise local-weather assistant. Use the forecast tool.", model)
 	agentic.AddTool(agent, forecast)
-
 	environments, err := envmemory.NewFactory(envmemory.Config{Cwd: "/workspace"})
 	if err != nil {
 		return nil, err
@@ -214,103 +336,5 @@ func newSession(ctx context.Context) (sessionloop.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	host, err := harness.NewSessionLoopHost(runtime)
-	if err != nil {
-		return nil, err
-	}
-	return host.NewSession(ctx, sessionloop.SessionOptions{})
-}
-
-// webrtcClient plays the browser: it owns the media connection and the
-// events data channel, and holds no credential.
-type webrtcClient struct {
-	pc      *webrtc.PeerConnection
-	events  *webrtc.DataChannel
-	open    chan struct{}
-	stop    chan struct{}
-	packets atomic.Int64
-	bytes   atomic.Int64
-}
-
-func newWebRTCClient(ctx context.Context, signaler realtime.Signaler) (*webrtcClient, realtime.Conn, error) {
-	pc, err := webrtc.NewPeerConnection(webrtc.Configuration{})
-	if err != nil {
-		return nil, nil, err
-	}
-	c := &webrtcClient{pc: pc, open: make(chan struct{}), stop: make(chan struct{})}
-	microphone, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus, ClockRate: 48000, Channels: 2}, "audio", "client")
-	if err != nil {
-		return nil, nil, err
-	}
-	if _, err := pc.AddTrack(microphone); err != nil {
-		return nil, nil, err
-	}
-	pc.OnTrack(func(track *webrtc.TrackRemote, _ *webrtc.RTPReceiver) {
-		for {
-			packet, _, err := track.ReadRTP()
-			if err != nil {
-				return
-			}
-			c.packets.Add(1)
-			c.bytes.Add(int64(len(packet.Payload)))
-		}
-	})
-	if c.events, err = pc.CreateDataChannel("oai-events", nil); err != nil {
-		return nil, nil, err
-	}
-	c.events.OnOpen(func() { close(c.open) })
-
-	offer, err := pc.CreateOffer(nil)
-	if err != nil {
-		return nil, nil, err
-	}
-	gathered := webrtc.GatheringCompletePromise(pc)
-	if err := pc.SetLocalDescription(offer); err != nil {
-		return nil, nil, err
-	}
-	<-gathered
-
-	answer, conn, err := signaler.Accept(ctx, realtime.Offer{ContentType: "application/sdp", Body: []byte(pc.LocalDescription().SDP)})
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := pc.SetRemoteDescription(webrtc.SessionDescription{Type: webrtc.SDPTypeAnswer, SDP: string(answer.Body)}); err != nil {
-		_ = conn.Close()
-		return nil, nil, err
-	}
-	go c.silence(microphone)
-	return c, conn, nil
-}
-
-// silence keeps the microphone track live with 20ms Opus silence frames.
-func (c *webrtcClient) silence(track *webrtc.TrackLocalStaticSample) {
-	ticker := time.NewTicker(20 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-c.stop:
-			return
-		case <-ticker.C:
-			_ = track.WriteSample(media.Sample{Data: []byte{0xf8, 0xff, 0xfe}, Duration: 20 * time.Millisecond})
-		}
-	}
-}
-
-func (c *webrtcClient) say(text string) error {
-	select {
-	case <-c.open:
-	case <-time.After(15 * time.Second):
-		return errors.New("events data channel never opened")
-	}
-	item := fmt.Sprintf(`{"type":"conversation.item.create","item":{"type":"message","role":"user","content":[{"type":"input_text","text":%q}]}}`, text)
-	if err := c.events.SendText(item); err != nil {
-		return err
-	}
-	return c.events.SendText(`{"type":"response.create"}`)
-}
-
-func (c *webrtcClient) close() {
-	close(c.stop)
-	_ = c.pc.Close()
+	return harness.NewSessionLoopHost(runtime)
 }

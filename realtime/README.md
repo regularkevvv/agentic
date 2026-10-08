@@ -39,17 +39,29 @@ next call.
 | Type | Role |
 |---|---|
 | `Conn` | The server's control channel to one live call: neutral `Event`s in, `Action`s out. Audio never crosses it. |
-| `Signaler` | Establishes a call whose media flows directly between client and provider: takes the client's `Offer` (e.g. a WebRTC SDP offer), returns the `Answer` and a `Conn` attached to the same call. |
+| `Signaler` | Establishes a call from a client: takes the client's `Offer` (e.g. a browser's WebRTC SDP offer), returns the `Answer` and the call's `Conn`. |
 
-`Signaler` is optional because not every provider can attach a server to a
-client-originated call. OpenAI Realtime can (WebRTC plus a sideband
-WebSocket); xAI has no WebRTC, so a browser call must be relayed through the
-server, and the relay implements `Conn` directly. SIP calls fit either shape.
+Clients never connect to a provider. A browser that held a provider session
+could rewrite the voice model's instructions and tools, inject turns, and
+forge `delegate` results, and the providers differ widely in what they let a
+client change. Instead the browser reaches only a gateway you run:
 
-Concrete adapters live with the assembling application. The live example in
-[`e2e/examples/realtime`](../e2e/examples/realtime) implements OpenAI over
-WebSocket and WebRTC with a sideband, and xAI over WebSocket, against a real
-Harness.
+```text
+browser ──WebRTC (audio tracks + control data channel)──▶ gateway ──WebSocket──▶ voice provider
+   └── authenticated HTTPS POST of the SDP offer
+```
+
+The application authenticates the offer, chooses the caller's session, calls
+`Signaler.Accept`, and runs `Run` on the returned `Conn`. Which provider
+answers is a server-side detail the browser never learns. The gateway also
+owns what the provider no longer can: pacing audio out to the browser, and on
+barge-in dropping unplayed audio and telling the provider how much was heard.
+
+The live example in [`e2e/examples/realtime`](../e2e/examples/realtime)
+implements this gateway with pion, relaying G.711 μ-law without transcoding to
+OpenAI Realtime or xAI Grok Voice, in front of a real Harness session. It runs
+headless, in a real browser page under headless Chrome, or for a person to
+talk to.
 
 ## Not yet covered
 
@@ -58,6 +70,12 @@ Harness.
 - Speaking previews before the run commits. Answers are spoken only after the
   assistant entry is committed.
 - Reconciling a lagged session stream. `Run` returns instead.
+- A neutral media plane. The example gateway moves audio itself; Conn and
+  Signaler do not yet describe audio formats, interruption with the heard
+  duration, usage, or provider capabilities.
+- Opus on the client leg. The example negotiates telephone-band G.711, which
+  both providers accept without transcoding.
+- TURN and multi-node routing of the offer to the node that will own the call.
 
 ## Development
 

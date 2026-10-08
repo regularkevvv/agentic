@@ -106,9 +106,9 @@ type Turn struct {
 }
 
 // Conn is the server's control channel to one live voice call. It is the
-// interface every transport implements: a WebRTC call controlled through a
-// provider sideband, a server-relayed WebSocket, or a SIP call all present
-// the same Conn while their media flows wherever the transport put it.
+// interface every transport implements: a browser call relayed by a WebRTC
+// gateway to a provider's WebSocket and a telephony call present the same
+// Conn, while their audio moves underneath it.
 //
 // Send must be safe for concurrent use. Recv is called from one goroutine
 // and returns an error once the call has ended or ctx is done. Close is
@@ -133,12 +133,12 @@ type Answer struct {
 	Body        []byte
 }
 
-// Signaler establishes calls whose media flows directly between the client
-// and the provider. Accept negotiates the client's offer and returns both the
-// answer for the client and the server's control Conn attached to the same
-// call. Providers without a server attachment to client-originated calls
-// cannot implement it; they relay media through the server and implement
-// Conn directly.
+// Signaler establishes calls from clients. Accept negotiates the client's
+// offer, such as a browser's WebRTC SDP offer, and returns the answer for the
+// client together with the call's Conn. The client reaches only the
+// implementation; which provider serves the call, and how audio and control
+// travel to it, are the implementation's concern. Authenticate the client and
+// choose its session before calling Accept.
 type Signaler interface {
 	Accept(context.Context, Offer) (Answer, Conn, error)
 }

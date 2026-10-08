@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice gateway</title>
+<style>
+  :root { color-scheme: light dark; --fg: #1c1c1e; --muted: #6b6b70; --bg: #fafaf9; --card: #fff; --line: #e4e4e7; --accent: #2563eb; }
+  @media (prefers-color-scheme: dark) { :root { --fg: #ececee; --muted: #9a9aa0; --bg: #141416; --card: #1d1d20; --line: #2c2c31; --accent: #6b9bff; } }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 32px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.lede { color: var(--muted); margin: 0 0 20px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--fg); font: inherit; }
+  button { padding: 8px 14px; border: 0; border-radius: 8px; background: var(--accent); color: #fff; font: inherit; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  #status { color: var(--muted); font-size: 13px; }
+  ol { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+  li { padding: 8px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); }
+  li.user { border-left: 3px solid var(--accent); }
+  li.meta { color: var(--muted); font-size: 13px; background: transparent; border: 0; padding: 2px 12px; }
+  li.error { color: #dc2626; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Voice gateway</h1>
+  <p class="lede">This page talks only to this server. Which voice provider answers is a server-side detail.</p>
+  <div class="row">
+    <input id="token" aria-label="Access token" value="demo-token">
+    <button id="start">Start call</button>
+    <button id="stop" disabled>Hang up</button>
+  </div>
+  <div class="row"><span id="status">Idle</span></div>
+  <ol id="log"></ol>
+  <form id="typed" class="row" style="margin-top:16px">
+    <input id="text" aria-label="Type a message" placeholder="Or type a message" disabled>
+    <button id="send" disabled>Send</button>
+  </form>
+  <audio id="speaker" autoplay></audio>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let pc, control;
+
+function log(kind, text) {
+  const item = document.createElement('li');
+  item.className = kind;
+  item.textContent = text;
+  $('log').append(item);
+}
+
+function status(text) { $('status').textContent = text; }
+
+function present(msg) {
+  switch (msg.type) {
+    case 'ready': status('Connected. Speak when ready.'); break;
+    case 'user.speaking': status('Listening…'); break;
+    case 'transcript.user': log('user', msg.text); break;
+    case 'delegating': log('meta', `Working on it: ${msg.text}`); break;
+    case 'transcript.agent': log('agent', msg.text); status('Connected'); break;
+    case 'interrupted': log('meta', `Interrupted after ${msg.spoken_ms} ms`); break;
+    case 'error': log('error', msg.text); break;
+  }
+}
+
+function gathered(peer) {
+  return new Promise((resolve) => {
+    if (peer.iceGatheringState === 'complete') return resolve();
+    peer.addEventListener('icegatheringstatechange', () => peer.iceGatheringState === 'complete' && resolve());
+    setTimeout(resolve, 2000);
+  });
+}
+
+async function start() {
+  $('start').disabled = true;
+  status('Connecting…');
+  try {
+    const mic = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    pc = new RTCPeerConnection();
+    mic.getTracks().forEach((track) => pc.addTrack(track, mic));
+    pc.ontrack = (event) => { $('speaker').srcObject = event.streams[0] ?? new MediaStream([event.track]); };
+    pc.onconnectionstatechange = () => { if (['failed', 'closed'].includes(pc.connectionState)) stop(); };
+    control = pc.createDataChannel('control');
+    control.onmessage = (event) => present(JSON.parse(event.data));
+    await pc.setLocalDescription(await pc.createOffer());
+    await gathered(pc);
+    const response = await fetch('/call', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/sdp', Authorization: `Bearer ${$('token').value}` },
+      body: pc.localDescription.sdp,
+    });
+    if (!response.ok) throw new Error(`call rejected: ${response.status} ${(await response.text()).trim()}`);
+    await pc.setRemoteDescription({ type: 'answer', sdp: await response.text() });
+    $('stop').disabled = $('text').disabled = $('send').disabled = false;
+  } catch (error) {
+    log('error', error.message);
+    stop();
+  }
+}
+
+function stop() {
+  if (control?.readyState === 'open') control.send(JSON.stringify({ type: 'hangup' }));
+  pc?.getSenders().forEach((sender) => sender.track?.stop());
+  pc?.close();
+  pc = control = undefined;
+  $('start').disabled = false;
+  $('stop').disabled = $('text').disabled = $('send').disabled = true;
+  status('Idle');
+}
+
+$('start').onclick = start;
+$('stop').onclick = stop;
+$('typed').onsubmit = (event) => {
+  event.preventDefault();
+  const text = $('text').value.trim();
+  if (!text || control?.readyState !== 'open') return;
+  control.send(JSON.stringify({ type: 'user.text', text }));
+  log('user', text);
+  $('text').value = '';
+};
+
+const params = new URLSearchParams(location.search);
+if (params.has('token')) $('token').value = params.get('token');
+if (params.has('autostart')) start();
+</script>
+</body>
+</html>

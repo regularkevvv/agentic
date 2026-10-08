@@ -9,7 +9,9 @@
 // disposable cache seeded from the session's snapshot.
 //
 // The package defines the interfaces (Conn, Signaler) and the business logic
-// (Bridge). It names no provider and no transport. Concrete adapters — an
-// OpenAI WebRTC call with a sideband control socket, an xAI WebSocket relay,
-// a SIP trunk — live with the application that assembles them.
+// (Run). It names no provider and no transport. Concrete adapters — a WebRTC
+// gateway that relays browser audio to a provider's WebSocket, a SIP trunk —
+// live with the application that assembles them. Clients never connect to a
+// provider: a browser that held a provider session could rewrite the voice
+// model's instructions and tools and forge its tool results.
 package realtime
