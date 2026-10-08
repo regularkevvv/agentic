@@ -7,6 +7,7 @@ on:
       - "harness/v*"
       - "harness/codemode/gomonty/v*"
       - "harness/sessionloop/v*"
+      - "realtime/v*"
       - "otel/v*"
       - "provider/*/v*"
       - "provider/local/onnx/v*"
@@ -22,6 +23,7 @@ on:
           - harness
           - gomonty
           - sessionloop
+          - realtime
           - onnx
           - otel
           - providers
@@ -192,6 +194,28 @@ jobs:
       - run: GOWORK=off just coverage-check
       - name: Run a fresh no-replace protocol consumer
         run: bash ../../.github/scripts/verify-release.sh sessionloop
+
+  realtime:
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.module == 'realtime') || startsWith(github.ref, 'refs/tags/realtime/v') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: realtime
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: realtime/go.mod
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
+      - run: GOWORK=off go test -race -count=1 -timeout 60s ./...
+      - run: GOWORK=off go vet ./...
+      - run: GOWORK=off CGO_ENABLED=0 go build ./...
+      - run: GOWORK=off just coverage-check
+      - name: Run a fresh no-replace voice frontend consumer
+        run: bash ../.github/scripts/verify-release.sh realtime
 
   onnx:
     if: ${{ (github.event_name == 'workflow_dispatch' && inputs.module == 'onnx') || startsWith(github.ref, 'refs/tags/provider/local/onnx/v') }}
