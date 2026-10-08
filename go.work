@@ -30,5 +30,6 @@ use (
 	./provider/sagemaker
 	./provider/together
 	./provider/voyageai
+	./realtime
 	./tui
 )

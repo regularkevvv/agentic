@@ -291,6 +291,46 @@ jobs:
           verify: false
           working-directory: tui
 
+  realtime-module:
+    name: Realtime module
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: realtime
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: realtime/go.mod
+      - uses: extractions/setup-just@v4
+        with:
+          just-version: ${{ env.JUST_VERSION }}
+      - name: Race test
+        run: go test -race -count=1 -timeout 60s ./...
+      - name: Vet and pure-Go build
+        run: go vet ./... && CGO_ENABLED=0 go build ./...
+      - name: Enforce coverage threshold
+        run: just coverage-check
+      - name: Module isolation
+        run: GOWORK=off go test -race -count=1 ./... && GOWORK=off go mod tidy -diff && test "$(GOWORK=off go list -m all | wc -l)" -eq 2
+
+  realtime-lint:
+    name: Realtime lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: realtime/go.mod
+      - uses: golangci/golangci-lint-action@v7
+        with:
+          version: v2.1.6
+          install-mode: goinstall
+          verify: false
+          working-directory: realtime
+
   # The live tests and the examples are their own module, so they have left the
   # root's `go build ./...`. Without this job an incompatible API change would
   # break them silently and be discovered only by whoever next ran an example by
